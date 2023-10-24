@@ -72,7 +72,8 @@ def train_model(
         organization (Optional[str], optional): Organization to push the model to. Defaults to None.
         hub_token (Optional[str], optional): Hugging Face API token. Defaults to None.
     """
-    model_id = ds_name.replace("protac_splitter", "PROTAC-Splitter").replace("%", "perc")
+    model_id = "PROTAC-Splitter" + "_".join((ds_name.replace("protac_splitter", "PROTAC-Splitter").split("_")[1:])).replace("%", "perc")
+    # model_id = ds_name.replace("protac_splitter", "PROTAC-Splitter").replace("%", "perc")
     output_dir += f"/{model_id}"
     if organization is not None:
         hub_model_id = f"{organization}/{model_id}"
@@ -86,13 +87,13 @@ def train_model(
         print(f"Repository '{hub_model_id}' created at URL: {repo_url}")
     else:
         hub_model_id = None
-    try:
-        bert2bert = EncoderDecoderModel.from_pretrained(hub_model_id)
-        print(f"Skipping pretrained model {hub_model_id}.")
-    except:
-        print('-' * 80)
-        print(f"Training model {hub_model_id} on dataset: {ds_name}.")
-        print('-' * 80)
+    # try:
+    #     bert2bert = EncoderDecoderModel.from_pretrained(hub_model_id)
+    #     print(f"Skipping pretrained model {hub_model_id}.")
+    # except:
+    #     print('-' * 80)
+    #     print(f"Training model {hub_model_id} on dataset: {ds_name}.")
+    #     print('-' * 80)
     bert2bert = get_model(pretrained_encoder, pretrained_decoder)
     dataset_tokenized = load_tokenized_dataset(
         os.path.join(data_dir, ds_name),
@@ -100,6 +101,7 @@ def train_model(
         batch_size_tokenizer,
         encoder_max_length,
         decoder_max_length,
+        token=hub_token,
     )
     per_device_batch_size = batch_size // gradient_accumulation_steps
     training_args = Seq2SeqTrainingArguments(
@@ -161,5 +163,5 @@ def train_model(
             license="mit",
             finetuned_from=f"Encoder: {pretrained_encoder}, Decoder: {pretrained_decoder}",
             tasks=["Text2Text Generation"],
-            tags=["PROTAC", "biochemistry"],
+            tags=["PROTAC", "cheminformatics"],
         )
