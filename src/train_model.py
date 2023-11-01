@@ -174,9 +174,11 @@ def train_model(
         save_strategy="steps",
         save_total_limit=1,
         load_best_model_at_end=True,
+        metric_for_best_model="valid_smiles",
         # Logging configs
+        log_level="info",
         logging_steps=50,
-        disable_tqdm=True,
+        disable_tqdm=False,
         # Hub information configs
         push_to_hub=True, # NOTE: Done manually further down
         hub_token=hub_token,
