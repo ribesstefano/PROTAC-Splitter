@@ -39,3 +39,10 @@ In general, refer to the help message for more information about the command lin
 ```bash
 python main.py --help
 ```
+
+## Data Preparation
+
+The train and test datasets are assembled in the notbook: `notebooks/protac_pedia_data_curation.ipynb`.
+
+Raw CSV data are expected to be placed in the `data/raw` directory.
+They shall contain the following columns: `["PROTAC SMILES", "E3 Binder SMILES", "Linker SMILES", "POI Ligand SMILES"]`.
