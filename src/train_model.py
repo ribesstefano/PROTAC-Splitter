@@ -10,10 +10,9 @@ from transformers import (
 import evaluate
 from typing import Optional
 from functools import partial
-from rdkit import Chem
+from rdkit import Chem, RDLogger
 import numpy as np
 import huggingface_hub as hf
-
 
 def create_hf_repository(**kwargs):
   """Creates a new Hugging Face repository."""
@@ -108,6 +107,9 @@ def train_model(
         decoder_max_length (int, optional): The maximum length of the decoder. Defaults to 256.
         delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
     """
+    # Disable RDKit logging: when checking SMILES validity, we suppress warnings
+    RDLogger.DisableLog("rdApp.*")
+    # Setup output directory and Hugging Face repository
     output_dir += f"/{model_id}"
     if organization is not None:
         hub_model_id = f"{organization}/{model_id}"
