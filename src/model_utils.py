@@ -8,7 +8,7 @@ def get_model(
     bert2bert = EncoderDecoderModel.from_encoder_decoder_pretrained(
         pretrained_encoder,
         pretrained_decoder,
-        tie_encoder_decoder=True,
+        tie_encoder_decoder=pretrained_encoder == pretrained_decoder,
     )
     print(f"Number of parameters: {bert2bert.num_parameters():,}")
     tokenizer = AutoTokenizer.from_pretrained(pretrained_encoder)

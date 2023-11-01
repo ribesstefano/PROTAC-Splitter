@@ -25,6 +25,7 @@ def process_data_to_model_inputs(
 
 def load_tokenized_dataset(
     daset_dir: str,
+    dataset_config: str = 'default',
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
     batch_size: int = 512,
     encoder_max_length:int = 256,
@@ -33,7 +34,7 @@ def load_tokenized_dataset(
 ):
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    dataset = load_dataset(daset_dir, token=token)
+    dataset = load_dataset(daset_dir, dataset_config, token=token)
     dataset_tokenized = dataset.map(
         process_data_to_model_inputs,
         batched=True,

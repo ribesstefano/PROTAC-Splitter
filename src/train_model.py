@@ -10,14 +10,46 @@ from transformers import (
 import evaluate
 from typing import Optional
 from functools import partial
-
+from rdkit import Chem
+import numpy as np
 import huggingface_hub as hf
+
 
 def create_hf_repository(**kwargs):
   """Creates a new Hugging Face repository."""
-
   api = hf.HfApi()
   return api.create_repo(**kwargs)
+
+
+def delete_hf_repository(**kwargs):
+  """Creates a new Hugging Face repository."""
+  print(f'Deleting repository {kwargs["repo_id"]}.')
+  api = hf.HfApi()
+  return api.delete_repo(**kwargs)
+
+
+def is_valid_smiles(smiles: str) -> bool:
+    mol = Chem.MolFromSmiles(smiles)
+    return 1 if mol is not None else 0
+
+
+def compute_metrics_with_chem(
+    pred,
+    rouge = evaluate.load("rouge"),
+    tokenizer: [AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
+):
+    if isinstance(tokenizer, str):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+    labels_ids = pred.label_ids
+    pred_ids = pred.predictions
+    pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+    labels_ids[labels_ids == -100] = tokenizer.pad_token_id
+    label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
+    rouge_output = rouge.compute(predictions=pred_str, references=label_str)
+    scores = {k: round(v, 4) for k, v in rouge_output.items()}
+    valid_smiles = np.array(list(map(is_valid_smiles, pred_str)))
+    scores['valid_smiles'] = valid_smiles.mean()
+    return scores
 
 
 def compute_metrics(
@@ -37,7 +69,9 @@ def compute_metrics(
 
 
 def train_model(
+    model_id: str,
     ds_name: str,
+    ds_config: str = 'default',
     max_steps: int = -1,
     num_train_epochs: int = 40,
     batch_size: int = 128,
@@ -46,37 +80,39 @@ def train_model(
     hub_token: Optional[str] = None,
     organization: Optional[str] = None,
     output_dir: str = "./models/",
-    data_dir: str = './data/final/',
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
     pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
     pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
     encoder_max_length: int = 256,
     decoder_max_length: int = 256,
+    delete_repo_first: bool = False,
 ):
     """Trains a model on a given dataset.
     
     Args:
-        ds_name (str): Name of the dataset to train on.
-        max_steps (int, optional): Maximum number of steps to train for. Defaults to -1.
-        num_train_epochs (int, optional): Number of epochs to train for. Defaults to 40.
-        batch_size (int, optional): Batch size. Defaults to 128.
-        batch_size_tokenizer (int, optional): Batch size for the tokenizer. Defaults to 512.
-        gradient_accumulation_steps (int, optional): Number of gradient accumulation steps. Defaults to 4.
-        output_dir (str, optional): Output directory. Defaults to "./models/".
-        data_dir (str, optional): Directory containing the dataset. Defaults to "./data/final/".
-        tokenizer (AutoTokenizer | str, optional): Tokenizer to use. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
-        pretrained_encoder (str, optional): Pretrained encoder model to use. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
-        pretrained_decoder (str, optional): Pretrained decoder model to use. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
-        encoder_max_length (int, optional): Maximum length of the encoder input. Defaults to 256.
-        decoder_max_length (int, optional): Maximum length of the decoder input. Defaults to 256.
-        organization (Optional[str], optional): Organization to push the model to. Defaults to None.
-        hub_token (Optional[str], optional): Hugging Face API token. Defaults to None.
+        model_id (str): The name of the model to be trained.
+        ds_name (str): The name of the dataset to be used for training.
+        ds_config (str, optional): The name of the dataset configuration to be used for training. Defaults to 'default'.
+        max_steps (int, optional): The maximum number of training steps. Defaults to -1.
+        num_train_epochs (int, optional): The number of training epochs. Defaults to 40.
+        batch_size (int, optional): The batch size. Defaults to 128.
+        batch_size_tokenizer (int, optional): The batch size for the tokenizer. Defaults to 512.
+        gradient_accumulation_steps (int, optional): The number of gradient accumulation steps. Defaults to 4.
+        hub_token (Optional[str], optional): The Hugging Face token. Defaults to None.
+        organization (Optional[str], optional): The Hugging Face organization. Defaults to None.
+        output_dir (str, optional): The output directory. Defaults to "./models/".
+        tokenizer (AutoTokenizer | str, optional): The tokenizer. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
+        pretrained_encoder (str, optional): The name of the pretrained encoder. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
+        pretrained_decoder (str, optional): The name of the pretrained decoder. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
+        encoder_max_length (int, optional): The maximum length of the encoder. Defaults to 256.
+        decoder_max_length (int, optional): The maximum length of the decoder. Defaults to 256.
+        delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
     """
-    model_id = "PROTAC-Splitter" + "_".join((ds_name.replace("protac_splitter", "PROTAC-Splitter").split("_")[1:])).replace("%", "perc")
-    # model_id = ds_name.replace("protac_splitter", "PROTAC-Splitter").replace("%", "perc")
     output_dir += f"/{model_id}"
     if organization is not None:
         hub_model_id = f"{organization}/{model_id}"
+        if delete_repo_first:
+            delete_hf_repository(repo_id=hub_model_id, token=hub_token)
         repo_url = create_hf_repository(
             repo_id=hub_model_id,
             repo_type="model",
@@ -95,8 +131,13 @@ def train_model(
     #     print(f"Training model {hub_model_id} on dataset: {ds_name}.")
     #     print('-' * 80)
     bert2bert = get_model(pretrained_encoder, pretrained_decoder)
+    if isinstance(tokenizer, str):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+    elif tokenizer is None:
+        tokenizer = AutoTokenizer.from_pretrained(pretrained_encoder)
     dataset_tokenized = load_tokenized_dataset(
-        os.path.join(data_dir, ds_name),
+        ds_name,
+        ds_config,
         tokenizer,
         batch_size_tokenizer,
         encoder_max_length,
@@ -149,7 +190,7 @@ def train_model(
         model=bert2bert,
         tokenizer=tokenizer,
         args=training_args,
-        compute_metrics=partial(compute_metrics, rouge=rouge, tokenizer=tokenizer),
+        compute_metrics=partial(compute_metrics_with_chem, rouge=rouge, tokenizer=tokenizer),
         train_dataset=dataset_tokenized["train"],
         eval_dataset=dataset_tokenized["validation"], # .select(range(10)),
     )
@@ -161,7 +202,9 @@ def train_model(
             commit_message="Initial version",
             model_name=hub_model_id,
             license="mit",
-            finetuned_from=f"Encoder: {pretrained_encoder}, Decoder: {pretrained_decoder}",
+            finetuned_from=f"{pretrained_encoder}",
             tasks=["Text2Text Generation"],
             tags=["PROTAC", "cheminformatics"],
+            dataset=ds_name,
+            dataset_args=ds_config,
         )
