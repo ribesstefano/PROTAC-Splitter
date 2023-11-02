@@ -2,7 +2,7 @@ import evaluate
 import numpy as np
 from transformers import AutoTokenizer
 from typing import Optional
-from rdkit import DataStructs
+from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
 
 def compute_metrics(
