@@ -1,5 +1,6 @@
 from model_utils import get_model
 from data_utils import load_tokenized_dataset
+from evaluation_metrics import compute_metrics_with_chem
 import os
 from transformers import (
     Seq2SeqTrainer,
@@ -10,9 +11,10 @@ from transformers import (
 import evaluate
 from typing import Optional
 from functools import partial
-from rdkit import Chem, RDLogger
-import numpy as np
 import huggingface_hub as hf
+from rdkit import Chem, RDLogger
+from rdkit.Chem import rdFingerprintGenerator
+
 
 def create_hf_repository(**kwargs):
   """Creates a new Hugging Face repository."""
@@ -25,46 +27,6 @@ def delete_hf_repository(**kwargs):
   print(f'Deleting repository {kwargs["repo_id"]}.')
   api = hf.HfApi()
   return api.delete_repo(**kwargs)
-
-
-def is_valid_smiles(smiles: str) -> bool:
-    mol = Chem.MolFromSmiles(smiles)
-    return 1 if mol is not None else 0
-
-
-def compute_metrics_with_chem(
-    pred,
-    rouge = evaluate.load("rouge"),
-    tokenizer: [AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
-):
-    if isinstance(tokenizer, str):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    labels_ids = pred.label_ids
-    pred_ids = pred.predictions
-    pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-    labels_ids[labels_ids == -100] = tokenizer.pad_token_id
-    label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
-    rouge_output = rouge.compute(predictions=pred_str, references=label_str)
-    scores = {k: round(v, 4) for k, v in rouge_output.items()}
-    valid_smiles = np.array(list(map(is_valid_smiles, pred_str)))
-    scores['valid_smiles'] = valid_smiles.mean()
-    return scores
-
-
-def compute_metrics(
-    pred,
-    rouge = evaluate.load("rouge"),
-    tokenizer: [AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
-):
-    if isinstance(tokenizer, str):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    labels_ids = pred.label_ids
-    pred_ids = pred.predictions
-    pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-    labels_ids[labels_ids == -100] = tokenizer.pad_token_id
-    label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
-    rouge_output = rouge.compute(predictions=pred_str, references=label_str)
-    return {k: round(v, 4) for k, v in rouge_output.items()}
 
 
 def train_model(
@@ -190,11 +152,18 @@ def train_model(
         data_seed=42,
     )
     rouge = evaluate.load("rouge")
+    fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=8, fpSize=2048)
+    metric = partial(
+        compute_metrics_with_chem,
+        rouge=rouge,
+        tokenizer=tokenizer,
+        fpgen=fpgen,
+    )
     trainer = Seq2SeqTrainer(
         model=bert2bert,
         tokenizer=tokenizer,
         args=training_args,
-        compute_metrics=partial(compute_metrics_with_chem, rouge=rouge, tokenizer=tokenizer),
+        compute_metrics=metric,
         train_dataset=dataset_tokenized["train"],
         eval_dataset=dataset_tokenized["validation"], # .select(range(10)),
     )
