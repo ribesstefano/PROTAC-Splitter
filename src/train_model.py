@@ -223,13 +223,19 @@ def train_mlm_model(
     else:
         hub_model_name = None
     # Load pretrained MLM model
-    model = AutoModelForMaskedLM.from_pretrained(pretrained_model_name, max_length=max_length)
+    model = AutoModelForMaskedLM.from_pretrained(
+        pretrained_model_name,
+        max_length=max_length,
+    )
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)
     # Load tokenizer
     tokenizer.pad_token = tokenizer.eos_token
-    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm_probability=mlm_probability)
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm_probability=mlm_probability,
+    )
     # Load and tokenize MLM dataset
-    mlm_dataset = load_dataset(ds_name, ds_config)
+    mlm_dataset = load_dataset(ds_name, ds_config, token=hub_token)
     tokenized_mlm_dataset = mlm_dataset.map(
         lambda examples: tokenizer(examples["text"]),
         batched=True,
@@ -260,7 +266,7 @@ def train_mlm_model(
         # Logging configs
         log_level="info",
         logging_steps=50,
-        disable_tqdm=False,
+        disable_tqdm=True,
         # Hub information configs
         push_to_hub=True, # NOTE: Done manually further down
         hub_token=hub_token,
@@ -276,7 +282,7 @@ def train_mlm_model(
         tokenizer=tokenizer,
         args=training_args,
         train_dataset=tokenized_mlm_dataset["train"],
-        eval_dataset=tokenized_mlm_dataset["validation"].select(range(100)),
+        eval_dataset=tokenized_mlm_dataset["validation"],
         data_collator=data_collator,
     )
     # Get perplexity before training
@@ -288,14 +294,14 @@ def train_mlm_model(
     eval_results = trainer.evaluate()
     print(f"Perplexity after training: {math.exp(eval_results['eval_loss']):.2f}")
     # Push model to Hugging Face Hub
-    # if hub_model_name is not None:
-    #     trainer.push_to_hub(
-    #         commit_message="Initial version",
-    #         model_name=hub_model_name,
-    #         license="mit",
-    #         finetuned_from=pretrained_model_name,
-    #         tasks=["Fill-Mask"],
-    #         tags=["PROTAC", "cheminformatics"],
-    #         dataset=ds_name,
-    #         dataset_args=ds_config,
-    #     )
+    if hub_model_name is not None:
+        trainer.push_to_hub(
+            commit_message="Initial version",
+            model_name=hub_model_name,
+            license="mit",
+            finetuned_from=pretrained_model_name,
+            tasks=["Fill-Mask"],
+            tags=["PROTAC", "cheminformatics"],
+            dataset=ds_name,
+            dataset_args=ds_config,
+        )
