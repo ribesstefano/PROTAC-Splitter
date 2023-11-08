@@ -188,6 +188,8 @@ def train_model(
         )
 
 
+import huggingface_hub
+
 def train_mlm_model(
     model_name: str,
     ds_name: str = 'ailab-bio/PROTAC-Substructures',
@@ -206,6 +208,7 @@ def train_mlm_model(
     max_length: int = 256,
     delete_repo_first: bool = False,
 ):
+    huggingface_hub.login(token=hub_token)
     # Setup output directory and Hugging Face repository
     output_dir += f"/{model_name}"
     if organization is not None:
@@ -225,18 +228,36 @@ def train_mlm_model(
     # Load pretrained MLM model
     model = AutoModelForMaskedLM.from_pretrained(
         pretrained_model_name,
+        token=hub_token,
+        force_download=True,
         max_length=max_length,
     )
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)
     # Load tokenizer
+    if isinstance(tokenizer, str):
+        tokenizer = AutoTokenizer.from_pretrained(
+            pretrained_model_name,
+            token=hub_token,
+        )
     tokenizer.pad_token = tokenizer.eos_token
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=tokenizer,
-        mlm_probability=mlm_probability,
-    )
     # Load and tokenize MLM dataset
-    mlm_dataset = load_dataset(ds_name, ds_config, token=hub_token)
+    mlm_dataset = load_dataset(
+        ds_name,
+        ds_config,
+        token=hub_token,
+    )
+    eval_mlm_dataset = load_dataset(
+        ds_name,
+        "80-20-split",
+        split="validation",
+        token=hub_token,
+    )
     tokenized_mlm_dataset = mlm_dataset.map(
+        lambda examples: tokenizer(examples["text"]),
+        batched=True,
+        batch_size=batch_size_tokenizer,
+        remove_columns=["text", "labels"],
+    )["train"]
+    eval_tokenized_mlm_dataset = eval_mlm_dataset.map(
         lambda examples: tokenizer(examples["text"]),
         batched=True,
         batch_size=batch_size_tokenizer,
@@ -277,19 +298,25 @@ def train_mlm_model(
         seed=42,
         data_seed=42,
     )
+    data_collator = DataCollatorForLanguageModeling(
+        tokenizer=tokenizer,
+        mlm_probability=mlm_probability,
+    )
     trainer = Trainer(
         model=model,
         tokenizer=tokenizer,
         args=training_args,
-        train_dataset=tokenized_mlm_dataset["train"],
-        eval_dataset=tokenized_mlm_dataset["validation"],
+        train_dataset=tokenized_mlm_dataset,
+        eval_dataset=eval_tokenized_mlm_dataset,
         data_collator=data_collator,
     )
     # Get perplexity before training
     eval_results = trainer.evaluate()
     print(f"Perplexity before training: {math.exp(eval_results['eval_loss']):.2f}")
     # Train model
-    trainer.train()
+    trainer.train(
+        # resume_from_checkpoint=True, # "last-checkpoint",
+    )
     # Get perplexity after training
     eval_results = trainer.evaluate()
     print(f"Perplexity after training: {math.exp(eval_results['eval_loss']):.2f}")
