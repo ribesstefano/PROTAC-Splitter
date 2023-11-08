@@ -75,7 +75,8 @@ def train_model(
         decoder_max_length (int, optional): The maximum length of the decoder. Defaults to 256.
         delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
     """
-    hf.login(token=hub_token)
+    if hub_token is not None:
+        hf.login(token=hub_token)
     # Disable RDKit logging: when checking SMILES validity, we suppress warnings
     RDLogger.DisableLog("rdApp.*")
     # Setup output directory and Hugging Face repository
@@ -213,7 +214,8 @@ def train_mlm_model(
     max_length: int = 512,
     delete_repo_first: bool = False,
 ):
-    hf.login(token=hub_token)
+    if hub_token is not None:
+        hf.login(token=hub_token)
     # Setup output directory and Hugging Face repository
     output_dir += f"/{model_name}"
     if organization is not None:
@@ -336,3 +338,85 @@ def train_mlm_model(
             dataset=ds_name,
             dataset_args=ds_config,
         )
+
+
+import torch
+from data_utils import load_trl_dataset, data_collator_for_trl
+from evaluation_metrics import reward_function
+from trl import (
+    AutoModelForCausalLMWithValueHead,
+    AutoModelForSeq2SeqLMWithValueHead,
+    PPOConfig,
+    PPOTrainer,
+    create_reference_model,
+)
+from tqdm import tqdm
+
+def clean_text(text: str) -> str:
+    return text.replace("<s>", "").replace("</s>", "")
+
+
+def train_trl_model(
+    model_name: str = "ailab-bio/PROTAC-Splitter-PPO",
+    max_steps: int = 2000,
+    num_train_epochs: int = -1,
+    batch_size: int = 128,
+    hub_token: Optional[str] = None,
+    pretrained_model_name: str = "ailab-bio/PROTAC-Splitter_untied_80-20-split",
+    max_length: int = 512,
+    delete_repo_first: bool = False,     
+):
+    if hub_token is not None:
+        hf.login(token=hub_token)
+    if delete_repo_first:
+        delete_hf_repository(repo_id=model_name, token=hub_token)
+    # Load pretrained model
+    model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(
+        pretrained_model_name,
+        max_length=max_length,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)
+    tokenizer.pad_token = tokenizer.eos_token
+    # Get dataset
+    train_dataset = load_trl_dataset(tokenizer=tokenizer, token=hub_token, max_length=max_length)
+    # Setup PPO trainer
+    ppo_config = PPOConfig(
+        model_name=model_name,
+        learning_rate=1.41e-5,
+        steps=max_steps, # Default: 20_000
+        ppo_epochs=num_train_epochs, # Default: 4
+        batch_size=batch_size, # Default: 256
+        # global_batch_size=8,
+        optimize_device_cache=True,
+        seed=42,
+    )
+    ppo_trainer = PPOTrainer(
+        model=model,
+        config=ppo_config,
+        tokenizer=tokenizer,
+        dataset=train_dataset,
+        data_collator=data_collator_for_trl,
+    )
+    # Training Loop
+    generation_kwargs = {
+        "do_sample": False,
+        "pad_token_id": tokenizer.eos_token_id,
+    }
+    for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader), total=len(ppo_trainer.dataloader)):
+        query_tensors = batch["input_ids"]
+        # Get response from SFTModel
+        response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
+        batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+        # Compute reward score
+        rewards = [reward_function(clean_text(q), clean_text(r)) for q, r in zip(batch["query"], batch["response"])]
+        rewards = [torch.tensor(r) for r in rewards]
+        # Run PPO step
+        stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
+        ppo_trainer.log_stats(stats, batch, rewards)
+        break
+    # Save model
+    ppo_trainer.push_to_hub(
+        repo_id=model_name,
+        commit_message="Initial version",
+        private=True,
+    )

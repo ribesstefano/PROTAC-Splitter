@@ -3,7 +3,7 @@ import numpy as np
 from transformers import AutoTokenizer
 from typing import Optional
 from rdkit import Chem, DataStructs
-from rdkit.Chem import rdFingerprintGenerator
+from rdkit.Chem import rdFingerprintGenerator, rdMolDescriptors
 
 def compute_metrics(
     pred,
@@ -74,3 +74,73 @@ def compute_metrics_with_chem(
     # tanimoto = [DataStructs.TanimotoSimilarity(l, p) for l, p in zip(label_fps, pred_fps)]
     # scores['tanimoto'] = np.array(tanimoto).mean()
     return scores
+
+
+def is_substructure(protac_smiles, substruct_smiles) -> bool:
+    protac_mol = Chem.MolFromSmiles(protac_smiles)
+    substruct_mol = Chem.MolFromSmarts(substruct_smiles)
+    return protac_mol.HasSubstructMatch(substruct_mol)
+
+
+def same_atom_counts_and_types(smiles1, smiles2, get_atoms_diff=False):
+    """
+    Check if two molecules have the same number and types of atoms.
+
+    Args:
+    smiles1 (str): SMILES notation for the first molecule.
+    smiles2 (str): SMILES notation for the second molecule.
+
+    Returns:
+    bool: True if the molecules have the same atom counts and types, False otherwise.
+    """
+    if isinstance(smiles1, str):
+        mol1 = Chem.MolFromSmiles(smiles1)
+    else:
+        mol1 = smiles1
+    if isinstance(smiles2, str):
+        mol2 = Chem.MolFromSmiles(smiles2)
+    else:
+        mol2 = smiles2
+    if mol1 is None or mol2 is None:
+        if get_atoms_diff:
+            return float("nan")
+            # raise ValueError("Invalid SMILES notation provided for one or both molecules.")
+        else:
+            return False
+    num_atoms1 = Chem.rdMolDescriptors.CalcNumHeavyAtoms(mol1)
+    num_atoms2 = Chem.rdMolDescriptors.CalcNumHeavyAtoms(mol2)
+    if get_atoms_diff:
+        return abs(num_atoms1 - num_atoms2)
+        # tmp = {}
+        # for atom in atom_counts1.keys():
+        #     tmp[atom] = int(abs(atom_counts1.get(atom, 0) - atom_counts2.get(atom, 0)))
+        # for atom in atom_counts2.keys():
+        #     tmp[atom] = int(abs(atom_counts1.get(atom, 0) - atom_counts2.get(atom, 0)))
+        # return tmp # abs(atom_counts1.get('O', 0) - atom_counts2.get('O', 0))
+    else:
+        atom_counts1, atom_counts2 = {}, {}
+        for atom in mol1.GetAtoms():
+            if '*' not in atom.GetSmarts():
+                atom_counts1[atom.GetSymbol()] = atom_counts1.get(atom.GetSymbol(), 0) + 1
+        for atom in mol2.GetAtoms():
+            if '*' not in atom.GetSmarts():
+                atom_counts2[atom.GetSymbol()] = atom_counts2.get(atom.GetSymbol(), 0) + 1
+        return (atom_counts1 == atom_counts2) & (num_atoms1 == num_atoms2)
+
+
+def reward_function(query, response) -> float:
+    if not has_three_substructures(response):
+        return 0.
+    if not has_all_attachment_points(response):
+        return 0.
+    response_mol = Chem.MolFromSmiles(response)
+    if response_mol is None:
+        return 0.
+    if not same_atom_counts_and_types(response_mol, query):
+        return 0.
+    # return 1. - same_atom_counts_and_types(response, query, get_atoms_diff=True)
+    # substructures = response.split(".")
+    # for substructure in substructures:
+    #     if not is_substructure(query, response):
+    #         return 0.
+    return 1.

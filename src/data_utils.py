@@ -1,6 +1,7 @@
-import pandas as pd
 import os
-from datasets import load_dataset
+import torch
+import pandas as pd
+from datasets import load_dataset, concatenate_datasets, Dataset
 from transformers import AutoTokenizer
 from typing import Optional
 
@@ -23,6 +24,7 @@ def process_data_to_model_inputs(
     batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
     return batch
 
+
 def load_tokenized_dataset(
     daset_dir: str,
     dataset_config: str = 'default',
@@ -31,7 +33,18 @@ def load_tokenized_dataset(
     encoder_max_length:int = 512,
     decoder_max_length:int = 512,
     token: Optional[str] = None,
-):
+) -> Dataset:
+    """ Load dataset and tokenize it.
+    
+    Args:
+        daset_dir: Dataset directory.
+        dataset_config: Dataset configuration.
+        tokenizer: Tokenizer.
+        batch_size: Batch size.
+        encoder_max_length: Encoder max length.
+        decoder_max_length: Decoder max length.
+        token: Token.
+    """
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     dataset = load_dataset(daset_dir, dataset_config, token=token)
@@ -51,3 +64,45 @@ def load_tokenized_dataset(
         columns=["input_ids", "attention_mask", "labels"],
     )
     return dataset_tokenized
+
+
+def tokenize(sample, tokenizer, max_length=512):
+    input_ids = tokenizer.encode(sample["query"], padding="max_length", max_length=max_length)
+    return {"input_ids": input_ids, "query": sample["query"]}
+
+
+def load_trl_dataset(
+    tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",  
+    token: Optional[str] = None,
+    max_length: int = 512,
+) -> Dataset:
+    if isinstance(tokenizer, str):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+    # Load training data
+    train_dataset = load_dataset(
+        "ailab-bio/PROTAC-Substructures",
+        "80-20-split",
+        split="train",
+        token=token,
+    )
+    train_dataset = train_dataset.rename_column("text", "query")
+    train_dataset = train_dataset.remove_columns(["labels"])
+    # Load un-labelled data
+    unlabeled_dataset = load_dataset(
+        "ailab-bio/PROTAC-Substructures",
+        "unlabeled",
+        split="train",
+        token=token,
+    )
+    unlabeled_dataset = unlabeled_dataset.rename_column("text", "query")
+    unlabeled_dataset = unlabeled_dataset.remove_columns(["labels"])
+    # Concatenate datasets row-wise
+    dataset = concatenate_datasets([train_dataset, unlabeled_dataset])
+    return dataset.map(lambda x: tokenize(x, tokenizer, max_length), batched=False)
+
+
+def data_collator_for_trl(batch):
+    return {
+        "input_ids": [torch.tensor(x["input_ids"]) for x in batch],
+        "query": [x["query"] for x in batch],
+    }
