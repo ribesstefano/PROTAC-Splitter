@@ -49,8 +49,9 @@ def train_model(
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
     pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
     pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
-    encoder_max_length: int = 256,
-    decoder_max_length: int = 256,
+    encoder_max_length: int = 512,
+    decoder_max_length: int = 512,
+    tie_encoder_decoder: bool = False,
     delete_repo_first: bool = False,
 ):
     """Trains a model on a given dataset.
@@ -74,6 +75,7 @@ def train_model(
         decoder_max_length (int, optional): The maximum length of the decoder. Defaults to 256.
         delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
     """
+    hf.login(token=hub_token)
     # Disable RDKit logging: when checking SMILES validity, we suppress warnings
     RDLogger.DisableLog("rdApp.*")
     # Setup output directory and Hugging Face repository
@@ -99,7 +101,12 @@ def train_model(
     #     print('-' * 80)
     #     print(f"Training model {hub_model_id} on dataset: {ds_name}.")
     #     print('-' * 80)
-    bert2bert = get_model(pretrained_encoder, pretrained_decoder)
+    bert2bert = get_model(
+        pretrained_encoder=pretrained_encoder,
+        pretrained_decoder=pretrained_decoder,
+        max_length=encoder_max_length,
+        tie_encoder_decoder=tie_encoder_decoder,
+    )
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     elif tokenizer is None:
@@ -135,7 +142,7 @@ def train_model(
         max_steps=max_steps,
         num_train_epochs=num_train_epochs,
         eval_steps=100,
-        save_steps=500,
+        save_steps=200,
         # eval_steps=7500,
         # warmup_steps=2000,
         save_strategy="steps",
@@ -145,7 +152,7 @@ def train_model(
         # Logging configs
         log_level="info",
         logging_steps=50,
-        disable_tqdm=False,
+        disable_tqdm=True,
         # Hub information configs
         push_to_hub=True, # NOTE: Done manually further down
         hub_token=hub_token,
@@ -188,8 +195,6 @@ def train_model(
         )
 
 
-import huggingface_hub
-
 def train_mlm_model(
     model_name: str,
     ds_name: str = 'ailab-bio/PROTAC-Substructures',
@@ -205,10 +210,10 @@ def train_mlm_model(
     mlm_probability: float = 0.15,
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
     pretrained_model_name: str = "seyonec/ChemBERTa-zinc-base-v1",
-    max_length: int = 256,
+    max_length: int = 512,
     delete_repo_first: bool = False,
 ):
-    huggingface_hub.login(token=hub_token)
+    hf.login(token=hub_token)
     # Setup output directory and Hugging Face repository
     output_dir += f"/{model_name}"
     if organization is not None:
@@ -268,10 +273,9 @@ def train_mlm_model(
     training_args = TrainingArguments(
         output_dir=output_dir,
         # Optimizer-related configs
-        learning_rate=5e-5,
+        learning_rate=1.5e-5,
         optim="adamw_torch",
-        lr_scheduler_type="cosine", # Default: "linear"
-        weight_decay=0.01,
+        lr_scheduler_type="linear", # Default: "linear"
         # Batch size and device configs
         per_device_train_batch_size=per_device_batch_size,
         per_device_eval_batch_size=per_device_batch_size,

@@ -1,14 +1,17 @@
 from transformers import AutoTokenizer
 from transformers import EncoderDecoderModel
+from typing import Optional
 
 def get_model(
     pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
     pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
+    max_length: Optional[int] = 512,
+    tie_encoder_decoder: bool = False,
 ):
     bert2bert = EncoderDecoderModel.from_encoder_decoder_pretrained(
         pretrained_encoder,
         pretrained_decoder,
-        tie_encoder_decoder=pretrained_encoder == pretrained_decoder,
+        tie_encoder_decoder=tie_encoder_decoder,
     )
     print(f"Number of parameters: {bert2bert.num_parameters():,}")
     tokenizer = AutoTokenizer.from_pretrained(pretrained_encoder)
@@ -19,8 +22,8 @@ def get_model(
     bert2bert.config.vocab_size = bert2bert.config.encoder.vocab_size
     # Generation configs
     # NOTE: See full list of configurations can be found here: https://huggingface.co/docs/transformers/v4.33.3/en/main_classes/text_generation#transformers.GenerationConfig
-    bert2bert.encoder.config.max_length = 514
-    bert2bert.decoder.config.max_length = 514
+    bert2bert.encoder.config.max_length = max_length
+    bert2bert.decoder.config.max_length = max_length
     # bert2bert.config.min_length = 20
     # NOTE: Never sample, i.e., always return the token w/ highest probability
     bert2bert.config.do_sample = False

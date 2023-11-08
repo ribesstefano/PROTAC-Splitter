@@ -7,8 +7,8 @@ from typing import Optional
 def process_data_to_model_inputs(
     batch,
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
-    encoder_max_length:int = 256,
-    decoder_max_length:int = 256,
+    encoder_max_length: int = 512,
+    decoder_max_length: int = 512,
 ):
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
@@ -28,8 +28,8 @@ def load_tokenized_dataset(
     dataset_config: str = 'default',
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
     batch_size: int = 512,
-    encoder_max_length:int = 256,
-    decoder_max_length:int = 256,
+    encoder_max_length:int = 512,
+    decoder_max_length:int = 512,
     token: Optional[str] = None,
 ):
     if isinstance(tokenizer, str):
