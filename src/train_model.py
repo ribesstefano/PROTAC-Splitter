@@ -49,6 +49,7 @@ def train_model(
     model_id: str,
     ds_name: str,
     ds_config: str = 'default',
+    learning_rate: float = 5e-5,
     max_steps: int = -1,
     num_train_epochs: int = 40,
     batch_size: int = 128,
@@ -64,6 +65,7 @@ def train_model(
     decoder_max_length: int = 512,
     tie_encoder_decoder: bool = False,
     delete_repo_first: bool = False,
+    training_args: Optional[Seq2SeqTrainingArguments] = None,
 ):
     """Trains a model on a given dataset.
     
@@ -71,6 +73,7 @@ def train_model(
         model_id (str): The name of the model to be trained.
         ds_name (str): The name of the dataset to be used for training.
         ds_config (str, optional): The name of the dataset configuration to be used for training. Defaults to 'default'.
+        learning_rate (float, optional): The learning rate. Defaults to 5e-5.
         max_steps (int, optional): The maximum number of training steps. Defaults to -1.
         num_train_epochs (int, optional): The number of training epochs. Defaults to 40.
         batch_size (int, optional): The batch size. Defaults to 128.
@@ -133,48 +136,49 @@ def train_model(
         token=hub_token,
     )
     per_device_batch_size = batch_size // gradient_accumulation_steps
-    training_args = Seq2SeqTrainingArguments(
-        output_dir=output_dir,
-        # Optimizer-related configs
-        learning_rate=5e-5,
-        optim="adamw_torch",
-        lr_scheduler_type="cosine", # Default: "linear"
-        # Generation configs
-        predict_with_generate=True,
-        generation_num_beams=1, # Greedy strategy
-        # Batch size and device configs
-        per_device_train_batch_size=per_device_batch_size,
-        per_device_eval_batch_size=per_device_batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        auto_find_batch_size=True,
-        # torch_compile=True,
-        fp16=True,
-        # Evaluation and checkpointing configs
-        evaluation_strategy="steps",
-        max_steps=max_steps,
-        num_train_epochs=num_train_epochs,
-        eval_steps=100,
-        save_steps=200,
-        # eval_steps=7500,
-        # warmup_steps=2000,
-        save_strategy="steps",
-        save_total_limit=1,
-        load_best_model_at_end=True,
-        metric_for_best_model="valid_smiles",
-        # Logging configs
-        log_level="info",
-        logging_steps=50,
-        disable_tqdm=True,
-        # Hub information configs
-        push_to_hub=True, # NOTE: Done manually further down
-        hub_token=hub_token,
-        hub_model_id=hub_model_id,
-        hub_strategy="checkpoint", # NOTE: Allows to resume training from last checkpoint 
-        hub_private_repo=True,
-        # Other configs
-        seed=42,
-        data_seed=42,
-    )
+    if training_args is None:
+        training_args = Seq2SeqTrainingArguments(
+            output_dir=output_dir,
+            # Optimizer-related configs
+            learning_rate=learning_rate,
+            optim="adamw_torch",
+            lr_scheduler_type="cosine", # Default: "linear"
+            # Generation configs
+            predict_with_generate=True,
+            generation_num_beams=1, # Greedy strategy
+            # Batch size and device configs
+            per_device_train_batch_size=per_device_batch_size,
+            per_device_eval_batch_size=per_device_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            auto_find_batch_size=True,
+            # torch_compile=True,
+            fp16=True,
+            # Evaluation and checkpointing configs
+            evaluation_strategy="steps",
+            max_steps=max_steps,
+            num_train_epochs=num_train_epochs,
+            eval_steps=100,
+            save_steps=200,
+            # eval_steps=7500,
+            # warmup_steps=2000,
+            save_strategy="steps",
+            save_total_limit=1,
+            load_best_model_at_end=True,
+            metric_for_best_model="valid_smiles",
+            # Logging configs
+            log_level="info",
+            logging_steps=50,
+            disable_tqdm=True,
+            # Hub information configs
+            push_to_hub=True, # NOTE: Done manually further down
+            hub_token=hub_token,
+            hub_model_id=hub_model_id,
+            hub_strategy="checkpoint", # NOTE: Allows to resume training from last checkpoint 
+            hub_private_repo=True,
+            # Other configs
+            seed=42,
+            data_seed=42,
+        )
     rouge = evaluate.load("rouge")
     fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=8, fpSize=2048)
     metric = partial(
@@ -224,7 +228,29 @@ def train_mlm_model(
     pretrained_model_name: str = "seyonec/ChemBERTa-zinc-base-v1",
     max_length: int = 512,
     delete_repo_first: bool = False,
+    training_args: Optional[TrainingArguments] = None,
 ):
+    """Trains a masked language model on a given dataset.
+    
+    Args:
+        model_name (str): The name of the model to be trained.
+        ds_name (str, optional): The name of the dataset to be used for training. Defaults to 'ailab-bio/PROTAC-Substructures'.
+        ds_config (str, optional): The name of the dataset configuration to be used for training. Defaults to 'encoder_mlm_dataset'.
+        max_steps (int, optional): The maximum number of training steps. Defaults to 2000.
+        num_train_epochs (int, optional): The number of training epochs. Defaults to -1.
+        batch_size (int, optional): The batch size. Defaults to 128.
+        batch_size_tokenizer (int, optional): The batch size for the tokenizer. Defaults to 1024.
+        gradient_accumulation_steps (int, optional): The number of gradient accumulation steps. Defaults to 4.
+        hub_token (Optional[str], optional): The Hugging Face token. Defaults to None.
+        organization (Optional[str], optional): The Hugging Face organization. Defaults to None.
+        output_dir (str, optional): The output directory. Defaults to "./models/".
+        mlm_probability (float, optional): The probability of masking tokens. Defaults to 0.15.
+        tokenizer (AutoTokenizer | str, optional): The tokenizer. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
+        pretrained_model_name (str, optional): The name of the pretrained model. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
+        max_length (int, optional): The maximum length of the input sequence. Defaults to 512.
+        delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
+        training_args (Optional[TrainingArguments], optional): The training arguments. Defaults to None.
+    """
     if hub_token is not None:
         hf.login(token=hub_token)
     # Setup output directory and Hugging Face repository
@@ -282,39 +308,40 @@ def train_mlm_model(
         remove_columns=["text", "labels"],
     )
     # Setup trainer
-    per_device_batch_size = batch_size // gradient_accumulation_steps
-    training_args = TrainingArguments(
-        output_dir=output_dir,
-        # Optimizer-related configs
-        learning_rate=1.5e-5,
-        optim="adamw_torch",
-        lr_scheduler_type="linear", # Default: "linear"
-        # Batch size and device configs
-        per_device_train_batch_size=per_device_batch_size,
-        per_device_eval_batch_size=per_device_batch_size,
-        gradient_accumulation_steps=gradient_accumulation_steps,
-        auto_find_batch_size=True,
-        # Evaluation and checkpointing configs
-        evaluation_strategy="steps",
-        max_steps=max_steps,
-        num_train_epochs=num_train_epochs,
-        eval_steps=100,
-        save_steps=500,
-        fp16=True,
-        # Logging configs
-        log_level="info",
-        logging_steps=50,
-        disable_tqdm=True,
-        # Hub information configs
-        push_to_hub=True, # NOTE: Done manually further down
-        hub_token=hub_token,
-        hub_model_id=hub_model_name,
-        hub_strategy="checkpoint", # NOTE: Allows to resume training from last checkpoint 
-        hub_private_repo=True,
-        # Other configs
-        seed=42,
-        data_seed=42,
-    )
+    if training_args is None:
+        per_device_batch_size = batch_size // gradient_accumulation_steps
+        training_args = TrainingArguments(
+            output_dir=output_dir,
+            # Optimizer-related configs
+            learning_rate=5e-8,
+            optim="adamw_torch",
+            lr_scheduler_type="linear", # Default: "linear"
+            # Batch size and device configs
+            per_device_train_batch_size=per_device_batch_size,
+            per_device_eval_batch_size=per_device_batch_size,
+            gradient_accumulation_steps=gradient_accumulation_steps,
+            auto_find_batch_size=True,
+            # Evaluation and checkpointing configs
+            evaluation_strategy="steps",
+            max_steps=max_steps,
+            num_train_epochs=num_train_epochs,
+            eval_steps=100,
+            save_steps=500,
+            fp16=True,
+            # Logging configs
+            log_level="info",
+            logging_steps=50,
+            disable_tqdm=True,
+            # Hub information configs
+            push_to_hub=True, # NOTE: Done manually further down
+            hub_token=hub_token,
+            hub_model_id=hub_model_name,
+            hub_strategy="checkpoint", # NOTE: Allows to resume training from last checkpoint 
+            hub_private_repo=True,
+            # Other configs
+            seed=42,
+            data_seed=42,
+        )
     data_collator = DataCollatorForLanguageModeling(
         tokenizer=tokenizer,
         mlm_probability=mlm_probability,
@@ -355,7 +382,7 @@ def clean_text(text: str) -> str:
     return text.replace("<s>", "").replace("</s>", "")
 
 
-def train_trl_model(
+def train_ppo_model(
     model_name: str = "ailab-bio/PROTAC-Splitter-PPO",
     max_steps: int = 2000,
     ppo_epochs: int = 4,
@@ -365,6 +392,18 @@ def train_trl_model(
     max_length: int = 512,
     delete_repo_first: bool = False,     
 ):
+    """ Trains a PPO model on a given dataset.
+    
+    Args:
+        model_name (str, optional): The name of the model to be trained. Defaults to "ailab-bio/PROTAC-Splitter-PPO".
+        max_steps (int, optional): The maximum number of training steps. Defaults to 2000.
+        ppo_epochs (int, optional): The number of PPO epochs. Defaults to 4.
+        batch_size (int, optional): The batch size. Defaults to 128.
+        hub_token (Optional[str], optional): The Hugging Face token. Defaults to None.
+        pretrained_model_name (str, optional): The name of the pretrained model. Defaults to "ailab-bio/PROTAC-Splitter_untied_80-20-split".
+        max_length (int, optional): The maximum length of the input sequence. Defaults to 512.
+        delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
+    """
     if ppo_epochs < 1:
         raise ValueError(f"ppo_epochs must be >= 1, got {ppo_epochs}.")
     # Disable RDKit logging: when checking SMILES validity, we suppress warnings
@@ -381,7 +420,11 @@ def train_trl_model(
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)
     tokenizer.pad_token = tokenizer.eos_token
     # Get dataset
-    train_dataset = load_trl_dataset(tokenizer=tokenizer, token=hub_token, max_length=max_length)
+    train_dataset = load_trl_dataset(
+        tokenizer=tokenizer,
+        token=hub_token,
+        max_length=max_length,
+    ).shuffle(seed=42).flatten_indices()
     # Setup PPO trainer
     hub_configs = {
         "repo_id": model_name,
