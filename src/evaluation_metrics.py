@@ -103,7 +103,7 @@ def same_atom_counts_and_types(smiles1, smiles2, get_atoms_diff=False):
         mol2 = smiles2
     if mol1 is None or mol2 is None:
         if get_atoms_diff:
-            return float("nan")
+            return False
             # raise ValueError("Invalid SMILES notation provided for one or both molecules.")
         else:
             return False

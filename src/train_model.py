@@ -1,25 +1,36 @@
-from model_utils import get_model
-from data_utils import load_tokenized_dataset
-from evaluation_metrics import compute_metrics_with_chem
 import os
+import evaluate
+import math
+import torch
+import huggingface_hub as hf
+from model_utils import get_model
+from data_utils import (
+    load_tokenized_dataset,
+    load_trl_dataset,
+    data_collator_for_trl,
+)
+from evaluation_metrics import compute_metrics_with_chem, reward_function
+from tqdm import tqdm
+from datasets import load_dataset
+from typing import Optional
+from functools import partial
+from rdkit import Chem, RDLogger
+from rdkit.Chem import rdFingerprintGenerator
 from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
-    EncoderDecoderModel,
     AutoTokenizer,
     AutoModelForMaskedLM,
     DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
 )
-from datasets import load_dataset
-import evaluate
-from typing import Optional
-from functools import partial
-import huggingface_hub as hf
-from rdkit import Chem, RDLogger
-from rdkit.Chem import rdFingerprintGenerator
-import math
+from trl import (
+    AutoModelForSeq2SeqLMWithValueHead,
+    PPOConfig,
+    PPOTrainer,
+)
+
 
 def create_hf_repository(**kwargs):
   """Creates a new Hugging Face repository."""
@@ -340,18 +351,6 @@ def train_mlm_model(
         )
 
 
-import torch
-from data_utils import load_trl_dataset, data_collator_for_trl
-from evaluation_metrics import reward_function
-from trl import (
-    AutoModelForCausalLMWithValueHead,
-    AutoModelForSeq2SeqLMWithValueHead,
-    PPOConfig,
-    PPOTrainer,
-    create_reference_model,
-)
-from tqdm import tqdm
-
 def clean_text(text: str) -> str:
     return text.replace("<s>", "").replace("</s>", "")
 
@@ -359,13 +358,17 @@ def clean_text(text: str) -> str:
 def train_trl_model(
     model_name: str = "ailab-bio/PROTAC-Splitter-PPO",
     max_steps: int = 2000,
-    num_train_epochs: int = -1,
+    ppo_epochs: int = 4,
     batch_size: int = 128,
     hub_token: Optional[str] = None,
     pretrained_model_name: str = "ailab-bio/PROTAC-Splitter_untied_80-20-split",
     max_length: int = 512,
     delete_repo_first: bool = False,     
 ):
+    if ppo_epochs < 1:
+        raise ValueError(f"ppo_epochs must be >= 1, got {ppo_epochs}.")
+    # Disable RDKit logging: when checking SMILES validity, we suppress warnings
+    RDLogger.DisableLog("rdApp.*")
     if hub_token is not None:
         hf.login(token=hub_token)
     if delete_repo_first:
@@ -380,14 +383,21 @@ def train_trl_model(
     # Get dataset
     train_dataset = load_trl_dataset(tokenizer=tokenizer, token=hub_token, max_length=max_length)
     # Setup PPO trainer
+    hub_configs = {
+        "repo_id": model_name,
+        "commit_message": "Initial version",
+        "private": True,
+    }
     ppo_config = PPOConfig(
         model_name=model_name,
-        learning_rate=1.41e-5,
+        learning_rate=1e-5,
         steps=max_steps, # Default: 20_000
-        ppo_epochs=num_train_epochs, # Default: 4
+        ppo_epochs=ppo_epochs, # Default: 4
         batch_size=batch_size, # Default: 256
+        gradient_accumulation_steps=1, # Default: 1
         # global_batch_size=8,
         optimize_device_cache=True,
+        push_to_hub_if_best_kwargs=hub_configs,
         seed=42,
     )
     ppo_trainer = PPOTrainer(
@@ -413,10 +423,5 @@ def train_trl_model(
         # Run PPO step
         stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
         ppo_trainer.log_stats(stats, batch, rewards)
-        break
     # Save model
-    ppo_trainer.push_to_hub(
-        repo_id=model_name,
-        commit_message="Initial version",
-        private=True,
-    )
+    ppo_trainer.push_to_hub(**hub_configs)
