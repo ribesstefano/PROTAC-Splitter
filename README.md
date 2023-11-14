@@ -9,29 +9,28 @@ conda env create -f environment.yml
 conda activate env-protac-splitter
 ```
 
-Unzip the `final.zip` file located under the `data` directory.
-
 Run the following command for starting training the model:
 
 ```bash
 mkdir -p models
-python main.py \
-    --output_dir="./models" \
-    --data_dir="./data/final/" \
-    --max_steps=-1 \
-    --num_train_epochs=50
-```
+hub_token="my-unforgettable-token"
+organization="my-awesome-organization"
 
-One can pass additional arguments to push to an Hugging Face repository once training completes:
-
-```bash
-python main.py \
-    --output_dir="./models" \
-    --data_dir="./data/final/" \
-    --max_steps=-1 \
-    --num_train_epochs=50 \
-    --hub_token="my-unforgettable-token" \
-    --organization="my-awesome-organization" \
+python main.py train_model \
+    "PROTAC-Splitter_untied_80-20-split_with-sampling" \
+    "ailab-bio/PROTAC-Substructures" \
+    --organization=${organization} \
+    --ds_config="80-20-split" \
+    --tokenizer="seyonec/ChemBERTa-zinc-base-v1" \
+    --pretrained_encoder="seyonec/ChemBERTa-zinc-base-v1" \
+    --pretrained_decoder="seyonec/ChemBERTa-zinc-base-v1" \
+    --tie_encoder_decoder=false \
+    --output_dir="/models" \
+    --batch_size=256 \
+    --max_steps=2000 \
+    --num_train_epochs=-1 \
+    --hub_token="${hub_token}" \
+    --delete_repo_first=false
 ```
 
 In general, refer to the help message for more information about the command line arguments:
@@ -42,7 +41,6 @@ python main.py --help
 
 ## Data Preparation
 
-The train and test datasets are assembled in the notbook: `notebooks/protac_pedia_data_curation.ipynb`.
+The train and test datasets are assembled in the notbook: [notebooks/data_curation.ipynb](notebooks/data_curation.ipynb).
 
 Raw CSV data are expected to be placed in the `data/raw` directory.
-They shall contain the following columns: `["PROTAC SMILES", "E3 Binder SMILES", "Linker SMILES", "POI Ligand SMILES"]`.
