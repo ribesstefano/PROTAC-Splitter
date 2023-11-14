@@ -1,5 +1,4 @@
-from transformers import AutoTokenizer
-from transformers import EncoderDecoderModel
+from transformers import AutoTokenizer, EncoderDecoderModel
 from typing import Optional
 
 def get_model(
@@ -25,13 +24,16 @@ def get_model(
     bert2bert.encoder.config.max_length = max_length
     bert2bert.decoder.config.max_length = max_length
     # bert2bert.config.min_length = 20
-    # NOTE: Never sample, i.e., always return the token w/ highest probability
-    bert2bert.config.do_sample = False
+
+    # # NOTE: Never sample, i.e., always return the token w/ highest probability
+    # bert2bert.config.do_sample = False
+    bert2bert.config.do_sample = True
+    bert2bert.config.num_beams = 5
+    bert2bert.config.top_k = 20
     
     # bert2bert.config.max_new_tokens = 514
     # bert2bert.config.early_stopping = True
     # bert2bert.config.length_penalty = 2.0
-    # bert2bert.config.num_beams = 4
     # # bert2bert.config.no_repeat_ngram_size = 3 # Default: 0
     
     return bert2bert

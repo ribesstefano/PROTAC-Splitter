@@ -12,7 +12,7 @@ from data_utils import (
 from evaluation_metrics import compute_metrics_with_chem, reward_function
 from tqdm import tqdm
 from datasets import load_dataset
-from typing import Optional
+from typing import Optional, Literal, Dict
 from functools import partial
 from rdkit import Chem, RDLogger
 from rdkit.Chem import rdFingerprintGenerator
@@ -24,11 +24,13 @@ from transformers import (
     DataCollatorForLanguageModeling,
     Trainer,
     TrainingArguments,
+    EncoderDecoderModel,
 )
 from trl import (
     AutoModelForSeq2SeqLMWithValueHead,
     PPOConfig,
     PPOTrainer,
+    DPOTrainer,
 )
 
 
@@ -180,7 +182,10 @@ def train_model(
             data_seed=42,
         )
     rouge = evaluate.load("rouge")
-    fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=8, fpSize=2048)
+    fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
+        radius=8,
+        fpSize=2048,
+    )
     metric = partial(
         compute_metrics_with_chem,
         rouge=rouge,
@@ -468,3 +473,130 @@ def train_ppo_model(
         ppo_trainer.log_stats(stats, batch, rewards)
     # Save model
     ppo_trainer.push_to_hub(**hub_configs)
+
+
+def train_dpo_model(
+    model_name: str = "ailab-bio/PROTAC-Splitter-DPO",
+    output_dir: str = "./models/",
+    beta: float = 0.1,
+    loss_type: Literal["sigmoid", "hinge"] = "sigmoid",
+    learning_rate: float = 5e-5,
+    max_steps: int = 2000,
+    num_train_epochs: int = -1,
+    batch_size: int = 128,
+    gradient_accumulation_steps: int = 4,
+    hub_token: Optional[str] = None,
+    pretrained_model_name: str = "ailab-bio/PROTAC-Splitter_untied_80-20-split",
+    pretrained_ref_model_name: str = "ailab-bio/PROTAC-Splitter_untied_80-20-split",
+    max_length: int = 512,
+    delete_repo_first: bool = False,     
+):
+    """ Trains a DPO model on a given dataset.
+    
+    Args:
+        model_name (str, optional): The name of the model to be trained. Defaults to "ailab-bio/PROTAC-Splitter-DPO".
+        max_steps (int, optional): The maximum number of training steps. Defaults to 2000.
+    """
+    if hub_token is not None:
+        hf.login(token=hub_token)
+    if delete_repo_first:
+        delete_hf_repository(repo_id=model_name, token=hub_token)
+    tokenizer = AutoTokenizer.from_pretrained(
+        pretrained_model_name,
+        token=hub_token,
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    # Get train and eval datasets
+    dataset = load_dataset(
+        "ailab-bio/PROTAC-Substructures-DPO",
+        token=hub_token,
+    )
+    # Setup models
+    model = EncoderDecoderModel.from_pretrained(
+        pretrained_model_name,
+        token=hub_token,
+    )
+    model_ref = EncoderDecoderModel.from_pretrained(
+        pretrained_ref_model_name,
+        token=hub_token,
+    )
+    # Setup training arguments
+    per_device_batch_size = batch_size // gradient_accumulation_steps
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        # Optimizer-related configs
+        learning_rate=learning_rate,
+        optim="adamw_torch",
+        lr_scheduler_type="cosine", # Default: "linear"
+        # Batch size and device configs
+        per_device_train_batch_size=per_device_batch_size,
+        per_device_eval_batch_size=per_device_batch_size,
+        gradient_accumulation_steps=gradient_accumulation_steps,
+        auto_find_batch_size=True,
+        # torch_compile=True,
+        fp16=True,
+        # Evaluation and checkpointing configs
+        evaluation_strategy="steps",
+        max_steps=max_steps,
+        num_train_epochs=num_train_epochs,
+        eval_steps=100,
+        save_steps=200,
+        # eval_steps=7500,
+        # warmup_steps=2000,
+        save_strategy="steps",
+        save_total_limit=1,
+        load_best_model_at_end=True,
+        metric_for_best_model="valid_smiles",
+        # Logging configs
+        log_level="info",
+        logging_steps=50,
+        disable_tqdm=True,
+        # Hub information configs
+        push_to_hub=True, # NOTE: Done manually further down
+        hub_token=hub_token,
+        hub_model_id=model_name,
+        hub_strategy="checkpoint", # NOTE: Allows to resume training from last checkpoint 
+        hub_private_repo=True,
+        # Other configs
+        remove_unused_columns=False,
+        seed=42,
+        data_seed=42,
+    )
+    # Setup Matrics
+    rouge = evaluate.load("rouge")
+    fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
+        radius=8,
+        fpSize=2048,
+    )
+    metric = partial(
+        compute_metrics_with_chem,
+        rouge=rouge,
+        tokenizer=tokenizer,
+        fpgen=fpgen,
+    )
+    # Setup trainer and start training
+    dpo_trainer = DPOTrainer(
+        model,
+        model_ref,
+        beta=beta,
+        loss_type=loss_type,
+        train_dataset=dataset["train"],
+        eval_dataset=dataset["validation"],
+        tokenizer=tokenizer,
+        compute_metrics=metric,
+        max_length=max_length,
+        max_prompt_length=max_length,
+        max_target_length=max_length,
+        is_encoder_decoder=True,
+        padding_value=tokenizer.pad_token_id,
+        truncation_mode="keep_start",
+        args=training_args,
+    )
+    dpo_trainer.train()
+    hub_configs = {
+        "repo_id": model_name,
+        "commit_message": "Initial version",
+        "private": True,
+    }
+    dpo_trainer.push_to_hub(**hub_configs)
