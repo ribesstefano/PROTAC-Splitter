@@ -135,6 +135,8 @@ checkpoints/
 figures
 
 data/protac/
+data/processed/*.pt
+data/raw/
 data/*.pt
 data/**/*.jpg
 data/figures
