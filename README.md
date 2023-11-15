@@ -1,5 +1,7 @@
 # PROTAC Splitter
 
+This repository contains a program to split PROTAC molecules into their substructures.
+
 ## Quickstart
 
 Install the required dependencies and activate the relative environment:
