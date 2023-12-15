@@ -503,7 +503,7 @@ def make_graph_with_pos(smile):
     return Graph, pos
 
 def identify_legal_nodes(mol, smallest_allowed_subgraph_size=9):
-    smi = Chem.MolToSmiles(mol)
+    smi = Chem.MolToSmiles(mol, canonical=True)
     G, pos = make_graph_with_pos(smi)
     bridge_bool_list, highlighted_nodes = identify_bridge_nodes(G) #identify_bridge_nodes_and_reject_small_splits(G, smallest_allowed_subgraph_size)
     ms_bool_list, at_idx_list = identify_murcko_scaffold_atoms(mol)
@@ -894,6 +894,151 @@ def remove_non_ring_atoms(mol):
 #modified_mol = remove_linker_non_ring_atoms(mol)
 #display(modified_mol)
 
+"""
+from rdkit import Chem
+from rdkit.Chem import AllChem
+from rdkit.Chem import ReplaceCore
+
+
+def attach_rings_to_linker(mol):
+
+    # Convert the SMILES string to an RDKit molecule
+    #mol = Chem.MolFromSmiles(linker_smiles)
+
+    # Define the ring to attach (example: benzene ring with a dummy atom)
+    ring_smiles_1 = '[C:1][C:1]1=[C:1][C:1]=[C:1][C:1]=[C:1]1'#'[U:1]1=[U:1][U:1]=[U:1][U:1]=[U:1]1'  # Benzene with a dummy atom at one position
+    ring_smiles_2 = '[C:2][C:2]1=[C:2][C:2]=[C:2][C:2]=[C:2]1'#'[Au:2]1=[Au:2][Au:2]=[Au:2][Au:2]=[Au:2]1'
+    ring_mol_1 = Chem.MolFromSmiles(ring_smiles_1)
+    ring_mol_2 = Chem.MolFromSmiles(ring_smiles_2)
+
+    # Iterate over the atoms and find dummy atoms
+    for atom in mol.GetAtoms():
+        if atom.GetAtomMapNum() == 1:
+            mol = AllChem.ReplaceSubstructs(mol, Chem.MolFromSmiles("[*:1]"), ring_mol_1, replacementConnectionPoint=0)[0]
+        elif atom.GetAtomMapNum() == 2:
+            mol = AllChem.ReplaceSubstructs(mol, Chem.MolFromSmiles("[*:2]"), ring_mol_2, replacementConnectionPoint=0)[0]
+
+
+    # Convert the modified molecule back to a SMILES string
+    #modified_smiles = Chem.MolToSmiles(mol, canonical=True)
+    Chem.GetSymmSSSR(mol)  # Finding rings and re-perceiving aromaticity
+
+
+    return mol
+
+
+
+def remove_rings_from_linker(mol):
+    
+    "Identifies specific rings (benzene rings with a dummy atom) in the molecule and replaces them with single dummy atoms."
+
+    "Args: linker_smiles (str): SMILES string of the linker with attached rings."
+
+    "Returns: str: SMILES string of the linker with rings replaced by dummy atoms."
+
+    # Convert the SMILES string to an RDKit molecule
+    #mol = Chem.MolFromSmiles(linker_smiles)
+
+    # Define the substructures to be replaced (benzene rings with a dummy atom)
+    ring_substructure_1 = Chem.MolFromSmiles('[C:1][C:1]1=[C:1][C:1]=[C:1][C:1]=[C:1]1')
+    ring_substructure_2 = Chem.MolFromSmiles('[C:2][C:2]1=[C:2][C:2]=[C:2][C:2]=[C:2]1')
+
+    # Define the dummy atoms to replace the rings
+    dummy_1 = Chem.MolFromSmiles('[*:1]')
+    dummy_2 = Chem.MolFromSmiles('[*:2]')
+
+    # Replace the rings with dummy atoms
+
+    #mol = Chem.ReplaceCore(mol, ring_substructure_1, labelByIndex=True)
+    mol = AllChem.ReplaceSubstructs(mol, ring_substructure_1, dummy_1, replacementConnectionPoint=0)[0]
+    mol = AllChem.ReplaceSubstructs(mol, ring_substructure_2, dummy_2, replacementConnectionPoint=0)[0]
+
+    #mol = AllChem.ReplaceSubstructs(mol, ring_substructure_2, dummy_2, replacementConnectionPoint=0)[0]
+    #display(mol)
+
+
+    # Convert the modified molecule back to a SMILES string
+    #modified_smiles = Chem.MolToSmiles(mol, canonical=True)
+    Chem.GetSymmSSSR(mol)  # Finding rings and re-perceiving aromaticity
+    Chem.SanitizeMol(mol)
+
+    return mol
+
+
+
+# Example usage
+#linker_with_dummies = "[*:1]C#CCOCC(C)OCC(c1cccc(c1C)C)OCC(C)C(=O)[*:2]"# "[*:1]C#CCOCCOCC(C1=CC=CC=C1)OCCC(=O)[*:2]"# "[*:2]C(=O)CCOCCOCCOCC#C[*:1]"  # Example linker with dummy atoms
+#mol = Chem.MolFromSmiles(linker_with_dummies)
+#display(mol)
+#modified_linker = attach_rings_to_linker(mol)
+#display(modified_linker)
+#modified_linker = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(modified_linker)
+#modified_linker_inversed = remove_rings_from_linker(modified_linker)
+#display(modified_linker_inversed)
+#display(modified_linker_inversed)
+"""
+
+
+
+def linker_mol_to_ms(mol):
+
+    if mol.GetNumAtoms() == 2: #only [*:1] and [*:2]
+        return mol
+
+    #if "[*:1]" and "[*:2]" in smiles
+
+
+    poi_l_attachment_point, e3_l_attachment_point = find_atom_index_of_mapped_atoms_detailed(mol)
+
+    emol = Chem.EditableMol(mol)
+    
+    #add one single bond between the attachment points
+    try:
+        emol.AddBond(poi_l_attachment_point[0], e3_l_attachment_point[0], Chem.rdchem.BondType.SINGLE)
+    except:
+        display(mol)
+        print(f'poi_l_attachment_point:{poi_l_attachment_point}')
+        print(f'e3_l_attachment_point:{e3_l_attachment_point}')
+        print(Chem.MolToSmiles(mol, canonical=True))
+        raise ValueError("Fail add bond")
+
+
+    mol_circulized = emol.GetMol()
+    try:
+        # Sanitize the molecule
+        Chem.GetSymmSSSR(mol_circulized)  # Finding rings and re-perceiving aromaticity
+        Chem.SanitizeMol(mol_circulized)
+    except: 
+        raise ValueError("Fail GetSymmSSSR or SanitizeMol")
+    
+    #apply MS
+    mol_circulized_ms = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol_circulized)
+    ms_poi_l_attachment_point, ms_e3_l_attachment_point = find_atom_index_of_mapped_atoms_detailed(mol_circulized_ms)
+    #mol_circulized_ms.GetBondBetweenAtoms(ms_poi_l_attachment_point, ms_e3_l_attachment_point).SetBondType(Chem.rdchem.BondType.UNSPECIFIED)
+
+    emol_circulized_ms = Chem.EditableMol(mol_circulized_ms)
+
+    #remove the bond between the attachment points
+    emol_circulized_ms.RemoveBond(ms_poi_l_attachment_point[0], ms_e3_l_attachment_point[0])
+
+    mol_ms = emol_circulized_ms.GetMol()
+
+    try:
+        # Sanitize the molecule
+        Chem.GetSymmSSSR(mol_ms)  # Finding rings and re-perceiving aromaticity
+        Chem.SanitizeMol(mol_ms)
+    except: 
+        raise ValueError("Fail GetSymmSSSR or SanitizeMol")
+
+    return mol_ms
+
+"""
+linker_with_dummies = "[*:1]C#CCOCC(C)OCC(c1cccc(c1C)C)OCC(C)C(=O)[*:2]"# "[*:1]C#CCOCCOCC(C1=CC=CC=C1)OCCC(=O)[*:2]"# "[*:2]C(=O)CCOCCOCCOCC#C[*:1]"  # Example linker with dummy atoms
+mol = Chem.MolFromSmiles(linker_with_dummies)
+display(mol)
+mol_ms = linker_mol_to_ms(mol)
+display(mol_ms)"""
+
 
 
 def get_anonymous_mol(mol):
@@ -905,29 +1050,24 @@ def get_anonymous_mol(mol):
 def get_anonymous_murcko(smiles):
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:  # Handle invalid SMILES strings
-        return None
-    if "[*:1]" and "[*:2]" in smiles: #is_linker = True
-        mol_ms = remove_non_ring_atoms(mol)                     #switch to "remove_branches(mol)" in AZ_data_splitting. remove_non_ring_atoms works only for these linkers, it doesnt work in general, especially if you remove a branch on a nitrogen which is in a ring.
-        
-        #if mol.GetNumAtoms() != mol_ms.GetNumAtoms():
-        #    display(mol)
-       #     display(mol_ms)
-        #    pass
-        #mol = attach_rings_to_linker(mol)
-        #try:
-        #    mol_ms = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol)
-        #except:
-        #    display(mol)
-        #    mol_ms = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol)
-        #mol_ms = remove_rings_from_linker(mol_ms)
-    else:
-        mol_ms = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol)
-    
-    smiles_anon_ms = get_anonymous_mol(mol_ms)
+        raise ValueError("mol is None")
 
-    return smiles_anon_ms
+    smi_anon = get_anonymous_mol(mol)
+    mol_anon = Chem.MolFromSmiles(smi_anon)
+
+    if "[*:1]" in smiles and "[*:2]" in smiles: #is_linker = True
+        #mol_ms = linker_mol_to_ms(mol)
+        mol_anon_ms = linker_mol_to_ms(mol_anon)    
+    else:
+        #mol_ms = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol)
+        mol_anon_ms = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol_anon)
     
-def generate_anonymous_murcko_scaffold(dataframe, smiles_column):
+    #smi_anon_ms = get_anonymous_mol(mol_ms)
+    smi_anon_ms = Chem.MolToSmiles(mol_anon_ms, canonical=True)
+
+    return smi_anon_ms
+    
+def generate_anonymous_murcko_in_df(dataframe, smiles_column):
     dataframe[smiles_column + '_AnonMS'] = dataframe[smiles_column].apply(get_anonymous_murcko)
     return dataframe
 
@@ -938,7 +1078,7 @@ def standardize_smiles(smiles):
     try:
         mol = Chem.MolFromSmiles(smiles)
         if mol:
-            return Chem.MolToSmiles(mol, isomericSmiles=False)
+            return Chem.MolToSmiles(mol, isomericSmiles=False, canonical=True)
         else:
             print(f'Smile returned error: {smiles}')
             return None
@@ -1046,7 +1186,7 @@ def merge_molecules(mol1, mol2, atom_idx1, atom_idx2):
     neighbor_atom_idx2 = [nbr.GetIdx() + mol1.GetNumAtoms() for nbr in mol2.GetAtomWithIdx(atom_idx2).GetNeighbors() if nbr.GetAtomicNum() > 1]
     
     if neighbor_atom_idx2 == []: #if linker has no length
-        smi_e3_linker_with_e3_attachment = Chem.MolToSmiles(mol1)
+        smi_e3_linker_with_e3_attachment = Chem.MolToSmiles(mol1, canonical=True)
         smi_e3_linker_with_poi_attachment = smi_e3_linker_with_e3_attachment.replace("[*:2]","[*:1]")
         mol_e3_linker_with_poi_attachment = Chem.MolFromSmiles(smi_e3_linker_with_poi_attachment)
         return mol_e3_linker_with_poi_attachment
@@ -1105,7 +1245,7 @@ def reassemble_protac(poi_smiles, linker_smiles, e3_smiles):
 
     protac_mol = merge_molecules(e3_linker_mol, poi_mol, linker_e3_mol_idx, poi_idx)
     Chem.SanitizeMol(protac_mol)
-    protac_smiles = Chem.MolToSmiles(protac_mol)
+    protac_smiles = Chem.MolToSmiles(protac_mol, canonical=True)
 
     return protac_smiles, protac_mol
 
