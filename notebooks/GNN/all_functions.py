@@ -831,7 +831,7 @@ def prepare_data_set(test_set, p_column, poi_column, linker_column, e3_column):
     test_set_substructures = test_set[['substructures']].copy()
 
     test_set_protacs = test_set[[p_column]].copy()
-    test_set_protacs.rename(columns={p_column: 'smiles'}, inplace=True)
+    test_set_protacs.rename(columns={p_column: 'Smiles'}, inplace=True)
 
     return test_set_protacs, test_set_substructures
 
