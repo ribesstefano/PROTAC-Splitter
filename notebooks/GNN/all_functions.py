@@ -1363,7 +1363,7 @@ class PROTACDataset(Dataset):
                 raise ValueError(f'If you give a dataframe of SMILES for the PROTACs, you must also give the SMILES for their substructures to get boundary edges!')
             
             for index, row in tqdm(self.data.iterrows(), total=self.data.shape[0]):
-                data = smiles_to_data(protac_smile=row["smiles"], substructure_smiles=self.substructures['substructures'][index].split("."), graph_descriptor_list=self.graph_descriptor_list)
+                data = smiles_to_data(protac_smile=row["Smiles"], substructure_smiles=self.substructures['substructures'][index].split("."), graph_descriptor_list=self.graph_descriptor_list)
                 torch.save(data, os.path.join(self.processed_dir, f'data_{self.name}_{index}.pt'))
         else:
             # Handle case where self.data is not a DataFrame, e.g., a string of the name for a csv file!
