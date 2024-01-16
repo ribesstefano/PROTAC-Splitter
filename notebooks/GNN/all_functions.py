@@ -1072,6 +1072,29 @@ def generate_anonymous_murcko_in_df(dataframe, smiles_column):
     return dataframe
 
 
+def get_murcko(smiles):
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:  # Handle invalid SMILES strings
+        raise ValueError("mol is None")
+
+    if "[*:1]" in smiles and "[*:2]" in smiles: #is_linker = True
+        #mol_ms = linker_mol_to_ms(mol)
+        mol_ms = linker_mol_to_ms(mol)    
+    else:
+        #mol_ms = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol)
+        mol_ms = Chem.Scaffolds.MurckoScaffold.GetScaffoldForMol(mol)
+    
+    #smi_anon_ms = get_anonymous_mol(mol_ms)
+    smi_ms = Chem.MolToSmiles(mol_ms, canonical=True)
+
+    return smi_ms
+
+
+def generate_murcko_in_df(dataframe, smiles_column):
+    dataframe[smiles_column + '_MS'] = dataframe[smiles_column].apply(get_murcko)
+    return dataframe
+
+
 
 
 def standardize_smiles(smiles):
