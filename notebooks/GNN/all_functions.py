@@ -775,6 +775,69 @@ def smiles_to_data(protac_smile, substructure_smiles, graph_descriptor_list):
                 ) 
     return data #, mol, colors, G, pos
 
+
+
+def smiles_to_data_for_prediction(protac_smile, graph_descriptor_list, annotation=''):
+    protac_smile = remove_stereo(protac_smile)
+    mol = Chem.MolFromSmiles(protac_smile)
+    G = mol_to_graph(mol, graph_descriptor_list)
+
+    # Extract node features
+    #num_nodes = len(G)
+    #node_labels_initial_value = 0
+    
+    node_feature_raw = [list(G.nodes[node].values()) for node in G.nodes]
+    node_features = torch.tensor(node_feature_raw, dtype=torch.float)
+
+    #boundary_edges_set = set(boundary_edges)
+
+    # Extract edge indices and features
+    edge_indices = []
+
+    edge_features = []
+    for edge in G.edges(data=True):
+        start, end = edge[0], edge[1]
+
+        edge_indices.append((start, end))
+        edge_indices.append((end, start))  # since it's an undirected graph
+                        
+        # Bond type one-hot encoding
+        edge_feature_dict = edge[2]
+        
+        edge_feature = [
+            int(edge_feature_dict['bond_type'] == Chem.rdchem.BondType.SINGLE),
+            int(edge_feature_dict['bond_type'] == Chem.rdchem.BondType.DOUBLE),
+            int(edge_feature_dict['bond_type'] == Chem.rdchem.BondType.TRIPLE),
+            int(edge_feature_dict['bond_type'] == Chem.rdchem.BondType.AROMATIC),
+            int(edge_feature_dict['is_conjugated']),
+            int(edge_feature_dict['in_ring'])
+            ]
+        edge_features.extend([edge_feature, edge_feature])  # add twice for both directions
+
+    edge_indices = torch.tensor(edge_indices).t().contiguous()
+    edge_features = torch.tensor(edge_features, dtype=torch.float)
+
+
+    assign_pos_to_graph(protac_smile, G)
+
+
+    bool_combined_list, at_idx_combined_list = identify_legal_nodes(mol,smallest_allowed_subgraph_size=10)
+
+    bool_combined_tensor = torch.tensor(bool_combined_list).reshape(-1, 1)
+    
+
+    data = Data(x=node_features, 
+                edge_attr=edge_features,
+                edge_index=edge_indices,
+                smiles=protac_smile,     
+                G=G,
+                legal_nodes=bool_combined_tensor,
+                annotation=annotation
+                ) 
+    return data 
+
+
+
 #Further criteria for legal nodes: The the POI-L node and Linker nodes can't be a part of the same ring => Calculate the resulting nodes for the linker, POI and E3. ...
 # ... See if any ring has nodes from two classes. If a ring has nodes from Linker and E3, then the E3-L choice was poor. If the ring has nodes from Linker and POI, the POI-L choice was poor.
 #def will_boundary_nodes_split_rings(mol, poi_L_idx, e3_l_idx):
@@ -1605,7 +1668,13 @@ def process_boundaries_to_substructures(data, out, return_intermediate_path_node
         return pred_class_label_tensor
 
 
-
+def remove_stereo(smiles):
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        Chem.rdmolops.RemoveStereochemistry(mol)
+        return Chem.MolToSmiles(mol)
+    except:
+        return np.nan
 
 
 
@@ -2058,36 +2127,25 @@ from torch_geometric.nn import GraphConv
 class NodeClassifierGNN(torch.nn.Module):
     def __init__(self, node_feature_dim, edge_feature_dim):
         super(NodeClassifierGNN, self).__init__()
-        self.conv1 = GraphConv(node_feature_dim, 64)# edge_dim=edge_feature_dim)
-        self.conv2 = GraphConv(64, 64)# edge_dim=edge_feature_dim)
-        self.conv3 = GraphConv(64, 64)
-        self.conv4 = GraphConv(64, 64)
-        self.conv5 = GraphConv(64, 64)
-        self.conv6 = GraphConv(64, 64)
-        self.out = torch.nn.Linear(64, 3)  # Output layer for 3 classes
+        self.conv1 = GraphConv(node_feature_dim, 16)# edge_dim=edge_feature_dim)
+        self.conv2 = GraphConv(node_feature_dim, 16)# edge_dim=edge_feature_dim)
+        self.conv3 = GraphConv(node_feature_dim, 16)# edge_dim=edge_feature_dim)
+        self.conv4 = GraphConv(node_feature_dim, 16)# edge_dim=edge_feature_dim)
+        self.out = torch.nn.Linear(16, 3)  # Output layer for 3 classes
         
     def forward(self, node_attr, edge_index): #, edge_attr):
         # First Graph Convolution Layer
         z = self.conv1(node_attr, edge_index)#, edge_attr)
         z = F.relu(z)
 
-        # Second Graph Convolution Layer
-        z = self.conv2(z, edge_index)#, edge_attr)
+        z = self.conv2(node_attr, edge_index)#, edge_attr)
         z = F.relu(z)
 
-        # Third Graph Convolution Layer
-        z = self.conv3(z, edge_index)#, edge_attr)
+        z = self.conv3(node_attr, edge_index)#, edge_attr)
         z = F.relu(z)
 
-        z = self.conv4(z, edge_index)#, edge_attr)
+        z = self.conv4(node_attr, edge_index)#, edge_attr)
         z = F.relu(z)
-
-        z = self.conv5(z, edge_index)#, edge_attr)
-        z = F.relu(z)
-
-        z = self.conv6(z, edge_index)#, edge_attr)
-        z = F.relu(z)
-
 
         y = self.out(z)
 
