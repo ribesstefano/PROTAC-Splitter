@@ -28,7 +28,9 @@ from rdkit.Chem import rdchem
 from rdkit.Chem import rdmolops
 from rdkit.Chem import rdMolDescriptors
 from rdkit.Chem import rdMolHash
-
+from rdkit import DataStructs
+from rdkit.Chem import rdFingerprintGenerator
+from rdkit.Chem import RDKFingerprint
 
 # NetworkX for network analysis
 import networkx as nx
@@ -54,6 +56,95 @@ import random
 from IPython.display import display
 
 sys.path.append('./Code/TestingGround/src/models/')
+
+def get_mol(smiles):
+    mol = Chem.MolFromSmiles(smiles)
+    Chem.rdmolops.RemoveStereochemistry(mol)
+    return mol
+
+
+
+
+
+def compute_countMorgFP(smiles, radius=2):
+    if isinstance(smiles[0], str):
+        mols = [get_mol(smi) for smi in smiles]
+    else:
+        mols = smiles #assume mols were fed instead
+    fpgen = AllChem.GetMorganGenerator(radius=radius)
+    fps = [fpgen.GetCountFingerprint(mol) for mol in mols]
+    return fps
+
+def compute_MorgFP(smiles, radius=2):
+    if isinstance(smiles[0], str):
+        mols = [get_mol(smi) for smi in smiles]
+    else:
+        mols = smiles #assume mols were fed instead
+    fpgen = AllChem.GetMorganGenerator(radius=radius)
+    fps = [fpgen.GetFingerprint(mol) for mol in mols]
+    return fps
+
+def compute_RDKitFP(smiles, minpath=1, maxPath=7, fpSize=2048):
+    if isinstance(smiles[0], str):
+        mols = [get_mol(smi) for smi in smiles]
+    else:
+        mols = smiles #assume mols were fed instead
+    rdgen = rdFingerprintGenerator.GetRDKitFPGenerator(minPath=minpath, maxPath=maxPath, fpSize=fpSize)
+    fps = [rdgen.GetCountFingerprint(mol) for mol in mols]
+    return fps
+
+def compute_TopologicalTorsionFP(smiles, countSimulation=True, fpSize=2048):
+    if isinstance(smiles[0], str):
+        mols = [get_mol(smi) for smi in smiles] 
+    else:
+        mols = smiles #assume mols were fed instead
+    rdgen = rdFingerprintGenerator.GetTopologicalTorsionGenerator(fpSize=fpSize, countSimulation=countSimulation)
+    fps = [rdgen.GetFingerprint(mol) for mol in mols]
+    return fps
+
+def compute_FP_substructures(df, columns, fp_function=compute_countMorgFP, return_unique = True, convert_to_numpyarray = False):
+    out = []
+    for c in columns:
+        
+        if return_unique:
+            smi_list = df.loc[:,c].unique().tolist()
+        else:
+            smi_list = df.loc[:,c].tolist()
+        countMorgFP = fp_function(smi_list)
+        
+        if convert_to_numpyarray:
+            fp_numpy = []
+            for fp in countMorgFP:
+                arr = np.zeros((0,), dtype=int)
+                DataStructs.ConvertToNumpyArray(fp, arr)
+                fp_numpy.append(arr)
+            countMorgFP = fp_numpy
+
+        out.append(countMorgFP)
+    return out
+
+
+def validate_test_set(test_set, training_set, cutoff, fp_function=compute_countMorgFP):                                                            #OBS! Does not take into aaccount if cutoff and cutoff_MS are different!
+    """
+    Validates that no molecule in the test set has a Tanimoto similarity above the cutoff
+    with any molecule in the training set. Returns a list of maximum similarities for test set molecules.
+    """
+  
+    test_fps = fp_function(test_set)
+    train_fps = fp_function(training_set)
+    max_similarities = []
+
+    below_cutoff = True
+    for test_fp in test_fps:
+        similarities = DataStructs.BulkTanimotoSimilarity(test_fp, train_fps)
+        max_similarity = max(similarities)
+        max_similarities.append(max_similarity)
+        if max_similarity > cutoff:
+            below_cutoff = False
+
+
+    return below_cutoff, max_similarities
+
 
 
 
@@ -1303,8 +1394,16 @@ def merge_molecules(mol1, mol2, atom_idx1, atom_idx2):
 
     return modified_mol
 
-
 def reassemble_protac(poi_smiles, linker_smiles, e3_smiles):
+
+    if "[*:1]" in e3_smiles:
+        raise ValueError(f"[*:1] found among E3-SMILES: {e3_smiles}]")
+    elif "[*:2]" in poi_smiles:
+        raise ValueError(f"[*:2] found among POI-SMILES: {poi_smiles}]")
+    elif "[*:1]" not in linker_smiles or "[*:2]" not in linker_smiles:
+        raise ValueError(f"[*:1] or [*:2] missing among Linker-SMILES: {linker_smiles}]")
+
+
     # Convert SMILES to RDKit Molecule objects
     poi_mol = Chem.MolFromSmiles(poi_smiles)
     linker_mol = Chem.MolFromSmiles(linker_smiles)
