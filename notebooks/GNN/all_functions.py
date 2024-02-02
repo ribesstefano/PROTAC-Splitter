@@ -249,16 +249,36 @@ def boundary_ligand_nodes(protac_smiles, substructure_smiles):
                 else:
                     raise ValueError(f'Edge labler error - Problem with substructure matches')
 
+    if len(boundary_POI_node_index) == 0 or len(boundary_E3_node_index) == 0:
+        display(Chem.MolFromSmiles(protac_smiles))
+        display(Chem.MolFromSmiles(substructure_smiles))
+        display(Chem.MolFromSmiles(poi_smile))
+        display(Chem.MolFromSmiles(_))
+        display(Chem.MolFromSmiles(e3_smile))
+        print(f'boundary_POI_node_index: {boundary_POI_node_index}. boundary_E3_node_index: {boundary_E3_node_index}')
+        raise ValueError("Failed to assign boundary index")
+
     return boundary_POI_node_index, boundary_E3_node_index
 
 def get_node_labels(protac_smiles, substructure_smiles):
     boundary_POI_node_index, boundary_E3_node_index = boundary_ligand_nodes(protac_smiles, substructure_smiles)
     num_atoms = Chem.MolFromSmiles(protac_smiles).GetNumAtoms()
     node_labels = [0] * num_atoms
-    node_labels[boundary_POI_node_index] = 1
-    node_labels[boundary_E3_node_index] = 2
-
+    node_labels[boundary_POI_node_index[0]] = 1
+    node_labels[boundary_E3_node_index[0]] = 2
     return node_labels
+
+# def get_node_labels(protac_smiles, substructure_smiles):
+#     idx = boundary_ligand_nodes(protac_smiles, substructure_smiles)
+#     boundary_POI_node_index, boundary_E3_node_index = idx
+#     num_atoms = Chem.MolFromSmiles(protac_smiles).GetNumAtoms()
+#     node_labels = np.zeros((num_atoms, 1))
+#     POI_LABEL = 1
+#     E3_LABEL = 2
+#     node_labels[boundary_POI_node_index] = POI_LABEL
+#     node_labels[boundary_E3_node_index] = E3_LABEL
+#     return node_labels
+
 
 
 def one_hot_encode_boundary_nodes(protac_smiles, substructure_smiles):
