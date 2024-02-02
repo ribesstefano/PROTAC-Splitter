@@ -251,6 +251,16 @@ def boundary_ligand_nodes(protac_smiles, substructure_smiles):
 
     return boundary_POI_node_index, boundary_E3_node_index
 
+def get_node_labels(protac_smiles, substructure_smiles):
+    boundary_POI_node_index, boundary_E3_node_index = boundary_ligand_nodes(protac_smiles, substructure_smiles)
+    num_atoms = Chem.MolFromSmiles(protac_smiles).GetNumAtoms()
+    node_labels = [0] * num_atoms
+    node_labels[boundary_POI_node_index] = 1
+    node_labels[boundary_E3_node_index] = 2
+
+    return node_labels
+
+
 def one_hot_encode_boundary_nodes(protac_smiles, substructure_smiles):
     if isinstance(protac_smiles, list):
         protac_smiles = protac_smiles[0]
