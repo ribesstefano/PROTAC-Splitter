@@ -1732,6 +1732,7 @@ def process_boundaries_to_substructures(data, out, return_intermediate_path_node
     else:
         Graph_original = data.G.copy()
 
+    #Forgot what dictionary_shuffeled_indicies came from. I guess it is for IF it is present, then use it. If not present, it would give an error and do nothing. Was to check permutation invariance, and it was.
     try:
         shuffle_indicies_dictionary = data.dictionary_shuffeled_indicies
         POI_boundary_node = shuffle_indicies_dictionary[POI_boundary_node] #Update original node index of POI to the new corresponding shuffled index
@@ -1866,68 +1867,81 @@ def process_boundaries_to_substructure_labels_v2_single(protac_smiles, raw_bound
     
     """
    
-    
-    
-    min_vals = raw_boundary_prediction.min(dim=0, keepdim=True).values   # adjust for batch, later
+
+    #-------------------------------------------------- get POI_boundary_node & E3_boundary_node --------------------------------------------------
+
+    #Apply to each molecule in batch (for now)
+    min_vals = raw_boundary_prediction.min(dim=0, keepdim=True).values #min & max value of each class individually
     max_vals = raw_boundary_prediction.max(dim=0, keepdim=True).values
-    raw_boundary_prediction_normalized = 2 * ((raw_boundary_prediction - min_vals) / (max_vals - min_vals)) - 1 #Normalize each molecule, later
+    normalized_boundary_prediction = 2 * ((raw_boundary_prediction - min_vals) / (max_vals - min_vals)) - 1 # normalized predictions spanning [-1, 1]
      
-    pred_boundary_nodes = raw_boundary_prediction_normalized.argmax(dim=0)
+    pred_boundary_nodes = normalized_boundary_prediction.argmax(dim=0) # get idx of the max values for each class
 
     POI_boundary_node = pred_boundary_nodes[0].item()
     E3_boundary_node = pred_boundary_nodes[2].item()
-    if POI_boundary_node == E3_boundary_node:
-
-
-        if raw_boundary_prediction_normalized[POI_boundary_node,0] > raw_boundary_prediction_normalized[POI_boundary_node,2]:
-
-            print(f'min_vals[2].item(): {min_vals[2].item()}')
-            raw_boundary_prediction_normalized[POI_boundary_node,2] = min_vals[0, 2].item()
-            pred_boundary_nodes = raw_boundary_prediction_normalized.argmax(dim=0)
-            E3_boundary_node = pred_boundary_nodes[2].item()
+    if POI_boundary_node == E3_boundary_node: #if model is stupid and says the same node for both boundaries, prevent an error selecting the "most likely" as this node, and the other node after its "second most likely" node prediction.
+        if normalized_boundary_prediction[POI_boundary_node,0] > normalized_boundary_prediction[POI_boundary_node,2]: #f model "belives" more in POI node than E3, choose POI as this node
+            normalized_boundary_prediction[E3_boundary_node,2] = min_vals[0, 2].item() #redefine the highest E3 to the lowest value 
+            pred_boundary_nodes = normalized_boundary_prediction.argmax(dim=0) #Get new highest max values (for E3)
+            E3_boundary_node = pred_boundary_nodes[2].item() #redefine E3 node idx as the second highest predicted
         else: 
-            
-            raw_boundary_prediction_normalized[POI_boundary_node,0] = min_vals[0, 0].item()
-            pred_boundary_nodes = raw_boundary_prediction_normalized.argmax(dim=0)
+            normalized_boundary_prediction[POI_boundary_node,0] = min_vals[0, 0].item()
+            pred_boundary_nodes = normalized_boundary_prediction.argmax(dim=0)
             POI_boundary_node = pred_boundary_nodes[0].item()
+    
+    #-------------------------------------------------- graph preparations  --------------------------------------------------
 
+    #prepare graphs
     mol = Chem.MolFromSmiles(protac_smiles)
     Graph_original = mol_to_simple_graph(mol)
-
-    try:
-        shuffle_indicies_dictionary = data.dictionary_shuffeled_indicies
-        POI_boundary_node = shuffle_indicies_dictionary[POI_boundary_node] #Update original node index of POI to the new corresponding shuffled index
-        E3_boundary_node = shuffle_indicies_dictionary[E3_boundary_node]
-    except AttributeError:
-        dictionary_shuffeled_indicies = None 
-    
-
     Graph = Graph_original.copy()
     Graph_ligands = Graph_original.copy()
     Graph_POI = Graph_original.copy()
     Graph_E3 = Graph_original.copy()
     
-    #print(f'initial len(mol) : {Chem.MolFromSmiles(data.smiles[0]).GetNumAtoms()}')
-
+    #Get path between boundaries => Some of the linker nodes
     try:
         path_nodes = nx.shortest_path(Graph, source=POI_boundary_node, target=E3_boundary_node)
         intermediate_path_nodes = path_nodes[1:-1]
-    except nx.NetworkXNoPath:
+    except:# nx.NetworkXNoPath:
         intermediate_path_nodes = []
-        raise ValueError(f'Poor path between boundary nodes, or linker has no length. If no length, then procedure to better extract POI (and E3) is needed, possibly via deleting the other node (temporarily) and seeing which are connected to the other node')          #
+        #raise ValueError(f'Poor path between boundary nodes, or linker has no length. If no length, then procedure to better extract POI (and E3) is needed, possibly via deleting the other node (temporarily) and seeing which are connected to the other node')          #
 
-    if POI_boundary_node == E3_boundary_node:
-        Graph.remove_node(POI_boundary_node) 
-    else:
-        Graph.remove_node(POI_boundary_node) #assuming only one boundary node <=> One Attatchment point
-        Graph.remove_node(E3_boundary_node)
+
+    #-------------------------------------------------- get linker nodes  --------------------------------------------------
+
+
+    #Better scheme: 
+        # 1. delete POI boundary and get all descendants of the E3 boundary
+        # 2. delete E3 boundary and get all descendants of the POI boundary
+        # 3. define common descendants as the linker 
+        # 4. get new graph, delete all descendants of the E3 boundary => define as POI
+        # 5. get new graph, delete all descendants of the POI boundary => define as E3
+
+    #Its better since shortest path algorithm may be slow & I am already using nx.descendants twice to get the exact same nodes.
+
+
+
+    
+    #if POI_boundary_node == E3_boundary_node: #Should never happen due to code above
+    #    Graph.remove_node(POI_boundary_node) 
+    #else:
+
+
+    #Remove boundary nodes - ideally, the linker should be free from POI and E3 now
+    Graph.remove_node(POI_boundary_node)
+    Graph.remove_node(E3_boundary_node)
         
+    #Get all nodes which are connected to the path 
     linker_nodes_set = set()
     if len(intermediate_path_nodes)>0:
         for linker_node in nx.descendants(Graph, intermediate_path_nodes[0]):
             linker_nodes_set.add(linker_node)
         linker_nodes_set.add(intermediate_path_nodes[0])
     linker_nodes = list(linker_nodes_set)
+
+    #-------------------------------------------------- get E3 nodes  --------------------------------------------------
+
 
     Graph_ligands.remove_nodes_from(linker_nodes)
     Graph_POI.remove_nodes_from(linker_nodes)
@@ -1943,6 +1957,9 @@ def process_boundaries_to_substructure_labels_v2_single(protac_smiles, raw_bound
     E3_nodes_set = E3_nodes_set - linker_nodes_set
     E3_nodes = list(E3_nodes_set)
 
+    #-------------------------------------------------- get POI nodes  --------------------------------------------------
+
+
     POI_nodes_set = set()
     for POI_node in nx.descendants(Graph_POI, POI_boundary_node):
         POI_nodes_set.add(POI_node)
@@ -1950,9 +1967,10 @@ def process_boundaries_to_substructure_labels_v2_single(protac_smiles, raw_bound
     POI_nodes_set = POI_nodes_set - linker_nodes_set - E3_nodes_set
     POI_nodes = list(POI_nodes_set)
 
-    total_node_list  = POI_nodes + linker_nodes + E3_nodes
-    
+    #-------------------------------------------------- get assign lables  --------------------------------------------------
 
+
+    total_node_list  = POI_nodes + linker_nodes + E3_nodes
     pred_class_label_list = []
     for i in range(len(Graph_original)):
         matches = 0
