@@ -317,6 +317,25 @@ def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile):
 #    node_labels[boundary_E3_node_index[0]] = 2
 #    return node_labels
 
+def get_substructure_smiles_function(protac_smiles, class_predictions):
+    protac_mol = Chem.MolFromSmiles(protac_smiles)
+    protac_graph = mol_to_simple_graph(protac_mol)
+    substructure_smiles = []
+    node_indices_substructure = [[], [], []]
+    class_predictions_list = class_predictions.tolist()
+    for substructure_idx in [0, 1, 2]:
+        node_indices_substructure[substructure_idx] = [i for i, x in enumerate(class_predictions_list) if x == substructure_idx]
+        substructure_graph = protac_graph.subgraph(node_indices_substructure[substructure_idx])
+
+        # Create a mapping from old indices (from the original graph) to new indices (for the RDKit molecule)
+        index_mapping = {old_index: new_index for new_index, old_index in enumerate(substructure_graph.nodes())}
+
+        substructure_mol = graph_to_mol(substructure_graph, index_mapping)  #OBS! Need to fix graph_to_mol()
+        substructure_smiles.append(Chem.MolToSmiles(substructure_mol))
+    return substructure_smiles
+
+
+
 def get_node_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.array
     idx = boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile)
     boundary_POI_node_index, boundary_E3_node_index = idx
@@ -866,7 +885,7 @@ def mol_to_simple_graph(mol):
                    )                       
     return G
 
-def graph_to_mol(G):
+def graph_to_mol(G, index_mapping={}):
     # Create an empty editable molecule
     new_mol = Chem.RWMol()
 
@@ -878,9 +897,18 @@ def graph_to_mol(G):
         new_mol.AddAtom(atom)
 
     # Add bonds to the molecule
-    for start, end, attr in G.edges(data=True):
-        bond_type = attr['bond_type']
-        new_mol.AddBond(start, end, bond_type)
+    try:
+        for start, end, attr in G.edges(data=True):
+            bond_type = attr['bond_type']
+            if index_mapping != {}:
+                start = index_mapping[start]  #If
+                end = index_mapping[end]
+            new_mol.AddBond(start, end, bond_type)
+    except:
+        print(bond_type)
+        print(start)
+        print(end)
+        pass
 
     # Convert to a standard RDKit molecule and return
     mol = new_mol.GetMol()
