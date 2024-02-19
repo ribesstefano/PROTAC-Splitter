@@ -102,6 +102,15 @@ def compute_TopologicalTorsionFP(smiles, countSimulation=True, fpSize=2048):
     fps = [rdgen.GetFingerprint(mol) for mol in mols]
     return fps
 
+from rdkit.Avalon.pyAvalonTools import GetAvalonCountFP, GetAvalonFP
+def compute_AvalonFP(smiles):
+    if isinstance(smiles[0], str):
+        mols = [get_mol(smi) for smi in smiles] 
+    else:
+        mols = smiles #assume mols were fed instead
+    fps = [GetAvalonCountFP(mol) for mol in mols]
+    return fps
+
 def compute_FP_substructures(df, columns, fp_function=compute_countMorgFP, return_unique = True, convert_to_numpyarray = False):
     out = []
     for c in columns:
@@ -260,24 +269,74 @@ def boundary_ligand_nodes(protac_smiles, substructure_smiles):
 
     return boundary_POI_node_index, boundary_E3_node_index
 
-def get_node_labels(protac_smiles, substructure_smiles):
-    boundary_POI_node_index, boundary_E3_node_index = boundary_ligand_nodes(protac_smiles, substructure_smiles)
+def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile):
+
+    mol = Chem.MolFromSmiles(protac_smiles)
+
+    boundary_POI_node_index = -1
+    boundary_E3_node_index = -1
+    ligand_smiles_list = [poi_smile, e3_smile]   
+    for i, ligand_smile in enumerate(ligand_smiles_list):
+        substruct_mol = Chem.MolFromSmiles(ligand_smile)
+        matches = mol.GetSubstructMatches(Chem.DeleteSubstructs(substruct_mol, Chem.MolFromSmiles('*')))
+
+        if not matches:
+            continue  # If no match is found, skip to the next substructure
+        match = matches[0]  # Take the first match                                         ##########################OBS!
+
+        # Find boundary nodes for the POI and E3
+        for bond in mol.GetBonds():
+            begin_atom_label = int(bond.GetBeginAtomIdx() in match)
+            end_atom_label = int(bond.GetEndAtomIdx() in match)
+            if begin_atom_label != end_atom_label:
+                if bond.GetBeginAtomIdx() in match and i == 0:
+                    boundary_POI_node_index = bond.GetBeginAtomIdx()
+                elif bond.GetEndAtomIdx() in match and i ==0:
+                    boundary_POI_node_index = bond.GetEndAtomIdx()
+                elif bond.GetBeginAtomIdx() in match and i == 1:
+                    boundary_E3_node_index = bond.GetBeginAtomIdx()
+                elif bond.GetEndAtomIdx() in match and i ==1:
+                    boundary_E3_node_index = bond.GetEndAtomIdx()
+                else:
+                    raise ValueError(f'Problem with substructure matches')
+
+    if boundary_POI_node_index == -1 or boundary_E3_node_index == -1:
+        display(Chem.MolFromSmiles(protac_smiles))
+        display(Chem.MolFromSmiles(poi_smile))
+        display(Chem.MolFromSmiles(e3_smile))
+        print(f'boundary_POI_node_index: {boundary_POI_node_index}. boundary_E3_node_index: {boundary_E3_node_index}')
+        raise ValueError("Failed to assign boundary index")
+
+    return boundary_POI_node_index, boundary_E3_node_index
+
+def get_node_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.array
+    idx = boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile)
+    boundary_POI_node_index, boundary_E3_node_index = idx
     num_atoms = Chem.MolFromSmiles(protac_smiles).GetNumAtoms()
-    node_labels = [0] * num_atoms
-    node_labels[boundary_POI_node_index[0]] = 1
-    node_labels[boundary_E3_node_index[0]] = 2
+    #node_labels = np.zeros((num_atoms, 1)).astype(np.int64)
+    node_labels = torch.ones([num_atoms], dtype=torch.int64)
+    POI_LABEL = 0
+    E3_LABEL = 2
+    node_labels[boundary_POI_node_index] = POI_LABEL
+    node_labels[boundary_E3_node_index] = E3_LABEL
     return node_labels
 
-# def get_node_labels(protac_smiles, substructure_smiles):
-#     idx = boundary_ligand_nodes(protac_smiles, substructure_smiles)
-#     boundary_POI_node_index, boundary_E3_node_index = idx
-#     num_atoms = Chem.MolFromSmiles(protac_smiles).GetNumAtoms()
-#     node_labels = np.zeros((num_atoms, 1))
-#     POI_LABEL = 1
-#     E3_LABEL = 2
-#     node_labels[boundary_POI_node_index] = POI_LABEL
-#     node_labels[boundary_E3_node_index] = E3_LABEL
-#     return node_labels
+def get_substructure_smiles_function(protac_smiles, class_predictions):
+    protac_mol = Chem.MolFromSmiles(protac_smiles)
+    protac_graph = mol_to_simple_graph(protac_mol)
+    substructure_smiles = []
+    node_indices_substructure = [[], [], []]
+    class_predictions_list = class_predictions.tolist()
+    for substructure_idx in [0, 1, 2]:
+        node_indices_substructure[substructure_idx] = [i for i, x in enumerate(class_predictions_list) if x == substructure_idx]
+        substructure_graph = protac_graph.subgraph(node_indices_substructure[substructure_idx])
+
+        # Create a mapping from old indices (from the original graph) to new indices (for the RDKit molecule)
+        index_mapping = {old_index: new_index for new_index, old_index in enumerate(substructure_graph.nodes())}
+
+        substructure_mol = graph_to_mol(substructure_graph, index_mapping)  #OBS! Need to fix graph_to_mol()
+        substructure_smiles.append(Chem.MolToSmiles(substructure_mol))
+    return substructure_smiles
 
 
 
@@ -802,7 +861,21 @@ def mol_to_graph(mol, graph_descriptor_list, transform=False):
     Graph = G
     return Graph
 
-def graph_to_mol(G):
+def mol_to_simple_graph(mol):
+    G = nx.Graph()
+    for atom in mol.GetAtoms():
+        G.add_node(atom.GetIdx(),    
+               atomic_num=atom.GetAtomicNum(),
+               formal_charge=atom.GetFormalCharge(),
+                aromatic=atom.GetIsAromatic()
+              )
+    for bond in mol.GetBonds():
+        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(),
+                   bond_type=bond.GetBondType()
+                   )                       
+    return G
+
+def graph_to_mol(G, index_mapping={}):
     # Create an empty editable molecule
     new_mol = Chem.RWMol()
 
@@ -814,9 +887,18 @@ def graph_to_mol(G):
         new_mol.AddAtom(atom)
 
     # Add bonds to the molecule
-    for start, end, attr in G.edges(data=True):
-        bond_type = attr['bond_type']
-        new_mol.AddBond(start, end, bond_type)
+    try:
+        for start, end, attr in G.edges(data=True):
+            bond_type = attr['bond_type']
+            if index_mapping != {}:
+                start = index_mapping[start]  #If
+                end = index_mapping[end]
+            new_mol.AddBond(start, end, bond_type)
+    except:
+        print(bond_type)
+        print(start)
+        print(end)
+        pass
 
     # Convert to a standard RDKit molecule and return
     mol = new_mol.GetMol()
@@ -1663,13 +1745,12 @@ def process_boundaries_to_substructures(data, out, return_intermediate_path_node
         #print(f'POI_boundary_node: {POI_boundary_node}')
 
 
-
-
     if isinstance(data.G, list):
         Graph_original = data.G[0].copy()
     else:
         Graph_original = data.G.copy()
 
+    #Forgot what dictionary_shuffeled_indicies came from. I guess it is for IF it is present, then use it. If not present, it would give an error and do nothing. Was to check permutation invariance, and it was.
     try:
         shuffle_indicies_dictionary = data.dictionary_shuffeled_indicies
         POI_boundary_node = shuffle_indicies_dictionary[POI_boundary_node] #Update original node index of POI to the new corresponding shuffled index
@@ -1769,7 +1850,7 @@ def process_boundaries_to_substructures(data, out, return_intermediate_path_node
             pred_class_label_list.append(2)
         else:
             print(f'i: {i}')
-            print(f'len(data.G[0]): {len(data.G[0])}')
+            #print(f'len(data.G[0]): {len(data.G[0])}')
             print(f'len(POI_nodes): {len(POI_nodes)}')
             print(f'len(linker_nodes): {len(linker_nodes)}')
             print(f'len(E3_nodes): {len(E3_nodes)}')
@@ -1795,6 +1876,164 @@ def process_boundaries_to_substructures(data, out, return_intermediate_path_node
         return intermediate_path_nodes, path_nodes, POI_nodes, linker_nodes,  E3_nodes
     else:
         return pred_class_label_tensor
+
+def process_predicted_nodes_to_substructure_labels(raw_node_prediction):
+    min_vals = raw_node_prediction.min(dim=1, keepdim=True).values #min & max value of each class individually
+    max_vals = raw_node_prediction.max(dim=1, keepdim=True).values
+    normalized_boundary_prediction =  ((raw_node_prediction - min_vals) / (max_vals - min_vals))  # normalized predictions spanning [0, 1]
+    pred_node_classes = normalized_boundary_prediction.argmax(dim=1) # get idx of the max values for each class
+    return pred_node_classes
+
+def process_predicted_boundaries_to_substructure_labels(protac_smiles, raw_boundary_prediction):
+    """
+    Converts the prediction (raw_boundary_prediction) based on the boundary nodes of the POI and E3 into a definite node level prediction for all nodes.
+    Useful for evaluation and using the model to predict new values
+    
+    """
+   
+
+    #-------------------------------------------------- get POI_boundary_node & E3_boundary_node --------------------------------------------------
+
+    #Apply to each molecule in batch (for now)
+    min_vals = raw_boundary_prediction.min(dim=0, keepdim=True).values #min & max value of each class individually
+    max_vals = raw_boundary_prediction.max(dim=0, keepdim=True).values
+    normalized_boundary_prediction =  ((raw_boundary_prediction - min_vals) / (max_vals - min_vals))  # normalized predictions spanning [0, 1]
+     
+    pred_boundary_nodes = normalized_boundary_prediction.argmax(dim=0) # get idx of the max values for each class
+
+    POI_boundary_node = pred_boundary_nodes[0].item()
+    E3_boundary_node = pred_boundary_nodes[2].item()
+    n_highest_pred_node = 0
+    while POI_boundary_node == E3_boundary_node: #if model is stupid and says the same node for both boundaries, prevent an error selecting the "most likely" as this node, and the other node after its "second most likely" node prediction.
+        n_highest_pred_node +=1
+        POI_boundary_node_probability = normalized_boundary_prediction[POI_boundary_node,0]
+        E3_boundary_node_probability = normalized_boundary_prediction[E3_boundary_node,2]
+        
+        if POI_boundary_node_probability > E3_boundary_node_probability: #if model "belives" more in POI node than E3, choose POI as this node
+            E3_boundary_node = torch.topk(normalized_boundary_prediction[:,2], k=n_highest_pred_node, dim=0).indices.tolist()[-1]
+            normalized_boundary_prediction[E3_boundary_node,2] = 0 #min_vals[0, 2].item() #redefine the highest E3 to the lowest value 
+            pred_boundary_nodes = normalized_boundary_prediction.argmax(dim=0) #Get new highest max values (for E3)
+            E3_boundary_node = pred_boundary_nodes[2].item() #redefine E3 node idx as the second highest predicted
+        else: 
+            POI_boundary_node = torch.topk(normalized_boundary_prediction[:,2], k=n_highest_pred_node, dim=0).indices.tolist()[-1]
+            normalized_boundary_prediction[POI_boundary_node,0] = 0 #min_vals[0, 0].item()
+            pred_boundary_nodes = normalized_boundary_prediction.argmax(dim=0)
+            POI_boundary_node = pred_boundary_nodes[0].item()
+    
+    if POI_boundary_node == E3_boundary_node:
+        raise ValueError("POI_boundary_node is the same as E3_boundary_node")
+
+    pred_class_label_tensor = process_boundaries_to_substructure_labels(protac_smiles, POI_boundary_node, E3_boundary_node)
+    return pred_class_label_tensor
+
+
+
+def process_boundaries_to_substructure_labels(protac_smiles, POI_boundary_node, E3_boundary_node):
+        #-------------------------------------------------- graph preparations  --------------------------------------------------
+
+    #prepare graphs
+    mol = Chem.MolFromSmiles(protac_smiles)
+    Graph_original = mol_to_simple_graph(mol)
+    Graph = Graph_original.copy()
+    Graph_ligands = Graph_original.copy()
+    Graph_POI = Graph_original.copy()
+    Graph_E3 = Graph_original.copy()
+    
+    #Get path between boundaries => Some of the linker nodes
+    try:
+        path_nodes = nx.shortest_path(Graph, source=POI_boundary_node, target=E3_boundary_node)
+        intermediate_path_nodes = path_nodes[1:-1]
+    except:# nx.NetworkXNoPath:
+        intermediate_path_nodes = []
+        #raise ValueError(f'Poor path between boundary nodes, or linker has no length. If no length, then procedure to better extract POI (and E3) is needed, possibly via deleting the other node (temporarily) and seeing which are connected to the other node')          #
+
+
+    #-------------------------------------------------- get linker nodes  --------------------------------------------------
+
+
+    #Better scheme: 
+        # 1. delete POI boundary and get all descendants of the E3 boundary
+        # 2. delete E3 boundary and get all descendants of the POI boundary
+        # 3. define common descendants as the linker 
+        # 4. get new graph, delete all descendants of the E3 boundary => define as POI
+        # 5. get new graph, delete all descendants of the POI boundary => define as E3
+
+    #Its better since shortest path algorithm may be slow & I am already using nx.descendants twice to get the exact same nodes.
+
+
+
+    
+    #if POI_boundary_node == E3_boundary_node: #Should never happen due to code above
+    #    Graph.remove_node(POI_boundary_node) 
+    #else:
+
+
+    #Remove boundary nodes - ideally, the linker should be free from POI and E3 now
+    try:
+        Graph.remove_node(POI_boundary_node)
+        Graph.remove_node(E3_boundary_node)
+    except:
+        raise ValueError("POI_boundary_node is the same as E3_boundary_node")
+        
+    #Get all nodes which are connected to the path 
+    linker_nodes_set = set()
+    if len(intermediate_path_nodes)>0:
+        for linker_node in nx.descendants(Graph, intermediate_path_nodes[0]):
+            linker_nodes_set.add(linker_node)
+        linker_nodes_set.add(intermediate_path_nodes[0])
+    linker_nodes = list(linker_nodes_set)
+
+    #-------------------------------------------------- get E3 nodes  --------------------------------------------------
+
+
+    Graph_ligands.remove_nodes_from(linker_nodes)
+    Graph_POI.remove_nodes_from(linker_nodes)
+    Graph_POI.remove_node(E3_boundary_node)
+    Graph_E3.remove_nodes_from(linker_nodes)
+    Graph_E3.remove_node(POI_boundary_node)
+    #vizualize_protac_From_Graph(Graph_ligands)
+
+    E3_nodes_set = set()
+    for E3_node in nx.descendants(Graph_E3, E3_boundary_node):
+        E3_nodes_set.add(E3_node)
+    E3_nodes_set.add(E3_boundary_node)
+    E3_nodes_set = E3_nodes_set - linker_nodes_set
+    E3_nodes = list(E3_nodes_set)
+
+    #-------------------------------------------------- get POI nodes  --------------------------------------------------
+
+
+    POI_nodes_set = set()
+    for POI_node in nx.descendants(Graph_POI, POI_boundary_node):
+        POI_nodes_set.add(POI_node)
+    POI_nodes_set.add(POI_boundary_node)
+    POI_nodes_set = POI_nodes_set - linker_nodes_set - E3_nodes_set
+    POI_nodes = list(POI_nodes_set)
+
+    #-------------------------------------------------- get assign lables  --------------------------------------------------
+
+
+    total_node_list  = POI_nodes + linker_nodes + E3_nodes
+    pred_class_label_list = []
+    for i in range(len(Graph_original)):
+        matches = 0
+        for j in range(len(total_node_list)):         #Seems inefficient
+            matches += int(i == total_node_list[j])
+        if matches != 1:
+            raise ValueError(f'There too many or no matches of node i in the following lists in process_boundaries_to_substructures(). Matches: {matches} for node {i}')
+
+        if i in POI_nodes:
+            pred_class_label_list.append(0)
+        elif i in linker_nodes:
+            pred_class_label_list.append(1)
+        elif i in E3_nodes:
+            pred_class_label_list.append(2)
+        else:
+            raise ValueError('The number of nodes in G does not match the total count of nodes among the 3 lists (too many), or a node has been lost on the way of data processing.')
+
+
+    pred_class_label_tensor = torch.tensor(pred_class_label_list)
+    return pred_class_label_tensor
 
 
 def remove_stereo(smiles):
@@ -2235,6 +2474,15 @@ def predict(model, data):
     return class_predictions, probabilities
 
 
+def predict_v2(model, data=None, protac_smiles=None):
+    model.eval()  # Set the model to evaluation mode
+    with torch.no_grad():
+        out = model(data.x, data.edge_index) #, edge_attr=data.edge_attr)
+        class_predictions = process_boundaries_to_substructures_v2(protac_smiles, out)
+        probabilities = F.softmax(out, dim=1)                        
+    return class_predictions, probabilities
+
+
 def val_test_split(validation_dataset, relative_test_size=0.3):
 
     val_size = len(validation_dataset)
@@ -2289,7 +2537,8 @@ def train(model, loader, optimizer, criterion, epoch):
         optimizer.zero_grad()
 
         #print(data.edge_index)
-        
+        print(data.x.dtype)
+        print(data.edge_index.dtype)
         out = model(node_attr=data.x, edge_index=data.edge_index)#, edge_attr=data.edge_attr)
         
         
@@ -2307,6 +2556,9 @@ def train(model, loader, optimizer, criterion, epoch):
             target_boundary_list.append(target_boundary_for_idx)
         
         target = target_boundary_list[0]
+        print(target)
+        print(type(target))
+        print(target.size())
         if len(target_boundary_list) > 1:
             for i in range(1, len(target_boundary_list)):
                 target = torch.cat((target, target_boundary_list[i]))
