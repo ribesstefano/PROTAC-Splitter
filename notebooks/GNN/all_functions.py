@@ -322,6 +322,9 @@ def get_node_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.arra
     return node_labels
 
 def get_substructure_smiles_function(protac_smiles, class_predictions):
+    #SMILES -> Graph
+    #Graph + Class predictions -> Substructure graphs
+    #Graph -> SMILES
     protac_mol = Chem.MolFromSmiles(protac_smiles)
     protac_graph = mol_to_simple_graph(protac_mol)
     substructure_smiles = []
