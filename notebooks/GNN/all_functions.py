@@ -2709,4 +2709,18 @@ def adjust_bond_types_for_kekulization(mol):
 
 
 
+from rdkit.Chem.rdmolops import GetAdjacencyMatrix
+def get_girvan_newman_encoding(smiles:str):
+    mol = Chem.MolFromSmiles(smiles)
+    A = np.array(GetAdjacencyMatrix(mol))
+    G = nx.convert_matrix.from_numpy_array(A)
+    communities_generator = nx.community.girvan_newman(G)
 
+    k = 3   # number of communities
+    for _ in range(k-1):
+        comms = list(next(communities_generator))
+    out_array = np.zeros([A.shape[0], 3])
+    for i in range(3):
+        for j in comms[i]:
+            out_array[j,i] = 1
+    return out_array
