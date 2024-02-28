@@ -48,6 +48,8 @@ from PIL import Image
 # External datasets
 from datasets import load_dataset
 
+from collections import defaultdict
+
 
 import re
 import random
@@ -2724,3 +2726,169 @@ def get_girvan_newman_encoding(smiles:str):
         for j in comms[i]:
             out_array[j,i] = 1
     return out_array
+
+
+
+
+def find_connected_ring_systems(mol):
+    """
+    Identifies each connected ring system in the molecule and returns them as a list of lists,
+    where each sublist contains the indices of the atoms in one connected ring system.
+   
+    Parameters:
+    - mol (rdkit.Chem.Mol): The molecule to analyze.
+   
+    Returns:
+    - List[List[int]]: A list of lists, with each sublist containing the atom indices of a connected ring system.
+    """
+    # Find the ring systems
+    ring_info = mol.GetRingInfo()
+    ring_atoms = ring_info.AtomRings()
+   
+    # Initialize a list to keep track of which atoms belong to which ring system
+    ring_systems = []
+
+    # Check each ring against existing ring systems to find connections
+    for ring in ring_atoms:
+        found = False
+        for system in ring_systems:
+            # If the ring shares atoms with an existing system, it's connected
+            if not set(ring).isdisjoint(system):
+                system.update(ring)
+                found = True
+                break
+        if not found:
+            # If the ring isn't connected to existing systems, start a new one
+            ring_systems.append(set(ring))
+   
+    # Convert sets back to lists for easier use later
+    ring_systems = [list(system) for system in ring_systems]
+   
+    return ring_systems
+
+
+def get_components_from_ring_systems(mol, ring_systems):
+    """
+    Expands each ring system in the molecule based on bond connectivity, ensuring atoms connected
+    to multiple ring systems are not included.
+    
+    Parameters:
+    - mol (Chem.Mol): RDKit molecule object.
+    - ring_systems (List[List[int]]): Initial ring systems identified by find_connected_ring_systems.
+    
+    Returns:
+    - List[Set[int]]: Expanded ring systems with additional connected atoms.
+    """
+    # Convert list of lists to list of sets for easier manipulation
+    ring_systems = [set(system) for system in ring_systems]
+
+    # Create a mapping from atoms to their respective ring systems
+    atom_to_systems = defaultdict(set)
+    for i, system in enumerate(ring_systems):
+        for atom_idx in system:
+            atom_to_systems[atom_idx].add(i)
+
+    # Work on a copy of the molecule to avoid altering the original
+    editable_mol = Chem.RWMol(mol)
+
+    for system_idx, original_system in enumerate(ring_systems):
+        if system_idx == 5:
+            pass
+        system_atoms_to_add = set()
+
+        # Make a temporary copy of the original system for safe iteration
+        temp_system = set(original_system)
+
+        for atom_idx in temp_system:
+            atom = editable_mol.GetAtomWithIdx(atom_idx)
+            neighbors = atom.GetNeighbors()
+
+            # Check each neighbor to see if it forms a bridge to another ring system
+            for neighbor in neighbors:
+                neighbor_idx = neighbor.GetIdx()
+                # Skip if neighbor is in the same ring system
+                if neighbor_idx in temp_system:
+                    continue
+
+                # Cut the bond and check connectivity to other systems
+                bond = editable_mol.GetBondBetweenAtoms(atom_idx, neighbor_idx)
+                if bond:  # If there's a bond connecting to a potential new atom
+                    editable_mol.RemoveBond(atom_idx, neighbor_idx)
+                    new_fragment = Chem.GetMolFrags(editable_mol, asMols=True, sanitizeFrags=False)
+                    
+                    # Determine if the neighbor belongs exclusively to this system
+                    #frag_exclusive_to_this_system = None
+                    for frag in new_fragment:
+                        exclusive_to_this_system = True
+                        frag_atom_indices = set(int(atom.GetProp('originalIdx')) for atom in frag.GetAtoms())
+                        # If the fragment contains atoms from other ring systems, it's not exclusive
+                        if not frag_atom_indices.isdisjoint(atom_to_systems.keys()) and not frag_atom_indices <= temp_system:
+                            exclusive_to_this_system = False
+                            continue
+                        if exclusive_to_this_system:
+                            system_atoms_to_add.update(frag_atom_indices)
+                            #system_atoms_to_add.update(frag_atom_indices)
+
+                    # Rebuild the molecule to restore the bond
+                    editable_mol = Chem.RWMol(mol)
+
+        # Update the original system with new atoms after checking all bonds
+        original_system.update(system_atoms_to_add)
+
+    return [list(system) for system in ring_systems]
+
+
+
+def find_intercomponent_bonds(mol, components, allowed_bonds='all'):
+    """
+    Identifies bonds that are not contained within the same component.
+    
+    Parameters:
+    - mol (Chem.Mol): The RDKit molecule object.
+    - components (List[List[int]]): A list of components, where each component is a list of atom indices.
+    
+    Returns:
+    - List[Tuple[int, int]]: A list of tuples, where each tuple contains the indices of atoms forming an intercomponent bond.
+    """
+    # Convert the list of components into a dictionary for faster lookup
+    atom_to_component = {}
+    for component_idx, component in enumerate(components):
+        for atom_idx in component:
+            atom_to_component[atom_idx] = component_idx
+
+    # List to store bonds that connect different components or atoms not in any component
+    intercomponent_bonds = []
+    bond_idx_list = []
+
+    # Iterate through all bonds in the molecule
+    for bond in mol.GetBonds():
+        start_atom_idx = bond.GetBeginAtomIdx()
+        end_atom_idx = bond.GetEndAtomIdx()
+
+        # Determine the component of each atom in the bond
+        start_component = atom_to_component.get(start_atom_idx, None)
+        end_component = atom_to_component.get(end_atom_idx, None)
+
+        # Check if bond connects different components or outside any component
+        if start_component is None or end_component is None or start_component != end_component:
+            start_atom_originalidx = mol.GetAtomWithIdx(start_atom_idx).GetProp('originalIdx')
+            end_atom_originalidx = mol.GetAtomWithIdx(end_atom_idx).GetProp('originalIdx')
+            if allowed_bonds != 'all':
+                if (start_atom_originalidx, end_atom_originalidx) in allowed_bonds or (end_atom_originalidx, start_atom_originalidx) in allowed_bonds:
+                    intercomponent_bonds.append((start_atom_originalidx, end_atom_originalidx))
+                    bond_idx_list.append(bond.GetIdx())
+            else:
+                intercomponent_bonds.append((start_atom_originalidx, end_atom_originalidx))
+                bond_idx_list.append(bond.GetIdx())
+
+    return intercomponent_bonds, bond_idx_list
+
+def get_murcko_bonds(scaffold):
+    murcko_bond_list = []
+    for bond in scaffold.GetBonds():
+        start_atom_idx = bond.GetBeginAtomIdx()
+        end_atom_idx = bond.GetEndAtomIdx()
+        start_atom_originalidx = scaffold.GetAtomWithIdx(start_atom_idx).GetProp('originalIdx')
+        end_atom_originalidx = scaffold.GetAtomWithIdx(end_atom_idx).GetProp('originalIdx')
+        murcko_bond_list.append((start_atom_originalidx, end_atom_originalidx))
+    return murcko_bond_list
