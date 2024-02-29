@@ -2721,10 +2721,10 @@ def get_girvan_newman_encoding(smiles:str):
     k = 3   # number of communities
     for _ in range(k-1):
         comms = list(next(communities_generator))
-    out_array = np.zeros([A.shape[0], 3])
-    for i in range(3):
-        for j in comms[i]:
-            out_array[j,i] = 1
+    out_array = np.zeros([A.shape[0], 1])
+    for com_idx, com in enumerate(comms):
+        for atom in com:
+            out_array[atom] = com_idx
     return out_array
 
 
