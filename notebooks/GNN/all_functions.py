@@ -355,6 +355,26 @@ def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
     return boundary_POI_bond, boundary_E3_bond
 
 
+def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = -1):
+    #choose labels with the forward method architecture in mind. If cosine angle => both may need to be equal to 1, negative values I guess will give an "unstable" prediction if it isnt perfectly confident. If feed the pair of nodes to a neural network, then I can choose anything
+
+    bond_labels = [torch.zeros(len(splittable_bonds_i),1) for splittable_bonds_i in splittable_bonds]
+
+    for protac_idx, (splittable_bonds_protac, boundary_bonds_protac) in enumerate(zip(splittable_bonds, boundary_bonds)):
+        poi_bond = boundary_bonds_protac[0]
+        poi_bond_mirrored = (poi_bond[1], poi_bond[0])
+        e3_bond = boundary_bonds_protac[1]
+        e3_bond_mirrored = (e3_bond[1], e3_bond[0])
+
+        for bond_idx, splittable_bond in enumerate(splittable_bonds_protac):
+            if poi_bond == splittable_bond or poi_bond_mirrored == splittable_bond:
+                bond_labels[protac_idx][bond_idx] = poi_label
+            if e3_bond == splittable_bond or e3_bond_mirrored == splittable_bond:
+                bond_labels[protac_idx][bond_idx] = e3_label
+
+    return bond_labels
+
+
 def get_node_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.array
     idx = boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile)
     boundary_POI_node_index, boundary_E3_node_index = idx
