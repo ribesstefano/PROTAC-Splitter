@@ -293,12 +293,16 @@ def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile):
             if begin_atom_label != end_atom_label:
                 if bond.GetBeginAtomIdx() in match and i == 0:
                     boundary_POI_node_index = bond.GetBeginAtomIdx()
+                    break
                 elif bond.GetEndAtomIdx() in match and i ==0:
                     boundary_POI_node_index = bond.GetEndAtomIdx()
+                    break
                 elif bond.GetBeginAtomIdx() in match and i == 1:
                     boundary_E3_node_index = bond.GetBeginAtomIdx()
+                    break
                 elif bond.GetEndAtomIdx() in match and i ==1:
                     boundary_E3_node_index = bond.GetEndAtomIdx()
+                    break
                 else:
                     raise ValueError(f'Problem with substructure matches')
 
@@ -310,6 +314,46 @@ def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile):
         raise ValueError("Failed to assign boundary index")
 
     return boundary_POI_node_index, boundary_E3_node_index
+
+
+def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
+
+    mol = Chem.MolFromSmiles(protac_smiles)
+
+    boundary_POI_bond = -1
+    boundary_E3_bond = -1
+    ligand_smiles_list = [poi_smile, e3_smile]   
+    for i, ligand_smile in enumerate(ligand_smiles_list):
+        substruct_mol = Chem.MolFromSmiles(ligand_smile)
+        matches = mol.GetSubstructMatches(Chem.DeleteSubstructs(substruct_mol, Chem.MolFromSmiles('*')))
+
+        if not matches:
+            continue  # If no match is found, skip to the next substructure
+        match = matches[0]  # Take the first match                                         ##########################OBS!
+
+        # Find boundary nodes for the POI and E3
+        for bond in mol.GetBonds():
+            begin_atom_label = int(bond.GetBeginAtomIdx() in match)
+            end_atom_label = int(bond.GetEndAtomIdx() in match)
+            if begin_atom_label != end_atom_label:
+                if i == 0: #(bond.GetBeginAtomIdx() in match or bond.GetEndAtomIdx() in match) and i == 0:
+                    boundary_POI_bond = (bond.GetEndAtomIdx(), bond.GetBeginAtomIdx())
+                    break
+                elif i == 1: # (bond.GetBeginAtomIdx() in match or bond.GetEndAtomIdx() in match) and i == 1:
+                    boundary_E3_bond = (bond.GetEndAtomIdx(), bond.GetBeginAtomIdx())
+                    break
+                else:
+                    raise ValueError(f'Problem with substructure matches')
+    
+    if boundary_POI_bond == -1 or boundary_E3_bond == -1:
+        display(Chem.MolFromSmiles(protac_smiles))
+        display(Chem.MolFromSmiles(poi_smile))
+        display(Chem.MolFromSmiles(e3_smile))
+        print(f'boundary_POI_bond: {boundary_POI_bond}. boundary_E3_bond: {boundary_E3_bond}')
+        raise ValueError("Failed to assign boundary index")
+    
+    return boundary_POI_bond, boundary_E3_bond
+
 
 def get_node_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.array
     idx = boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile)
@@ -2875,13 +2919,26 @@ def find_intercomponent_bonds(mol, components, allowed_bonds='all'):
             end_atom_originalidx = mol.GetAtomWithIdx(end_atom_idx).GetProp('originalIdx')
             if allowed_bonds != 'all':
                 if (start_atom_originalidx, end_atom_originalidx) in allowed_bonds or (end_atom_originalidx, start_atom_originalidx) in allowed_bonds:
-                    intercomponent_bonds.append((start_atom_originalidx, end_atom_originalidx))
+                    intercomponent_bonds.append((int(start_atom_originalidx), int(end_atom_originalidx)))
                     bond_idx_list.append(bond.GetIdx())
             else:
                 intercomponent_bonds.append((start_atom_originalidx, end_atom_originalidx))
                 bond_idx_list.append(bond.GetIdx())
 
     return intercomponent_bonds, bond_idx_list
+
+def format_tuple_bonds_to_COO(bonds, to_tensor = True):
+    start_atoms = []
+    end_atoms = []
+    for bond in bonds:
+        start_atoms.append(bond[0])
+        end_atoms.append(bond[1])
+    coo_format = [start_atoms, end_atoms]
+    if to_tensor:
+        return torch.tensor(coo_format, dtype=torch.int64)
+    else:
+        return coo_format
+
 
 def get_murcko_bonds(scaffold):
     murcko_bond_list = []
