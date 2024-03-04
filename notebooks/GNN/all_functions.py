@@ -355,10 +355,10 @@ def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
     return boundary_POI_bond, boundary_E3_bond
 
 
-def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = -1):
+def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = -1, linker_label = 0):
     #choose labels with the forward method architecture in mind. If cosine angle => both may need to be equal to 1, negative values I guess will give an "unstable" prediction if it isnt perfectly confident. If feed the pair of nodes to a neural network, then I can choose anything
 
-    bond_labels = [torch.zeros(len(splittable_bonds_i),1) for splittable_bonds_i in splittable_bonds]
+    bond_labels = [torch.zeros(len(splittable_bonds_i))+linker_label for splittable_bonds_i in splittable_bonds]
 
     for protac_idx, (splittable_bonds_protac, boundary_bonds_protac) in enumerate(zip(splittable_bonds, boundary_bonds)):
         poi_bond = boundary_bonds_protac[0]
@@ -2830,6 +2830,23 @@ def find_connected_ring_systems(mol):
    
     return ring_systems
 
+def merge_rings_if_sharing_at_least_2_atoms(sets):
+    while True:
+        did_merge = False # Flag to track if any merge occurred in this iteration.
+        for i in range(len(sets)):
+            if did_merge:
+                break # If a merge occurred, restart from the beginning.
+            for j in range(i + 1, len(sets)):
+                if len(sets[i].intersection(sets[j])) > 1: # Check if two sets share 2 or more elements.
+                    # Merge sets and update the list of sets.
+                    sets[i] = sets[i].union(sets[j])
+                    del sets[j] # Remove the merged set.
+                    did_merge = True # Set the flag as true because a merge occurred.
+                    break # Exit the loop to restart the process due to the modification of the list.
+        if not did_merge:
+            break # If no merges occurred in this iteration, exit the while loop.
+
+    return sets
 
 def get_components_from_ring_systems(mol, ring_systems):
     """
@@ -2845,6 +2862,8 @@ def get_components_from_ring_systems(mol, ring_systems):
     """
     # Convert list of lists to list of sets for easier manipulation
     ring_systems = [set(system) for system in ring_systems]
+
+    ring_systems = merge_rings_if_sharing_at_least_2_atoms(ring_systems)
 
     # Create a mapping from atoms to their respective ring systems
     atom_to_systems = defaultdict(set)
