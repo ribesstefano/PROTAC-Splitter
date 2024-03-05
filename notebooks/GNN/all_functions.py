@@ -2830,6 +2830,39 @@ def find_connected_ring_systems(mol):
    
     return ring_systems
 
+
+def find_non_ring_bonds(mol, ring_systems, exclude_bonds_connected_to_atoms_with_1_bond):
+    non_ring_bonds_dict = {}
+
+    for bond_idx, bond in enumerate(mol.GetBonds()):
+        start_atom_idx = bond.GetBeginAtomIdx()
+        end_atom_idx = bond.GetEndAtomIdx()
+
+        for system in ring_systems:
+            ring_bond = False
+            if start_atom_idx in system and end_atom_idx in system:
+                ring_bond = True
+                break
+        
+        if ring_bond is False:
+            exclude_bond = False
+
+            if exclude_bonds_connected_to_atoms_with_1_bond:
+                start_atom = mol.GetAtomWithIdx(start_atom_idx)
+                end_atom = mol.GetAtomWithIdx(end_atom_idx)
+
+                start_atom_num_bonds = start_atom.GetTotalDegree() - start_atom.GetTotalNumHs()
+                end_atom_num_bonds = end_atom.GetTotalDegree() - end_atom.GetTotalNumHs()
+                
+                if start_atom_num_bonds == 1 or end_atom_num_bonds == 1:
+                    exclude_bond = True
+
+            if not exclude_bond:
+                non_ring_bonds_dict[bond_idx] = (start_atom_idx, end_atom_idx)
+            
+    return non_ring_bonds_dict
+
+
 def merge_rings_if_sharing_at_least_2_atoms(sets):
     while True:
         did_merge = False # Flag to track if any merge occurred in this iteration.
