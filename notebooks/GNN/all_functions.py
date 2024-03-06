@@ -358,7 +358,8 @@ def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
 def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = -1, linker_label = 0):
     #choose labels with the forward method architecture in mind. If cosine angle => both may need to be equal to 1, negative values I guess will give an "unstable" prediction if it isnt perfectly confident. If feed the pair of nodes to a neural network, then I can choose anything
 
-    bond_labels = [torch.zeros(len(splittable_bonds_i))+linker_label for splittable_bonds_i in splittable_bonds]
+    #bond_labels = [torch.zeros(len(splittable_bonds_i), dtype=torch.int64)+linker_label for splittable_bonds_i in splittable_bonds]
+    bond_labels = [[linker_label]*len(splittable_bonds_i) for splittable_bonds_i in splittable_bonds]
 
     for protac_idx, (splittable_bonds_protac, boundary_bonds_protac) in enumerate(zip(splittable_bonds, boundary_bonds)):
         poi_bond = boundary_bonds_protac[0]
@@ -2831,7 +2832,7 @@ def find_connected_ring_systems(mol):
     return ring_systems
 
 
-def find_non_ring_bonds(mol, ring_systems, exclude_bonds_connected_to_atoms_with_1_bond):
+def find_non_ring_bonds(mol, ring_systems, exclude_bonds_connected_to_atoms_with_1_bond, datatype):
     non_ring_bonds_dict = {}
 
     for bond_idx, bond in enumerate(mol.GetBonds()):
@@ -2859,8 +2860,11 @@ def find_non_ring_bonds(mol, ring_systems, exclude_bonds_connected_to_atoms_with
 
             if not exclude_bond:
                 non_ring_bonds_dict[bond_idx] = (start_atom_idx, end_atom_idx)
-            
-    return non_ring_bonds_dict
+
+    if datatype == "dict":
+        return non_ring_bonds_dict
+    if datatype == "list":
+        return list(non_ring_bonds_dict.values())
 
 
 def merge_rings_if_sharing_at_least_2_atoms(sets):
