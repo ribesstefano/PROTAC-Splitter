@@ -1535,7 +1535,7 @@ def select_n_random_substructures(unique_poi_substructures, unique_linker_substr
     return poi_list, linker_list, e3_list
 
 
-def merge_molecules(mol1, mol2, atom_idx1, atom_idx2):
+def merge_molecules(mol1, mol2, atom_idx1, atom_idx2, bond_type = 'single'):
     # Combine the two molecules into a single editable molecule
     combined_mol = Chem.CombineMols(mol1, mol2)
     editable_mol = Chem.EditableMol(combined_mol)
@@ -1556,7 +1556,20 @@ def merge_molecules(mol1, mol2, atom_idx1, atom_idx2):
         #raise ValueError("Index out of range?")
 
     # Add a bond between the neighboring atoms (ignoring the dummy atoms)
-    editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=rdchem.BondType.SINGLE)
+
+    if bond_type == 'single':
+        editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=rdchem.BondType.SINGLE)
+    elif bond_type == 'rand_uniform':
+        neighbor_atom1 = mol1.GetAtomWithIdx(neighbor_atom_idx1)
+        neighbor_atom2 = mol2.GetAtomWithIdx(neighbor_atom_idx2-mol1.GetNumAtoms())
+        highest_allowed_bondorder_atom_idx1 = neighbor_atom1.GetTotalNumHs() + 1 # +1 for the attatchment point
+        highest_allowed_bondorder_atom_idx2 = neighbor_atom2.GetTotalNumHs() + 1
+        highest_allowed_bondorder = min([highest_allowed_bondorder_atom_idx1, highest_allowed_bondorder_atom_idx2])
+        possible_bonds = [rdchem.BondType.SINGLE, rdchem.BondType.DOUBLE, rdchem.BondType.TRIPLE]
+        allowed_bonds = possible_bonds[0:highest_allowed_bondorder]
+        sampled_bond = random.sample(allowed_bonds, 1)[0]
+        editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=sampled_bond)
+
 
     # Calculate the adjusted index for the attachment point in mol2
     adjusted_atom_idx2 = atom_idx2 + mol1.GetNumAtoms()
@@ -1576,7 +1589,7 @@ def merge_molecules(mol1, mol2, atom_idx1, atom_idx2):
 
     return modified_mol
 
-def reassemble_protac(poi_smiles, linker_smiles, e3_smiles):
+def reassemble_protac(poi_smiles, linker_smiles, e3_smiles, bond_type):
 
     if "[*:1]" in e3_smiles:
         raise ValueError(f"[*:1] found among E3-SMILES: {e3_smiles}]")
@@ -1606,11 +1619,11 @@ def reassemble_protac(poi_smiles, linker_smiles, e3_smiles):
     e3_idx = e3_l_attachment_points[0]
 
     # Merge E3 with Linker
-    e3_linker_mol = merge_molecules(e3_mol, linker_mol, e3_idx, linker_e3_idx)
+    e3_linker_mol = merge_molecules(e3_mol, linker_mol, e3_idx, linker_e3_idx, bond_type = bond_type)
     linker_e3_mol_attachment_point, _ = find_atom_index_of_mapped_atoms_detailed(e3_linker_mol)
     linker_e3_mol_idx = linker_e3_mol_attachment_point[0]
 
-    protac_mol = merge_molecules(e3_linker_mol, poi_mol, linker_e3_mol_idx, poi_idx)
+    protac_mol = merge_molecules(e3_linker_mol, poi_mol, linker_e3_mol_idx, poi_idx, bond_type=bond_type)
     Chem.SanitizeMol(protac_mol)
     protac_smiles = Chem.MolToSmiles(protac_mol, canonical=True)
 
