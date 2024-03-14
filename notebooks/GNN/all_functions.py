@@ -69,6 +69,8 @@ def get_mol(smiles):
 
 
 def compute_countMorgFP(smiles, radius=2):
+    if smiles is None:
+        return None
     if isinstance(smiles[0], str):
         mols = [get_mol(smi) for smi in smiles]
     else:
