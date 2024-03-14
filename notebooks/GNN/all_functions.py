@@ -388,16 +388,31 @@ def get_node_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.arra
     node_labels[boundary_E3_node_index] = E3_LABEL
     return node_labels
 
-def get_substructure_smiles_function(protac_smiles, class_predictions):
+def get_substructure_smiles_function(protac_smiles, class_predictions, boundary_bonds = None):
     #SMILES -> Graph
     #Graph + Class predictions -> Substructure graphs
     #Graph -> SMILES
     protac_mol = Chem.MolFromSmiles(protac_smiles)
     protac_graph = mol_to_simple_graph(protac_mol)
+    #add a [*:1] to each atom in the 
     substructure_smiles = []
+    substructure_smiles_with_attatchmentpoints = []
     node_indices_substructure = [[], [], []]
     class_predictions_list = class_predictions.tolist()
     for substructure_idx in [0, 1, 2]:
+        
+        #OBS! Alternative strategy that may work
+        #add 
+        #substructure_smiles = Chem.MolFragmentToSmiles(mol, [2,3,4,5,6,7], kekuleSmiles=True)
+        
+        #substructure_mol_validHs = Chem.RemoveHs(Chem.AddHs(substructure_mol))
+        #substructure_smiles.append(Chem.MolToSmiles(substructure_mol_validHs))
+
+
+
+
+
+        # -------------
         node_indices_substructure[substructure_idx] = [i for i, x in enumerate(class_predictions_list) if x == substructure_idx]
         substructure_graph = protac_graph.subgraph(node_indices_substructure[substructure_idx])
 
@@ -405,10 +420,115 @@ def get_substructure_smiles_function(protac_smiles, class_predictions):
         index_mapping = {old_index: new_index for new_index, old_index in enumerate(substructure_graph.nodes())}
 
         substructure_mol = graph_to_mol(substructure_graph, index_mapping)  #OBS! Need to fix graph_to_mol()
-        substructure_smiles.append(Chem.MolToSmiles(substructure_mol))
+        #add hydrogens if necessary! Sometimes kekule error, due to poor electron something
+        substructure_mol_validHs = Chem.RemoveHs(Chem.AddHs(substructure_mol))
+        substructure_smiles.append(Chem.MolToSmiles(substructure_mol_validHs))
+
+        if boundary_bonds is not None:
+            #get poi boundary atom indices (old indices)
+            for boundary_bond in boundary_bonds:
+                #get bond order of poi boundary bond from mol
+                bond = protac_mol.GetBondBetweenAtoms(boundary_bond[0], boundary_bond[1])
+                bondtype = bond.GetBondType()
+                
+                #if an old index exist in index_mapping
+                if boundary_bond[0] in index_mapping:
+                    #convert old index into new index
+                    new_boundary_atom_index = index_mapping[boundary_bond[0]]
+                elif boundary_bond[1] in index_mapping:
+                    new_boundary_atom_index = index_mapping[boundary_bond[1]]
+                else:
+                    raise ValueError("boundary bond atoms not connected to boundary bond? Probably due to index error")
+
+
+                    #add dummy atom [*:1] to graph
+                    #get index of this dummy atom
+                    #bind the boundary atom in the POI, using its new index, with the dummy atom. 
+                        #use the same bond order as the original protac
+                
+
+        
+        
     return substructure_smiles
 
+def get_substructure_smiles_function_v2(protac_smiles, class_predictions, boundary_bonds = None):
+    #OLD:
+    #SMILES -> Graph
+    #Graph + Class predictions -> Substructure graphs
+    #Graph -> SMILES
 
+    #NEW:
+    #SMILES -> Mol
+    #Mol -> editable mol + add dummyatoms -> Mol
+    #Mol + classpredictions -> Fragments (Mol)
+    #Mol + classpredictions + dummyatoms -> Fragments (Mol)
+    #Mol -> SMILES
+    
+
+    protac_mol = Chem.MolFromSmiles(protac_smiles)
+
+    #Get substructures without attachmentpoint
+    substructures_smi = {}
+    class_predictions_list = class_predictions.tolist()
+    for substructure_idx, substructure_name in zip([0, 1, 2], ["POI SMILES", "LINKER SMILES", "E3 SMILES"]):
+        node_indices_substructure = [i for i, x in enumerate(class_predictions_list) if x == substructure_idx]
+        substructure_smi = Chem.MolFragmentToSmiles(protac_mol, node_indices_substructure, kekuleSmiles=True)
+        substructures_smi[substructure_name] = substructure_smi
+        
+
+    #Get substructures with attachmentpoint
+    
+    #mol -> editable mol
+    #add dummy atoms, store their atom idx
+    #add bonds between dummy atoms and boundary bonds
+    #remove boundary bonds
+    #editable mol -> mol => mol with 3 unconnected parts
+    #convert into smiles
+        #split smiles by "." to get their substructures
+    #identify substructures by dummy atoms
+
+    editable_protac_mol = Chem.EditableMol(protac_mol)
+    
+    #add dummy atoms
+    poi_dummyatom = Chem.Atom(0)
+    poi_dummyatom.SetAtomMapNum(mapno=1)
+    dummy_atom_idx1 = editable_protac_mol.AddAtom(poi_dummyatom) #for POI and linker
+    dummy_atom_idx2 = editable_protac_mol.AddAtom(poi_dummyatom)
+
+    e3_dummyatom = Chem.Atom(0)
+    e3_dummyatom.SetAtomMapNum(mapno=2)
+    dummy_atom_idx3 = editable_protac_mol.AddAtom(e3_dummyatom) #for E3 and linker
+    dummy_atom_idx4 = editable_protac_mol.AddAtom(e3_dummyatom)
+    
+    dummy_atoms_indices_tuples = ((dummy_atom_idx1, dummy_atom_idx2), (dummy_atom_idx3, dummy_atom_idx4)) #structured in the same way as boundary_bonds 
+    for boundary_bond, boundary_dummy_atoms_indices in zip(boundary_bonds, dummy_atoms_indices_tuples):
+        bond = protac_mol.GetBondBetweenAtoms(boundary_bond[0], boundary_bond[1])
+        bondtype = bond.GetBondType()
+        for boundary_atom_idx, dummy_atom_idx in zip(boundary_bond, boundary_dummy_atoms_indices):
+            if boundary_atom_idx == dummy_atom_idx:
+                print(boundary_atom_idx)
+                raise ValueError("Same atom idex of boundary and dummy atom. WHy?")
+            else:
+                editable_protac_mol.AddBond(beginAtomIdx = boundary_atom_idx, endAtomIdx = dummy_atom_idx, order =  bondtype)
+        editable_protac_mol.RemoveBond(boundary_bond[0], boundary_bond[1])
+        
+    protac_mol_with_dummyatoms = editable_protac_mol.GetMol()
+    split_protac_smi_with_dummyatoms = Chem.MolToSmiles(protac_mol_with_dummyatoms)
+    substructure_smiles_with_dummyatoms = split_protac_smi_with_dummyatoms.split(".")
+    
+    substructure_smiles_with_dummyatoms_dict = {}
+    for smi in substructure_smiles_with_dummyatoms:
+        if "[*:2]" in smi:
+            if "[*:1]" in smi:
+                substructure_smiles_with_dummyatoms_dict["LINKER SMILES"] = smi
+            else:
+                substructure_smiles_with_dummyatoms_dict["E3 SMILES"] = smi
+        else:
+            substructure_smiles_with_dummyatoms_dict["POI SMILES"] = smi
+
+
+    
+    return substructures_smi, substructure_smiles_with_dummyatoms_dict
 
 def one_hot_encode_boundary_nodes(protac_smiles, substructure_smiles):
     if isinstance(protac_smiles, list):
@@ -3038,3 +3158,36 @@ def get_murcko_bonds(scaffold):
         end_atom_originalidx = scaffold.GetAtomWithIdx(end_atom_idx).GetProp('originalIdx')
         murcko_bond_list.append((start_atom_originalidx, end_atom_originalidx))
     return murcko_bond_list
+
+
+from IPython.display import SVG
+def draw_molecule_with_highlighted_atoms(mol, atoms_to_highlight):
+    """
+    Draws a molecule with specified atoms and bonds highlighted.
+   
+    Parameters:
+    - smiles (str): SMILES string for the molecule.
+    - atoms_to_highlight (set): Set of atom indices to highlight.
+    - bonds_to_highlight (list): List of bond indices to highlight.
+    - highlight_bond_colors (dict): Dictionary mapping bond indices to colors.
+    """
+    # Create molecule from SMILES
+   
+    # Initialize drawer
+    d2d = Draw.rdMolDraw2D.MolDraw2DSVG(350*2, 300*2)
+   
+    # Set drawing options
+    d2d.drawOptions().useBWAtomPalette()
+    d2d.drawOptions().continuousHighlight = False
+    d2d.drawOptions().highlightBondWidthMultiplier = 24
+    d2d.drawOptions().setHighlightColour((0, 0, 1))
+    d2d.drawOptions().fillHighlights = False
+   
+    # Draw the molecule with highlights
+    d2d.DrawMolecule(mol,
+                    highlightAtoms=atoms_to_highlight)
+    d2d.FinishDrawing()
+   
+    # Convert drawing to image and display
+    svg = d2d.GetDrawingText()
+    display(SVG(svg.replace('svg:','')))
