@@ -3001,6 +3001,65 @@ def find_non_ring_bonds(mol, ring_systems, exclude_bonds_connected_to_atoms_with
     if datatype == "list":
         return list(non_ring_bonds_dict.values())
 
+def get_all_splits_from_all_splittable_bonds(mol, splittable_bonds_list):
+    #the following should be run outside and before this function:
+        #mol = Chem.MolFromSmiles(smiles)
+        #for atom in mol.GetAtoms():
+        #    atom.SetProp('originalIdx', str(atom.GetIdx()))         
+        #ring_systems = find_connected_ring_systems(mol)
+        #splittable_bonds_list = find_non_ring_bonds(mol, ring_systems, exclude_bonds_connected_to_atoms_with_1_bond=True, datatype="list")
+
+
+
+    # get all splittable bonds in the format of a list of tuples containing start and end atoms of these bonds
+    # split each of these bonds and find the resulting atoms indices
+    # add hydrogens to make a chemically valid molecules, get the original node idx, remove hydrogens and restore the editable molecule
+    # store all indices of the all splits
+
+    hydrogen_atom = rdchem.Atom(1)
+    hydrogen_atom.SetProp('originalIdx', str(-1))    
+    bond_to_num_Hs_to_add = {rdchem.BondType.SINGLE: 1,
+                             rdchem.BondType.DOUBLE: 2,
+                             rdchem.BondType.TRIPLE: 3}
+
+    emol = Chem.EditableMol(mol)
+    atom_indices_all_smallest_frags = {}
+    for (start_atom_idx, end_atom_idx) in splittable_bonds_list:
+
+        bond = mol.GetBondBetweenAtoms(start_atom_idx, end_atom_idx)
+        bond_idx = bond.GetIdx()
+
+        bondtype = bond.GetBondType()
+        emol.RemoveBond(start_atom_idx, end_atom_idx)
+
+        H_atoms_idx=[]
+        for bond_atom_idx in (start_atom_idx, end_atom_idx):
+            num_Hs_to_add = bond_to_num_Hs_to_add[bondtype]
+            for _ in range(num_Hs_to_add):
+                H_idx = emol.AddAtom(hydrogen_atom)
+                H_atoms_idx.append(H_idx)
+                emol.AddBond(bond_atom_idx, H_idx, order = rdchem.BondType.SINGLE)
+        split_mol = emol.GetMol() 
+        split_mol_frags = Chem.GetMolFrags(split_mol,asMols=True)
+            
+        if split_mol_frags[0].GetNumAtoms() < split_mol_frags[1].GetNumAtoms() :
+            smallest_frag = split_mol_frags[0]
+        else:
+            smallest_frag = split_mol_frags[1]
+
+        original_atom_idx_smallest_frag = []
+        for atom in smallest_frag.GetAtoms():
+            original_atom_idx = int(atom.GetProp('originalIdx'))
+            if original_atom_idx > -1:
+                original_atom_idx_smallest_frag.append(original_atom_idx)
+        atom_indices_all_smallest_frags[bond_idx] = original_atom_idx_smallest_frag
+            
+        for H_atom_idx in sorted(H_atoms_idx, reverse=True):
+            emol.RemoveAtom(H_atom_idx)
+        emol.AddBond(start_atom_idx, end_atom_idx, order = bondtype)
+    
+    return atom_indices_all_smallest_frags
+         
 
 def merge_rings_if_sharing_at_least_2_atoms(sets):
     while True:
@@ -3188,6 +3247,39 @@ def draw_molecule_with_highlighted_atoms(mol, atoms_to_highlight):
     # Draw the molecule with highlights
     d2d.DrawMolecule(mol,
                     highlightAtoms=atoms_to_highlight)
+    d2d.FinishDrawing()
+   
+    # Convert drawing to image and display
+    svg = d2d.GetDrawingText()
+    display(SVG(svg.replace('svg:','')))
+
+
+def draw_molecule_with_highlighted_bonds(mol, bonds_to_highlight):
+    """
+    Draws a molecule with specified atoms and bonds highlighted.
+   
+    Parameters:
+    - smiles (str): SMILES string for the molecule.
+    - atoms_to_highlight (set): Set of atom indices to highlight.
+    - bonds_to_highlight (list): List of bond indices to highlight.
+    - highlight_bond_colors (dict): Dictionary mapping bond indices to colors.
+    """
+    # Create molecule from SMILES
+   
+    # Initialize drawer
+    d2d = Draw.rdMolDraw2D.MolDraw2DSVG(350*2, 300*2)
+   
+    # Set drawing options
+    d2d.drawOptions().useBWAtomPalette()
+    d2d.drawOptions().continuousHighlight = False
+    d2d.drawOptions().highlightBondWidthMultiplier = 24
+    d2d.drawOptions().setHighlightColour((0, 0, 1))
+    d2d.drawOptions().fillHighlights = False
+   
+    # Draw the molecule with highlights
+    d2d.DrawMolecule(mol,
+                    highlightAtoms=[],
+                     highlightBonds=bonds_to_highlight)
     d2d.FinishDrawing()
    
     # Convert drawing to image and display
