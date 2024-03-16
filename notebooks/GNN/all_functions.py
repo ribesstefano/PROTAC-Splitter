@@ -3024,10 +3024,10 @@ def get_all_splits_from_all_splittable_bonds(mol, splittable_bonds_list):
 
     emol = Chem.EditableMol(mol)
     atom_indices_all_smallest_frags = {}
-    for (start_atom_idx, end_atom_idx) in splittable_bonds_list:
+    for chronological_bond_idx, (start_atom_idx, end_atom_idx) in enumerate(splittable_bonds_list):
 
         bond = mol.GetBondBetweenAtoms(start_atom_idx, end_atom_idx)
-        bond_idx = bond.GetIdx()
+        #bond_idx = bond.GetIdx()
 
         bondtype = bond.GetBondType()
         emol.RemoveBond(start_atom_idx, end_atom_idx)
@@ -3052,7 +3052,7 @@ def get_all_splits_from_all_splittable_bonds(mol, splittable_bonds_list):
             original_atom_idx = int(atom.GetProp('originalIdx'))
             if original_atom_idx > -1:
                 original_atom_idx_smallest_frag.append(original_atom_idx)
-        atom_indices_all_smallest_frags[bond_idx] = original_atom_idx_smallest_frag
+        atom_indices_all_smallest_frags[chronological_bond_idx] = original_atom_idx_smallest_frag
             
         for H_atom_idx in sorted(H_atoms_idx, reverse=True):
             emol.RemoveAtom(H_atom_idx)
