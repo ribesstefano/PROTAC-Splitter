@@ -321,6 +321,8 @@ def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile):
 def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
     mol = Chem.MolFromSmiles(protac_smiles)
 
+    #still possible for ambigous substructure matches. Ligand may match into linker
+
     boundary_POI_bond = -1
     boundary_E3_bond = -1
     ligand_smiles_list = [poi_smile, e3_smile]  
@@ -349,6 +351,7 @@ def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
             matches_other_ligand = substructure_matches[other_ligand_str]
 
             found_match_without_overlap = False
+            found_match_without_ligand_overlap = False
             for match in matches:
                 for match_other_ligand in matches_other_ligand:
                     if len( set(match) & set(match_other_ligand) ) >0:
@@ -356,10 +359,20 @@ def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
                         pass
                     else:
                         #no sharing of atoms => good
-                        found_match_without_overlap = True
-                    if found_match_without_overlap:
+                        found_match_without_ligand_overlap = True
+                    if found_match_without_ligand_overlap:
+                        #found_match_without_overlap = True
+                        #if the ligands dont overlap, make sure they dont overlap / match into the linker
+                        # remove poi and E3 from PROTAC
+                        # if the remaining structure (should be linker) is not a "split" molecule, then no atoms in the linker is missing
+                        # if the remaining structure is not split and has the same number of atoms as the linker, then assume it is the linker
+
+
+                        pass
+
+                    if found_match_without_ligand_overlap:
                         break
-                if found_match_without_overlap:
+                if found_match_without_ligand_overlap:
                     #Set the match for the other ligand which is consistent with the match for this ligand
                     substructure_matches[other_ligand_str] = [match_other_ligand]
                     break
@@ -394,6 +407,125 @@ def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
     return boundary_POI_bond, boundary_E3_bond
 
 
+def get_boundary_bonds_v2(protac_mol, poi_smile, e3_smile):
+        # ------ new strategy -------
+    # theory: 
+    #   connectionpoint is only at one bond/boundary. A perfect substructure match means all atoms of substructure
+    #   is on one side of this boundary. The substructure has a fixed set of atoms it has to assign.
+    #   If the substructure matches imperfectly, it means some atoms are assigned past the boundary.
+    #   Since the boundary is a ONE bond (a so called bridge in graph theory), and there is a fixed set of atoms,
+    #   it means some "allocations" are moved from the true substructure to the other side, meaning
+    #   not all atoms in the true substructures are identified as the substructure.
+    #   As the only connection to the substructure and the rest of the PROTAC is this one bridge,
+    #   It means that there is now an unassigned fragment within the true substructure not connected to the protac
+    #   => Removing the matched substructure will lead to 2 fragments, one small from the true substructure which was failed to be identified, and the rest of the protac
+    #   IF there is a perfect match, there will only be 1 fragment.
+    #       Use this as the criteria for good/bad matches.
+
+
+    #not adapted for symmetric proacs with the same ligand on each side
+
+
+
+    #make test such that removing the boundary bond will split the protac into 2 fragments (So it won't just linearize rings)
+    #match the largest substructure first
+    #for the atoms that a valid substructure was found, dissallow these atoms to be a valid match for next matches.
+
+
+    poi_mol = Chem.MolFromSmiles(poi_smile)
+    e3_mol = Chem.MolFromSmiles(e3_smile)
+    poi_mol_wo_attachment = Chem.DeleteSubstructs(poi_mol, Chem.MolFromSmiles('*'))
+    e3_mol_wo_attachment = Chem.DeleteSubstructs(e3_mol, Chem.MolFromSmiles('*'))
+    poi_num_atoms = poi_mol_wo_attachment.GetNumAtoms()
+    e3_num_atoms = poi_mol_wo_attachment.GetNumAtoms()
+
+    if poi_num_atoms > e3_num_atoms:
+        substructure_mols = [poi_mol_wo_attachment, e3_mol_wo_attachment]
+        substructure_index = [0, 1]
+    else:
+        substructure_mols = [e3_mol_wo_attachment, poi_mol_wo_attachment]
+        substructure_index = [1, 0]  
+
+    boundary_POI_bond = -1
+    boundary_E3_bond = -1
+
+    valid_boundary_POI_bond = False
+    valid_boundary_E3_bond = False
+
+    matched_atoms = []
+    for i, substructure in zip(substructure_index, substructure_mols):
+
+        matches = protac_mol.GetSubstructMatches(substructure)
+
+        for match in matches:
+            if len(set(matched_atoms) & set(match)) > 0:
+                #if this substructure match overlaps with an already identified substructure match
+                #then skip this match
+                continue
+            editable_mol = Chem.RWMol(protac_mol)
+            # Sort indices in descending order to avoid altering the indices of atoms to be deleted later
+            for idx in sorted(match, reverse=True):
+                editable_mol.RemoveAtom(idx)
+            mol_without_substructure = Chem.Mol(editable_mol)
+            fragments = rdmolops.GetMolFrags(mol_without_substructure, asMols=False)
+            
+            if len(fragments) == 0 :
+                raise ValueError(f"No substructure match for PROTAC {Chem.MolToSmiles(protac_mol)} for {Chem.MolToSmiles(substructure)}!")
+            elif len(fragments) > 1:  
+                continue
+            elif len(fragments) == 1: #if only one fragment remaining after removal => perfect match
+                
+                
+                
+                
+                # Find boundary nodes for the POI and E3
+                for bond in protac_mol.GetBonds():
+                    begin_atom_label = int(bond.GetBeginAtomIdx() in match)
+                    end_atom_label = int(bond.GetEndAtomIdx() in match)
+                    if begin_atom_label != end_atom_label:
+                        if i == 0: #(bond.GetBeginAtomIdx() in match or bond.GetEndAtomIdx() in match) and i == 0:
+                            boundary_POI_bond = (bond.GetEndAtomIdx(), bond.GetBeginAtomIdx())
+                            break
+                        elif i == 1: # (bond.GetBeginAtomIdx() in match or bond.GetEndAtomIdx() in match) and i == 1:
+                            boundary_E3_bond = (bond.GetEndAtomIdx(), bond.GetBeginAtomIdx())
+                            break
+                        else:
+                            raise ValueError(f'Problem with substructure matches')
+                
+                #validate that splitting this bond will split the molecule
+                
+                if valid_boundary_POI_bond is False and boundary_POI_bond != -1:
+                    #the bond have been assigned, now validate it
+                    editable_mol_for_validation = Chem.RWMol(protac_mol)
+                    editable_mol_for_validation.RemoveBond(boundary_POI_bond[0], boundary_POI_bond[1])
+                    protac_mol_for_validation = Chem.Mol(editable_mol_for_validation)
+                    validation_fragments = rdmolops.GetMolFrags(protac_mol_for_validation, asMols=False)
+                    if len(validation_fragments) == 2:
+                        valid_boundary_POI_bond = True
+                        matched_atoms.append(match)
+                if valid_boundary_E3_bond is False and boundary_E3_bond != -1:
+                    #the bond have been assigned, now validate it
+                    editable_mol_for_validation = Chem.RWMol(protac_mol)
+                    editable_mol_for_validation.RemoveBond(boundary_E3_bond[0], boundary_E3_bond[1])
+                    protac_mol_for_validation = Chem.Mol(editable_mol_for_validation)
+                    validation_fragments = rdmolops.GetMolFrags(protac_mol_for_validation, asMols=False)
+                    if len(validation_fragments) == 2:
+                        valid_boundary_E3_bond = True
+                        matched_atoms.append(match)
+            else:
+                raise ValueError(f"Number of substructure matches: {len(fragments)}")
+            
+            
+            
+    if boundary_POI_bond == -1 or boundary_E3_bond == -1 or valid_boundary_E3_bond is False or valid_boundary_POI_bond is False:
+        display(Chem.MolToSmiles(protac_mol))
+        display(Chem.MolFromSmiles(poi_smile))
+        display(Chem.MolFromSmiles(e3_smile))
+        print(f'boundary_POI_bond: {boundary_POI_bond}. boundary_E3_bond: {boundary_E3_bond}')
+        raise ValueError("Failed to assign boundary index")
+    
+    return boundary_POI_bond, boundary_E3_bond
+
 def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = 2, linker_label = 0):
     #choose labels with the forward method architecture in mind. If cosine angle => both may need to be equal to 1, negative values I guess will give an "unstable" prediction if it isnt perfectly confident. If feed the pair of nodes to a neural network, then I can choose anything
 
@@ -415,7 +547,7 @@ def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = 2,
     return bond_labels
 
 
-def get_node_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.array
+def get_boundary_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.array
     idx = boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile)
     boundary_POI_node_index, boundary_E3_node_index = idx
     num_atoms = Chem.MolFromSmiles(protac_smiles).GetNumAtoms()
@@ -3011,6 +3143,7 @@ def find_non_ring_bonds(mol, ring_systems, exclude_bonds_connected_to_atoms_with
         start_atom_idx = bond.GetBeginAtomIdx()
         end_atom_idx = bond.GetEndAtomIdx()
 
+        ring_bond = False
         for system in ring_systems:
             ring_bond = False
             if start_atom_idx in system and end_atom_idx in system:
