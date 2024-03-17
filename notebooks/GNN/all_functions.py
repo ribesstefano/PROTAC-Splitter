@@ -319,7 +319,6 @@ def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile):
 
 
 def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
-
     mol = Chem.MolFromSmiles(protac_smiles)
 
     boundary_POI_bond = -1
@@ -357,7 +356,7 @@ def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
     return boundary_POI_bond, boundary_E3_bond
 
 
-def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = -1, linker_label = 0):
+def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = 2, linker_label = 0):
     #choose labels with the forward method architecture in mind. If cosine angle => both may need to be equal to 1, negative values I guess will give an "unstable" prediction if it isnt perfectly confident. If feed the pair of nodes to a neural network, then I can choose anything
 
     #bond_labels = [torch.zeros(len(splittable_bonds_i), dtype=torch.int64)+linker_label for splittable_bonds_i in splittable_bonds]
@@ -3285,3 +3284,128 @@ def draw_molecule_with_highlighted_bonds(mol, bonds_to_highlight):
     # Convert drawing to image and display
     svg = d2d.GetDrawingText()
     display(SVG(svg.replace('svg:','')))
+
+
+import itertools
+import random
+
+def calculate_occurrences(unique_substructure_list, N):
+    """
+    Calculates the number of times each unique element should appear in the final list,
+    ensuring that the difference is at most 1.
+    
+    :param unique_count: The number of unique elements in the substructure list.
+    :param N: The total number of PROTACs to generate.
+    :return: A dictionary with the element index as the key and its required occurrences as the value.
+    """
+
+    unique_count = len(unique_substructure_list)
+    base_occurrence = N // unique_count
+    extra = N % unique_count # This many elements need to have one extra occurrence to reach N
+    
+    occurrences = {i: {'Occurance': base_occurrence, 'SMILES': unique_substructure_list[i]} for i in range(unique_count)}
+    for i in range(extra):
+        occurrences[i]['Occurance'] += 1 # Distribute the extra occurrences
+    
+    return occurrences
+
+def expand_substructures(occurrences):
+    """
+    Expand the substructure list based on the calculated occurrences.
+    
+    :param occurrences: A dictionary with the element index as the key and a dictionary containing 'Occurance' and 'SMILES' as the value.
+    :return: An expanded list of substructures.
+    """
+    expanded_list = []
+    for i in occurrences:
+        expanded_list.extend([occurrences[i]['SMILES']] * occurrences[i]['Occurance'])
+    return expanded_list
+
+def generate_protacs(POIs, Linkers, E3s, set_sizes = [], max_trial_count=5):
+    """
+    Generate a list of PROTACs, each consisting of one POI, one Linker, and one E3,
+    ensuring each unique substructure appears as calculated by calculate_occurrences.
+    
+    :param POIs: List of unique POIs.
+    :param Linkers: List of unique Linkers.
+    :param E3s: List of unique E3s.
+    :param N: Total number of PROTACs to generate.
+    :return: List of PROTACs.
+    """
+
+    augmented_protac_substructure_sets_in_list = []
+    if isinstance(set_sizes, (int, float)):
+        set_sizes = [int(set_sizes)]
+    for N in set_sizes:
+    
+
+        # Calculate occurrences for each substructure. Store in dictionary
+        POI_occurrences = calculate_occurrences(POIs, N)
+        Linker_occurrences = calculate_occurrences(Linkers, N)
+        E3_occurrences = calculate_occurrences(E3s, N)
+        
+        # Expand the substructure lists to match the calculated occurrences
+        expanded_POIs = expand_substructures(POI_occurrences)
+        expanded_Linkers = expand_substructures(Linker_occurrences)
+        expanded_E3s = expand_substructures(E3_occurrences)
+
+        expanded_POIs_backup = expanded_POIs.copy()
+        expanded_Linkers_backup = expanded_Linkers.copy()
+        expanded_E3s_backup = expanded_E3s.copy()
+
+        resulting_poi_list = []
+        resulting_linker_list = []
+        resulting_e3_list = []
+
+        trials = 0
+        while True and trials < max_trial_count:  
+            # Combine the substructures to form PROTACs
+            protacs = []
+            for i in tqdm(range(N)):
+                unique_protac_bool = False
+                while unique_protac_bool == False:
+                    sampeled_poi = random.sample(expanded_POIs, 1)[0]
+                    sampeled_linker = random.sample(expanded_Linkers, 1)[0]
+                    sampeled_e3 = random.sample(expanded_E3s, 1)[0]
+
+                    sampeled_poi_first_index = expanded_POIs.index(sampeled_poi)
+                    sampeled_linker_first_index = expanded_Linkers.index(sampeled_linker)
+                    sampeled_e3_first_index = expanded_E3s.index(sampeled_e3)
+
+                    protac_smiles, protac_mol = reassemble_protac(sampeled_poi, sampeled_linker, sampeled_e3, bond_type = 'rand_uniform')
+                    if protac_smiles not in protacs:
+                        add_protac = True
+                        if len(augmented_protac_substructure_sets_in_list)>0:
+                            for augmented_protac_substructure_set in augmented_protac_substructure_sets_in_list:
+                                if protac_smiles in augmented_protac_substructure_set['PROTAC SMILES'].unique():
+                                    add_protac = False
+                        if add_protac:
+                            unique_protac_bool = True
+                            del expanded_POIs[sampeled_poi_first_index] 
+                            del expanded_Linkers[sampeled_linker_first_index] 
+                            del expanded_E3s[sampeled_e3_first_index] 
+                            resulting_poi_list.append(sampeled_poi)
+                            resulting_linker_list.append(sampeled_linker)
+                            resulting_e3_list.append(sampeled_e3)
+                            protacs.append(protac_smiles)
+
+
+            if len(protacs) == len(set(protacs)): #Om dubletter genereras, försök igen!
+                #if the set of protacs is not the same length as the set of unique protacs, then some protacs are duplicates, hence the selection must have been forced to occur by poor luck or too big test size.
+                #so, solution is to redo everything. May take long time if test size is close to max allowed size.....
+                break
+            else:
+                expanded_POIs = expanded_POIs_backup.copy()
+                expanded_Linkers = expanded_Linkers_backup.copy()
+                expanded_E3s = expanded_E3s_backup.copy()
+                trials +=1
+                if trials == max_trial_count:
+                    raise ValueError(f"Failed to generated random dataset without duplicates {max_trial_count} times. Please try a smaller test_size in relation to the max_allowed size, or increase max_trial_count")
+
+    
+        data = {'PROTAC SMILES': protacs , 'POI SMILES': resulting_poi_list, 'LINKER SMILES': resulting_linker_list, 'E3 SMILES': resulting_e3_list}
+        augmented_protac_substructure_set = pd.DataFrame(data)
+
+        augmented_protac_substructure_sets_in_list.append(augmented_protac_substructure_set)
+
+    return augmented_protac_substructure_sets_in_list
