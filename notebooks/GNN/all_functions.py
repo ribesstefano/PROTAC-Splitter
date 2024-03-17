@@ -323,14 +323,52 @@ def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
 
     boundary_POI_bond = -1
     boundary_E3_bond = -1
-    ligand_smiles_list = [poi_smile, e3_smile]   
-    for i, ligand_smile in enumerate(ligand_smiles_list):
+    ligand_smiles_list = [poi_smile, e3_smile]  
+    
+    substructure_matches = {"POI": None, 'E3': None}
+    num_substructure_matches = {}
+    for ligand_smile, ligand_str in zip(ligand_smiles_list, ["POI", "E3"]):
         substruct_mol = Chem.MolFromSmiles(ligand_smile)
         matches = mol.GetSubstructMatches(Chem.DeleteSubstructs(substruct_mol, Chem.MolFromSmiles('*')))
+        substructure_matches[ligand_str] = matches
+        num_substructure_matches[ligand_str] = len(matches)
+    
+     
+    for i, (ligand_smile, ligand_str) in enumerate(zip(ligand_smiles_list, ["POI", "E3"])):
+        substruct_mol = Chem.MolFromSmiles(ligand_smile)
+        matches = substructure_matches[ligand_str]
+        #matches = mol.GetSubstructMatches(Chem.DeleteSubstructs(substruct_mol, Chem.MolFromSmiles('*')))
 
         if not matches:
-            continue  # If no match is found, skip to the next substructure
-        match = matches[0]  # Take the first match                                         ##########################OBS!
+            raise ValueError(f"PROTAC doesnt substructure match. PROTAC: {protac_smiles} \n{ligand_str}: {ligand_smile}")
+        if len(matches)>1: #any(len(mat)>1 for mat in num_substructure_matches):
+            #if multiple matches, select the first match which does not overlap with the other substructure
+            other_ligand_str = ["POI", "E3"]
+            other_ligand_str.remove(ligand_str)
+            other_ligand_str = other_ligand_str[0]
+            matches_other_ligand = substructure_matches[other_ligand_str]
+
+            found_match_without_overlap = False
+            for match in matches:
+                for match_other_ligand in matches_other_ligand:
+                    if len( set(match) & set(match_other_ligand) ) >0:
+                        #the match shares atoms with the other ligand => bad
+                        pass
+                    else:
+                        #no sharing of atoms => good
+                        found_match_without_overlap = True
+                    if found_match_without_overlap:
+                        break
+                if found_match_without_overlap:
+                    #Set the match for the other ligand which is consistent with the match for this ligand
+                    substructure_matches[other_ligand_str] = [match_other_ligand]
+                    break
+            
+            if not found_match_without_overlap:
+                raise ValueError("The matching failed, as both POI and E3 were forced to overlap")
+                    
+        else:
+            match = matches[0]  # Take the first match and only match                                         ##########################OBS!
 
         # Find boundary nodes for the POI and E3
         for bond in mol.GetBonds():
