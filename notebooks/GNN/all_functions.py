@@ -526,7 +526,7 @@ def get_boundary_bonds_v2(protac_mol, poi_smile, e3_smile):
     
     return boundary_POI_bond, boundary_E3_bond
 
-def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = 2, linker_label = 0):
+def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=0, linker_label = 1, e3_label = 2):
     #choose labels with the forward method architecture in mind. If cosine angle => both may need to be equal to 1, negative values I guess will give an "unstable" prediction if it isnt perfectly confident. If feed the pair of nodes to a neural network, then I can choose anything
 
     #bond_labels = [torch.zeros(len(splittable_bonds_i), dtype=torch.int64)+linker_label for splittable_bonds_i in splittable_bonds]
@@ -545,6 +545,17 @@ def get_bond_labels(splittable_bonds, boundary_bonds, poi_label=1, e3_label = 2,
                 bond_labels[protac_idx][bond_idx] = e3_label
 
     return bond_labels
+
+import copy
+
+def get_boundarybond_labels(bond_labels):
+    boundarybond_labels = copy.deepcopy(bond_labels)
+    for protac_idx, bond_labels_protac in enumerate(boundarybond_labels):
+        while 2 in bond_labels_protac:
+            bond_idx = bond_labels_protac.index(2)
+            boundarybond_labels[protac_idx][bond_idx] = 0
+    
+    return boundarybond_labels
 
 
 def get_boundary_labels(protac_smiles, poi_smile, e3_smile):        #Returns np.array
