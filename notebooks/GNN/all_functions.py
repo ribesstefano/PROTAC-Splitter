@@ -273,20 +273,73 @@ def boundary_ligand_nodes(protac_smiles, substructure_smiles):
 
     return boundary_POI_node_index, boundary_E3_node_index
 
-def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile):
+def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile, print_mols=False):
 
     mol = Chem.MolFromSmiles(protac_smiles)
-
+    mol_to_match_into = Chem.MolFromSmiles(protac_smiles)
+    if print_mols:
+        display(mol)
     boundary_POI_node_index = -1
     boundary_E3_node_index = -1
     ligand_smiles_list = [poi_smile, e3_smile]   
-    for i, ligand_smile in enumerate(ligand_smiles_list):
-        substruct_mol = Chem.MolFromSmiles(ligand_smile)
-        matches = mol.GetSubstructMatches(Chem.DeleteSubstructs(substruct_mol, Chem.MolFromSmiles('*')))
+    ligand_smi_dict = {'poi': poi_smile, 'e3': e3_smile}
 
-        if not matches:
-            continue  # If no match is found, skip to the next substructure
-        match = matches[0]  # Take the first match                                         ##########################OBS!
+    all_matched_atom_indices = {}
+
+    #for each pair of matches, for poi and e3, select the first pair of matches that are exclusive
+    for ligand_key, ligand_smile in ligand_smi_dict.items():
+        
+        substruct_mol_with_attachment = Chem.MolFromSmiles(ligand_smile)
+        substruct_mol = Chem.DeleteSubstructs(substruct_mol_with_attachment, Chem.MolFromSmiles('*'))
+        matches = mol.GetSubstructMatches(substruct_mol)
+        all_matched_atom_indices[ligand_key] = matches #if multiple matches, store all of them.
+
+
+        
+        
+
+    #select pair of matches:
+    poi_matches = all_matched_atom_indices["poi"]
+    e3_matches = all_matched_atom_indices["e3"]
+    non_overlapping_match_of_poi_and_e3 = False
+    for poi_match_idx, poi_match in enumerate(poi_matches):
+        for e3_match_idx, e3_match in enumerate(e3_matches):
+            poi_match_set = set(poi_match)
+            e3_match_set = set(e3_match)
+            #check that these sets are disjoint
+            
+            if poi_match_set.isdisjoint(e3_match_set): # if they dont share indices, the matches dont overlap
+                non_overlapping_match_of_poi_and_e3 = True
+            if non_overlapping_match_of_poi_and_e3:
+                break
+        if non_overlapping_match_of_poi_and_e3:
+            break
+    if non_overlapping_match_of_poi_and_e3 is False:
+        raise ValueError(f"Failed to identify non-overlapping matches for POI {poi_smile} and E3 {e3_smile} in PROTAC: {protac_smiles}")
+
+    matched_atom_indices = {}
+    matched_atom_indices["poi"] = poi_matches[poi_match_idx]
+    matched_atom_indices["e3"] = e3_matches[e3_match_idx]
+
+    for i, (ligand_smile, match) in enumerate(zip(ligand_smi_dict.values(), matched_atom_indices.values())): 
+
+
+    #for i, ligand_smile in enumerate(ligand_smiles_list):
+        
+        #substruct_mol_with_attachment = Chem.MolFromSmiles(ligand_smile)
+        #substruct_mol = Chem.DeleteSubstructs(substruct_mol_with_attachment, Chem.MolFromSmiles('*'))
+        #matches = mol.GetSubstructMatches(substruct_mol)
+
+
+        
+        #if not matches:
+        #    continue  # If no match is found, skip to the next substructure
+        #match = matches[0]  # Take the first match                                         ##########################OBS!
+
+        if print_mols:
+            display(mol)
+            #display(substruct_mol)
+            draw_molecule_with_highlighted_atoms(mol=mol, atoms_to_highlight=match)
 
         # Find boundary nodes for the POI and E3
         for bond in mol.GetBonds():
@@ -634,6 +687,8 @@ def get_substructure_smiles_function(protac_smiles, class_predictions, boundary_
     return substructure_smiles
 
 def get_substructure_smiles_function_v2(protac_smiles, class_predictions, boundary_bonds = None):
+
+    
     #OLD:
     #SMILES -> Graph
     #Graph + Class predictions -> Substructure graphs
@@ -654,9 +709,24 @@ def get_substructure_smiles_function_v2(protac_smiles, class_predictions, bounda
     class_predictions_list = class_predictions.tolist()
     for substructure_idx, substructure_name in zip([0, 1, 2], ["POI SMILES", "LINKER SMILES", "E3 SMILES"]):
         node_indices_substructure = [i for i, x in enumerate(class_predictions_list) if x == substructure_idx]
-        substructure_smi = Chem.MolFragmentToSmiles(protac_mol, node_indices_substructure, kekuleSmiles=True)
+        try:
+            substructure_smi = Chem.MolFragmentToSmiles(protac_mol, node_indices_substructure, kekuleSmiles=True)
+        except:
+            substructure_smi = None
         substructures_smi[substructure_name] = substructure_smi
-        
+
+
+    if boundary_bonds == (None, None) or boundary_bonds is None:
+        boundary_bonds = []
+        for atom_idx, substructure_class in enumerate(class_predictions_list):
+            atom = protac_mol.GetAtomWithIdx(atom_idx)
+            neighbors = atom.GetNeighbors()
+            for neighbor_atom in neighbors:
+                neighbor_idx = neighbor_atom.GetIdx()
+                if class_predictions_list[neighbor_idx] != substructure_class:
+                    if [atom_idx, neighbor_idx] not in boundary_bonds:
+                        boundary_bonds.append([neighbor_idx, atom_idx])
+
 
     #Get substructures with attachmentpoint
     
@@ -669,45 +739,50 @@ def get_substructure_smiles_function_v2(protac_smiles, class_predictions, bounda
         #split smiles by "." to get their substructures
     #identify substructures by dummy atoms
 
-    editable_protac_mol = Chem.EditableMol(protac_mol)
-    
-    #add dummy atoms
-    poi_dummyatom = Chem.Atom(0)
-    poi_dummyatom.SetAtomMapNum(mapno=1)
-    dummy_atom_idx1 = editable_protac_mol.AddAtom(poi_dummyatom) #for POI and linker
-    dummy_atom_idx2 = editable_protac_mol.AddAtom(poi_dummyatom)
-
-    e3_dummyatom = Chem.Atom(0)
-    e3_dummyatom.SetAtomMapNum(mapno=2)
-    dummy_atom_idx3 = editable_protac_mol.AddAtom(e3_dummyatom) #for E3 and linker
-    dummy_atom_idx4 = editable_protac_mol.AddAtom(e3_dummyatom)
-    
-    dummy_atoms_indices_tuples = ((dummy_atom_idx1, dummy_atom_idx2), (dummy_atom_idx3, dummy_atom_idx4)) #structured in the same way as boundary_bonds 
-    for boundary_bond, boundary_dummy_atoms_indices in zip(boundary_bonds, dummy_atoms_indices_tuples):
-        bond = protac_mol.GetBondBetweenAtoms(boundary_bond[0], boundary_bond[1])
-        bondtype = bond.GetBondType()
-        for boundary_atom_idx, dummy_atom_idx in zip(boundary_bond, boundary_dummy_atoms_indices):
-            if boundary_atom_idx == dummy_atom_idx:
-                print(boundary_atom_idx)
-                raise ValueError("Same atom idex of boundary and dummy atom. WHy?")
-            else:
-                editable_protac_mol.AddBond(beginAtomIdx = boundary_atom_idx, endAtomIdx = dummy_atom_idx, order =  bondtype)
-        editable_protac_mol.RemoveBond(boundary_bond[0], boundary_bond[1])
+    if len(boundary_bonds) == 2:
+        editable_protac_mol = Chem.EditableMol(protac_mol)
         
-    protac_mol_with_dummyatoms = editable_protac_mol.GetMol()
-    split_protac_smi_with_dummyatoms = Chem.MolToSmiles(protac_mol_with_dummyatoms)
-    substructure_smiles_with_dummyatoms = split_protac_smi_with_dummyatoms.split(".")
-    
-    substructure_smiles_with_dummyatoms_dict = {}
-    for smi in substructure_smiles_with_dummyatoms:
-        if "[*:2]" in smi:
-            if "[*:1]" in smi:
-                substructure_smiles_with_dummyatoms_dict["LINKER SMILES"] = smi
-            else:
-                substructure_smiles_with_dummyatoms_dict["E3 SMILES"] = smi
-        else:
-            substructure_smiles_with_dummyatoms_dict["POI SMILES"] = smi
+        #add dummy atoms
+        poi_dummyatom = Chem.Atom(0)
+        poi_dummyatom.SetAtomMapNum(mapno=1)
+        dummy_atom_idx1 = editable_protac_mol.AddAtom(poi_dummyatom) #for POI and linker
+        dummy_atom_idx2 = editable_protac_mol.AddAtom(poi_dummyatom)
 
+        e3_dummyatom = Chem.Atom(0)
+        e3_dummyatom.SetAtomMapNum(mapno=2)
+        dummy_atom_idx3 = editable_protac_mol.AddAtom(e3_dummyatom) #for E3 and linker
+        dummy_atom_idx4 = editable_protac_mol.AddAtom(e3_dummyatom)
+        
+        dummy_atoms_indices_tuples = ((dummy_atom_idx1, dummy_atom_idx2), (dummy_atom_idx3, dummy_atom_idx4)) #structured in the same way as boundary_bonds 
+        for boundary_bond, boundary_dummy_atoms_indices in zip(boundary_bonds, dummy_atoms_indices_tuples):
+            bond = protac_mol.GetBondBetweenAtoms(boundary_bond[0], boundary_bond[1])
+            bondtype = bond.GetBondType()
+            for boundary_atom_idx, dummy_atom_idx in zip(boundary_bond, boundary_dummy_atoms_indices):
+                if boundary_atom_idx == dummy_atom_idx:
+                    print(boundary_atom_idx)
+                    raise ValueError("Same atom idex of boundary and dummy atom. WHy?")
+                else:
+                    editable_protac_mol.AddBond(beginAtomIdx = boundary_atom_idx, endAtomIdx = dummy_atom_idx, order =  bondtype)
+            editable_protac_mol.RemoveBond(boundary_bond[0], boundary_bond[1])
+            
+        protac_mol_with_dummyatoms = editable_protac_mol.GetMol()
+        split_protac_smi_with_dummyatoms = Chem.MolToSmiles(protac_mol_with_dummyatoms)
+        substructure_smiles_with_dummyatoms = split_protac_smi_with_dummyatoms.split(".")
+        
+        substructure_smiles_with_dummyatoms_dict = {}
+        for smi in substructure_smiles_with_dummyatoms:
+            if "[*:2]" in smi:
+                if "[*:1]" in smi:
+                    substructure_smiles_with_dummyatoms_dict["LINKER SMILES"] = smi
+                else:
+                    substructure_smiles_with_dummyatoms_dict["E3 SMILES"] = smi
+            else:
+                substructure_smiles_with_dummyatoms_dict["POI SMILES"] = smi
+    else: #len(boundary_bonds) != 2:
+        substructure_smiles_with_dummyatoms_dict = {}
+        substructure_smiles_with_dummyatoms_dict["LINKER SMILES"] = None
+        substructure_smiles_with_dummyatoms_dict["E3 SMILES"] = None
+        substructure_smiles_with_dummyatoms_dict["POI SMILES"] = None
 
     
     return substructures_smi, substructure_smiles_with_dummyatoms_dict
@@ -3467,6 +3542,45 @@ def draw_molecule_with_highlighted_bonds(mol, bonds_to_highlight):
     svg = d2d.GetDrawingText()
     display(SVG(svg.replace('svg:','')))
 
+
+from rdkit import Chem
+from rdkit.Chem import Draw
+from rdkit.Chem.Draw import rdMolDraw2D
+from IPython.display import SVG, display
+
+def draw_molecule_with_colored_bonds(mol, bonds_to_highlight, highlight_bond_colors):
+    """
+    Draws a molecule with specified bonds highlighted in specified colors.
+   
+    Parameters:
+    - mol (rdkit.Chem.Mol): An RDKit molecule object.
+    - bonds_to_highlight (list): List of bond indices to highlight.
+    - highlight_bond_colors (dict): Dictionary mapping bond indices to colors (tuples of RGB values).
+    """
+    # Initialize drawer
+    d2d = rdMolDraw2D.MolDraw2DSVG(350*2, 300*2)
+   
+    # Set drawing options
+    d2d.drawOptions().useBWAtomPalette()
+    d2d.drawOptions().continuousHighlight = False
+    d2d.drawOptions().highlightBondWidthMultiplier = 8
+   
+    # Prepare highlightBondColors parameter
+    bond_colors = {}
+    for idx, color in highlight_bond_colors.items():
+        if idx in bonds_to_highlight:
+            bond_colors[idx] = color
+
+    # Draw the molecule with highlights
+    d2d.DrawMolecule(mol,
+                     highlightAtoms=[],
+                     highlightBonds=bonds_to_highlight,
+                     highlightBondColors=bond_colors)
+    d2d.FinishDrawing()
+   
+    # Convert drawing to image and display
+    svg = d2d.GetDrawingText()
+    display(SVG(svg.replace('svg:','')))
 
 import itertools
 import random
