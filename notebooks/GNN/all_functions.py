@@ -3705,3 +3705,57 @@ def generate_protacs(POIs, Linkers, E3s, set_sizes = [], max_trial_count=5):
         augmented_protac_substructure_sets_in_list.append(augmented_protac_substructure_set)
 
     return augmented_protac_substructure_sets_in_list
+
+
+def aggregate_metrics(output, epoch):
+    aggregated_metrics = {}
+        
+    for dataset_name in output['metrics'].keys():
+        for accuracy_origin in output['metrics'][dataset_name].keys():
+            for structure_type in output['metrics'][dataset_name][accuracy_origin].keys():
+                for metric_type in output['metrics'][dataset_name][accuracy_origin][structure_type].keys():
+                    column_name = f'{accuracy_origin}_{structure_type}_{metric_type}'
+                        
+                    if metric_type in ["Atoms_wrong"]:
+
+                        all_atoms_wrong = []
+                        for atoms_wrong, occurance in output["metrics"][dataset_name][accuracy_origin][structure_type]["Atoms_wrong"][epoch].items():
+                            all_atoms_wrong.extend([atoms_wrong]*occurance)
+
+
+                        column_name_avg_atoms_wrong = f'Avg. {column_name}'
+                        if column_name_avg_atoms_wrong not in aggregated_metrics:
+                            aggregated_metrics[column_name_avg_atoms_wrong] = []
+                        avg_atoms_wrong = avg(all_atoms_wrong)
+                        aggregated_metrics[column_name_avg_atoms_wrong].append(avg_atoms_wrong)
+                            
+                            
+                            
+                        column_name_median_atoms_wrong = f'Median {column_name}'
+                        if column_name_median_atoms_wrong not in aggregated_metrics:
+                            aggregated_metrics[column_name_median_atoms_wrong] = []
+                        median_atoms_wrong = median(all_atoms_wrong)
+                        aggregated_metrics[column_name_median_atoms_wrong].append(median_atoms_wrong)
+
+                    else: 
+                        macro_avg_metric = avg(output['metrics'][dataset_name][accuracy_origin][structure_type][metric_type][epoch])
+                        if macro_avg_metric is not None:
+                            if column_name not in aggregated_metrics:
+                                aggregated_metrics[column_name] = []
+                            aggregated_metrics[column_name].append(macro_avg_metric*100)
+            
+            
+        column_name = f'% Flipped PROTACs'
+        if column_name not in aggregated_metrics:
+            aggregated_metrics[column_name] = []
+        aggregated_metrics[column_name].append(output["flip_fraction"][dataset_name][epoch]*100)
+
+            
+        for validity_type in output["validity_fraction"][dataset_name].keys():
+            column_name = f'Validity {validity_type}'
+            validity_frac = output["validity_fraction"][dataset_name][validity_type][epoch]
+            if column_name not in aggregated_metrics:
+                aggregated_metrics[column_name] = []
+            aggregated_metrics[column_name].append(validity_frac*100)
+    
+    return aggregated_metrics
