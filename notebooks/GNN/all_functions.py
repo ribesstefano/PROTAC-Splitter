@@ -3707,6 +3707,8 @@ def generate_protacs(POIs, Linkers, E3s, set_sizes = [], max_trial_count=5):
     return augmented_protac_substructure_sets_in_list
 
 
+from statistics import median
+
 def aggregate_metrics(output, epoch):
     aggregated_metrics = {}
         
@@ -3759,3 +3761,10 @@ def aggregate_metrics(output, epoch):
             aggregated_metrics[column_name].append(validity_frac*100)
     
     return aggregated_metrics
+
+def avg(values):
+    """
+    Returns the average of a list of values, or None if the list is empty.
+    """
+    num_values = len(values)
+    return sum(values) / num_values if num_values > 0 else None
