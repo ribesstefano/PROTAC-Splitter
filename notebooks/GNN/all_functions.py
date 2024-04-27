@@ -3709,8 +3709,11 @@ def generate_protacs(POIs, Linkers, E3s, set_sizes = [], max_trial_count=5):
 
 from statistics import median
 
-def aggregate_metrics(output, epoch):
+def aggregate_metrics_at_epoch(output, epoch, return_agg_output = False):
     aggregated_metrics = {}
+
+    if return_agg_output:
+        aggregated_output = copy.deepcopy(output)
         
     for dataset_name in output['metrics'].keys():
         for accuracy_origin in output['metrics'][dataset_name].keys():
@@ -3730,7 +3733,9 @@ def aggregate_metrics(output, epoch):
                             aggregated_metrics[column_name_avg_atoms_wrong] = []
                         avg_atoms_wrong = avg(all_atoms_wrong)
                         aggregated_metrics[column_name_avg_atoms_wrong].append(avg_atoms_wrong)
-                            
+                        
+                        if return_agg_output:
+                            aggregated_output["metrics"][dataset_name][accuracy_origin][structure_type]["Atoms_wrong"][epoch] = avg_atoms_wrong
                             
                             
                         column_name_median_atoms_wrong = f'Median {column_name}'
@@ -3745,6 +3750,10 @@ def aggregate_metrics(output, epoch):
                             if column_name not in aggregated_metrics:
                                 aggregated_metrics[column_name] = []
                             aggregated_metrics[column_name].append(macro_avg_metric*100)
+                        
+                        if return_agg_output:
+                            aggregated_output["metrics"][dataset_name][accuracy_origin][structure_type][metric_type][epoch] = macro_avg_metric
+
             
             
         column_name = f'% Flipped PROTACs'
@@ -3760,7 +3769,10 @@ def aggregate_metrics(output, epoch):
                 aggregated_metrics[column_name] = []
             aggregated_metrics[column_name].append(validity_frac*100)
     
-    return aggregated_metrics
+    if return_agg_output:
+        return aggregated_metrics, aggregated_output
+    else:
+        return aggregated_metrics
 
 def avg(values):
     """
