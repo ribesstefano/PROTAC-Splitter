@@ -309,15 +309,87 @@ def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile, print_mols=Fals
             #check that these sets are disjoint
             
             if poi_match_set.isdisjoint(e3_match_set): # if they dont share indices, the matches dont overlap
-                non_overlapping_match_of_poi_and_e3 = True
-            if non_overlapping_match_of_poi_and_e3:
-                break
-        if non_overlapping_match_of_poi_and_e3:
-            break
-    if non_overlapping_match_of_poi_and_e3 is False:
-        raise ValueError(f"Failed to identify non-overlapping matches for POI {poi_smile} and E3 {e3_smile} in PROTAC: {protac_smiles}")
+                
+                #verify that the resulting linker is in contact with both the poi and e3
+                #linker_indices = set(range(0, mol.GetNumAtoms())) - poi_match_set - e3_match_set
 
-    matched_atom_indices = {}
+                matched_atom_indices = {}
+                matched_atom_indices["poi"] = poi_matches[poi_match_idx]
+                matched_atom_indices["e3"] = e3_matches[e3_match_idx]
+                
+                try_again = False
+                for i, (ligand_smile, match) in enumerate(zip(ligand_smi_dict.values(), matched_atom_indices.values())): 
+
+ 
+                #for i, ligand_smile in enumerate(ligand_smiles_list):
+                    
+                    #substruct_mol_with_attachment = Chem.MolFromSmiles(ligand_smile)
+                    #substruct_mol = Chem.DeleteSubstructs(substruct_mol_with_attachment, Chem.MolFromSmiles('*'))
+                    #matches = mol.GetSubstructMatches(substruct_mol)
+
+
+                    
+                    #if not matches:
+                    #    continue  # If no match is found, skip to the next substructure
+                    #match = matches[0]  # Take the first match                                         ##########################OBS!
+
+                    if print_mols:
+                        display(mol)
+                        #display(substruct_mol)
+                        draw_molecule_with_highlighted_atoms(mol=mol, atoms_to_highlight=match)
+
+                    # Find boundary nodes for the POI and E3
+                    for bond in mol.GetBonds():
+                        begin_atom_label = int(bond.GetBeginAtomIdx() in match)
+                        end_atom_label = int(bond.GetEndAtomIdx() in match)
+                        if begin_atom_label != end_atom_label:
+                            if bond.GetBeginAtomIdx() in match and i == 0:
+                                boundary_POI_node_index = bond.GetBeginAtomIdx()
+                                break
+                            elif bond.GetEndAtomIdx() in match and i ==0:
+                                boundary_POI_node_index = bond.GetEndAtomIdx()
+                                break
+                            elif bond.GetBeginAtomIdx() in match and i == 1:
+                                boundary_E3_node_index = bond.GetBeginAtomIdx()
+                                break
+                            elif bond.GetEndAtomIdx() in match and i ==1:
+                                boundary_E3_node_index = bond.GetEndAtomIdx()
+                                break
+                            else:
+                                raise ValueError(f'Problem with substructure matches')
+
+                if boundary_POI_node_index == -1 or boundary_E3_node_index == -1:
+                    display(Chem.MolFromSmiles(protac_smiles))
+                    display(Chem.MolFromSmiles(poi_smile))
+                    display(Chem.MolFromSmiles(e3_smile))
+                    print(f'boundary_POI_node_index: {boundary_POI_node_index}. boundary_E3_node_index: {boundary_E3_node_index}')
+                    raise ValueError("Failed to assign boundary index")
+                
+                substructure_label = process_boundaries_to_substructure_labels(protac_smiles, boundary_POI_node_index, boundary_E3_node_index)
+                for i in range(2):
+                    if sum(substructure_label==i) == 0:
+                        try_again = True
+                
+                if try_again:
+                    break
+                        
+
+                return boundary_POI_node_index, boundary_E3_node_index
+
+                
+                
+    raise ValueError(f"Failed to identify non-overlapping matches for POI {poi_smile} and E3 {e3_smile} in PROTAC: {protac_smiles}")
+
+    #            non_overlapping_match_of_poi_and_e3 = True
+   #         if non_overlapping_match_of_poi_and_e3:
+   #             break
+    #    if non_overlapping_match_of_poi_and_e3:
+   #         break
+   # if non_overlapping_match_of_poi_and_e3 is False:
+   #     raise ValueError(f"Failed to identify non-overlapping matches for POI {poi_smile} and E3 {e3_smile} in PROTAC: {protac_smiles}")
+
+
+"""matched_atom_indices = {}
     matched_atom_indices["poi"] = poi_matches[poi_match_idx]
     matched_atom_indices["e3"] = e3_matches[e3_match_idx]
 
@@ -368,7 +440,7 @@ def boundary_ligand_nodes_v2(protac_smiles, poi_smile, e3_smile, print_mols=Fals
         print(f'boundary_POI_node_index: {boundary_POI_node_index}. boundary_E3_node_index: {boundary_E3_node_index}')
         raise ValueError("Failed to assign boundary index")
 
-    return boundary_POI_node_index, boundary_E3_node_index
+    return boundary_POI_node_index, boundary_E3_node_index"""
 
 
 def get_boundary_bonds(protac_smiles, poi_smile, e3_smile):
@@ -2934,13 +3006,13 @@ def predict(model, data):
     return class_predictions, probabilities
 
 
-def predict_v2(model, data=None, protac_smiles=None):
+"""def predict_v2(model, data=None, protac_smiles=None):
     model.eval()  # Set the model to evaluation mode
     with torch.no_grad():
         out = model(data.x, data.edge_index) #, edge_attr=data.edge_attr)
         class_predictions = process_boundaries_to_substructures_v2(protac_smiles, out)
         probabilities = F.softmax(out, dim=1)                        
-    return class_predictions, probabilities
+    return class_predictions, probabilities"""
 
 
 def val_test_split(validation_dataset, relative_test_size=0.3):
