@@ -2416,7 +2416,7 @@ def process_predicted_nodes_to_substructure_labels(raw_node_prediction):
     pred_node_classes = normalized_boundary_prediction.argmax(dim=1) # get idx of the max values for each class
     return pred_node_classes
 
-def process_predicted_boundaries_to_substructure_labels(protac_smiles, raw_boundary_prediction):
+def process_predicted_boundaries_to_substructure_labels_prev(protac_smiles, raw_boundary_prediction):
     """
     Converts the prediction (raw_boundary_prediction) based on the boundary nodes of the POI and E3 into a definite node level prediction for all nodes.
     Useful for evaluation and using the model to predict new values
@@ -2447,7 +2447,7 @@ def process_predicted_boundaries_to_substructure_labels(protac_smiles, raw_bound
             pred_boundary_nodes = normalized_boundary_prediction.argmax(dim=0) #Get new highest max values (for E3)
             E3_boundary_node = pred_boundary_nodes[2].item() #redefine E3 node idx as the second highest predicted
         else: 
-            POI_boundary_node = torch.topk(normalized_boundary_prediction[:,2], k=n_highest_pred_node, dim=0).indices.tolist()[-1]
+            POI_boundary_node = torch.topk(normalized_boundary_prediction[:,0], k=n_highest_pred_node, dim=0).indices.tolist()[-1]
             normalized_boundary_prediction[POI_boundary_node,0] = 0 #min_vals[0, 0].item()
             pred_boundary_nodes = normalized_boundary_prediction.argmax(dim=0)
             POI_boundary_node = pred_boundary_nodes[0].item()
@@ -2456,6 +2456,53 @@ def process_predicted_boundaries_to_substructure_labels(protac_smiles, raw_bound
         raise ValueError("POI_boundary_node is the same as E3_boundary_node")
 
     pred_class_label_tensor = process_boundaries_to_substructure_labels(protac_smiles, POI_boundary_node, E3_boundary_node)
+    return pred_class_label_tensor
+
+
+def process_predicted_boundaries_to_substructure_labels(protac_smiles, raw_boundary_prediction):
+    """
+    Converts the prediction (raw_boundary_prediction) based on the boundary nodes of the POI and E3 into a definite node level prediction for all nodes.
+    Useful for evaluation and using the model to predict new values
+    
+    """
+    pred_poi_boundary_idx, _, pred_e3_boundary_idx = raw_boundary_prediction.argmax(dim=0)
+    poi_label = 0
+    e3_label = 2
+                
+                
+    n_highest_pred_node = 0
+    if pred_poi_boundary_idx == pred_e3_boundary_idx:
+        raw_prediction_protac_temporary = torch.clone(raw_boundary_prediction)    #SLOW?   #TopK is slow
+    try:
+        while pred_poi_boundary_idx == pred_e3_boundary_idx:          
+            n_highest_pred_node +=1
+
+            poi_pred_val = raw_prediction_protac_temporary[pred_poi_boundary_idx, poi_label]
+            e3_pred_val = raw_prediction_protac_temporary[pred_poi_boundary_idx, e3_label]
+            if e3_pred_val>poi_pred_val:
+                    #overwrite the value of the POI
+                raw_prediction_protac_temporary[pred_poi_boundary_idx, poi_label] = float('-inf')  #min_vals[0, 0].item()
+                    #find the index of second most likely POI 
+                pred_poi_boundary_idx = torch.topk(raw_prediction_protac_temporary[:, poi_label], k=n_highest_pred_node, dim=0).indices.tolist()[-1]
+                    #get the index
+                pred_poi_boundary_idx = raw_prediction_protac_temporary[:, e3_label].argmax(dim=0)
+            else:
+                raw_prediction_protac_temporary[pred_e3_boundary_idx, e3_label] = float('-inf') #min_vals[0, 2].item() #redefine the highest E3 to the lowest value 
+                pred_e3_boundary_idx = torch.topk(raw_prediction_protac_temporary[:, e3_label], k=n_highest_pred_node, dim=0).indices.tolist()[-1]
+                pred_poi_boundary_idx = raw_prediction_protac_temporary[:, poi_label].argmax(dim=0) #Get new highest max values (for E3)
+
+        pred_poi_boundary_idx = pred_poi_boundary_idx.item()  
+        pred_e3_boundary_idx = pred_e3_boundary_idx.item()            
+    except:
+        pred_poi_boundary_idx = 0
+        pred_e3_boundary_idx = 1
+        print("Fatal error avoided. Boundary node indices forced to be 0 and 1.")
+        
+    
+    if pred_poi_boundary_idx == pred_e3_boundary_idx:
+        raise ValueError("POI_boundary_node is the same as E3_boundary_node")
+
+    pred_class_label_tensor = process_boundaries_to_substructure_labels(protac_smiles, pred_poi_boundary_idx, pred_e3_boundary_idx)
     return pred_class_label_tensor
 
 
@@ -2505,6 +2552,10 @@ def process_boundaries_to_substructure_labels(protac_smiles, POI_boundary_node, 
         Graph.remove_node(POI_boundary_node)
         Graph.remove_node(E3_boundary_node)
     except:
+        print(protac_smiles)
+        display(Chem.MolFromSmiles(protac_smiles))
+        print(f"POI_boundary_node: {POI_boundary_node}, {type(POI_boundary_node)}")
+        print(f"E3_boundary_node: {E3_boundary_node}, {type(E3_boundary_node)}")
         raise ValueError("POI_boundary_node is the same as E3_boundary_node")
         
     #Get all nodes which are connected to the path 
