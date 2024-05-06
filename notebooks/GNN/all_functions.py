@@ -3663,7 +3663,8 @@ def draw_molecule_with_highlighted_bonds(mol, bonds_to_highlight):
    
     # Convert drawing to image and display
     svg = d2d.GetDrawingText()
-    display(SVG(svg.replace('svg:','')))
+    svg = svg.replace('svg:','')
+    display(SVG(svg))
 
     return svg
 
