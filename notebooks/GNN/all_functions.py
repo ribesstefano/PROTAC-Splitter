@@ -3665,6 +3665,8 @@ def draw_molecule_with_highlighted_bonds(mol, bonds_to_highlight):
     svg = d2d.GetDrawingText()
     display(SVG(svg.replace('svg:','')))
 
+    return svg
+
 
 from rdkit import Chem
 from rdkit.Chem import Draw
