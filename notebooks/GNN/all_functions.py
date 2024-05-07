@@ -2473,9 +2473,11 @@ def process_predicted_boundaries_to_substructure_labels(protac_smiles, raw_bound
     n_highest_pred_node = 0
     if pred_poi_boundary_idx == pred_e3_boundary_idx:
         raw_prediction_protac_temporary = torch.clone(raw_boundary_prediction)    #SLOW?   #TopK is slow
-    try:
+    if True:
         while pred_poi_boundary_idx == pred_e3_boundary_idx:          
             n_highest_pred_node +=1
+            
+                
 
             poi_pred_val = raw_prediction_protac_temporary[pred_poi_boundary_idx, poi_label]
             e3_pred_val = raw_prediction_protac_temporary[pred_poi_boundary_idx, e3_label]
@@ -2483,21 +2485,30 @@ def process_predicted_boundaries_to_substructure_labels(protac_smiles, raw_bound
                     #overwrite the value of the POI
                 raw_prediction_protac_temporary[pred_poi_boundary_idx, poi_label] = float('-inf')  #min_vals[0, 0].item()
                     #find the index of second most likely POI 
-                pred_poi_boundary_idx = torch.topk(raw_prediction_protac_temporary[:, poi_label], k=n_highest_pred_node, dim=0).indices.tolist()[-1]
-                    #get the index
-                pred_poi_boundary_idx = raw_prediction_protac_temporary[:, e3_label].argmax(dim=0)
+                pred_poi_boundary_idx = torch.topk(raw_prediction_protac_temporary[:, poi_label], k=1, dim=0).indices
+
             else:
                 raw_prediction_protac_temporary[pred_e3_boundary_idx, e3_label] = float('-inf') #min_vals[0, 2].item() #redefine the highest E3 to the lowest value 
-                pred_e3_boundary_idx = torch.topk(raw_prediction_protac_temporary[:, e3_label], k=n_highest_pred_node, dim=0).indices.tolist()[-1]
-                pred_poi_boundary_idx = raw_prediction_protac_temporary[:, poi_label].argmax(dim=0) #Get new highest max values (for E3)
+                pred_e3_boundary_idx = torch.topk(raw_prediction_protac_temporary[:, e3_label], k=1, dim=0).indices
 
-        pred_poi_boundary_idx = pred_poi_boundary_idx.item()  
-        pred_e3_boundary_idx = pred_e3_boundary_idx.item()            
-    except:
-        pred_poi_boundary_idx = 0
-        pred_e3_boundary_idx = 1
-        print("Fatal error avoided. Boundary node indices forced to be 0 and 1.")
-        
+            if n_highest_pred_node > 2:
+                print(f'pred_poi_boundary_idx: {pred_poi_boundary_idx}')
+                print(f'pred_e3_boundary_idx: {pred_e3_boundary_idx}')
+                print(f'e3_pred_val: {e3_pred_val}')
+                print(f'poi_pred_val: {poi_pred_val}')
+                print(f'raw_prediction_protac_temporary: {raw_prediction_protac_temporary}')
+                print(f'raw_boundary_prediction: {raw_boundary_prediction}')
+
+    pred_poi_boundary_idx = pred_poi_boundary_idx.item()
+    pred_e3_boundary_idx = pred_e3_boundary_idx.item()
+
+    if pred_poi_boundary_idx > raw_boundary_prediction.size(0) or pred_e3_boundary_idx > raw_boundary_prediction.size(0):
+        raise ValueError(f"pred_poi_boundary_idx ({pred_poi_boundary_idx}) pred_e3_boundary_idx ({pred_e3_boundary_idx}) or larger than raw_boundary_prediction.size(0) {raw_boundary_prediction.size(0)}")
+    #except:
+    #    pred_poi_boundary_idx = 0
+   #     pred_e3_boundary_idx = 1
+    #    print("Fatal error avoided. Boundary node indices forced to be 0 and 1.")
+    
     
     if pred_poi_boundary_idx == pred_e3_boundary_idx:
         raise ValueError("POI_boundary_node is the same as E3_boundary_node")
