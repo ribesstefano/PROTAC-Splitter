@@ -8,7 +8,7 @@ from rdkit.Chem import rdFingerprintGenerator, rdMolDescriptors
 def compute_metrics(
     pred,
     rouge = evaluate.load("rouge"),
-    tokenizer: [AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
+    tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
 ):
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
@@ -37,7 +37,7 @@ def has_all_attachment_points(smiles: str) -> bool:
 def compute_metrics_with_chem(
     pred,
     rouge = evaluate.load("rouge"),
-    tokenizer: [AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
+    tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
     fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=8, fpSize=2048),
 ):
     if isinstance(tokenizer, str):

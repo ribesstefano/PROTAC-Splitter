@@ -120,68 +120,6 @@ def reassemble_protac(
     return protac_smiles, protac_mol
 
 
-def check_substructs(
-        protac_smiles: str,
-        poi_smiles: str,
-        linker_smiles: str,
-        e3_smiles: str,
-        return_bond_types: bool = False,
-        poi_attachment_id: int = 1,
-        e3_attachment_id: int = 2,
-) -> bool | Tuple[bool, dict[str, str]]:
-    """ Check if the reassembled PROTAC is correct. 
-    
-    Args:
-        protac_smiles (str): The SMILES notation for the PROTAC molecule.
-        poi_smiles (str): The SMILES notation for the POI ligand.
-        linker_smiles (str): The SMILES notation for the linker.
-        e3_smiles (str): The SMILES notation for the E3 binder.
-        return_bond_types (bool): If True, return the bond types used for the reassembly.
-        poi_attachment_id (int): The label of the attachment point for the POI ligand, i.e., "[*:{poi_attachment_id}]".
-        e3_attachment_id (int): The label of the attachment point for the E3 binder, i.e., "[*:{e3_attachment_id}]".
-
-    Returns:
-        bool | Tuple[bool, dict[str, str]]: True if the reassembled PROTAC is correct, False otherwise. If return_bond_types is True, also return the bond types used for the reassembly.
-    
-    """
-    correct_substructs = False
-    protac_mol = Chem.MolFromSmiles(protac_smiles)
-    protac_inchi = Chem.MolToInchi(protac_mol)
-    protac_smiles_canon = standardize_smiles(protac_smiles)
-    bond_types = {}
-    for e3_bond_type in ['single', 'double', 'triple']:
-        for poi_bond_type in ['single', 'double', 'triple']:
-            try:
-                _, assmbl_mol = reassemble_protac(
-                    poi_smiles,
-                    linker_smiles,
-                    e3_smiles,
-                    e3_bond_type,
-                    poi_bond_type,
-                    poi_attachment_id,
-                    e3_attachment_id,
-                )
-                if assmbl_mol is not None:
-                    # If either the InChI or SMILES of the reassembled PROTAC is
-                    # the same as the original PROTAC, then the reassembly is
-                    # correct.
-                    if protac_inchi == Chem.MolToInchi(assmbl_mol):
-                        correct_substructs = True
-                        bond_types['e3_bond_type'] = e3_bond_type
-                        bond_types['poi_bond_type'] = poi_bond_type
-                        break
-                    if protac_smiles_canon == standardize_smiles(Chem.MolToSmiles(assmbl_mol)):
-                        correct_substructs = True
-                        bond_types['e3_bond_type'] = e3_bond_type
-                        bond_types['poi_bond_type'] = poi_bond_type
-                        break
-            except:
-                continue
-    if return_bond_types:
-        return correct_substructs, bond_types
-    return correct_substructs
-
-
 def substructure_split_sort(substructure_smiles: str) -> Tuple[str, str, str]:
     """
     Splits a substructure SMILES string into three parts: poi_smile, linker_smile, and e3_smile.

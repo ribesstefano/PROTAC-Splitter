@@ -25,6 +25,7 @@ from transformers import (
     Trainer,
     TrainingArguments,
     EncoderDecoderModel,
+    AutoConfig,
 )
 from trl import (
     AutoModelForSeq2SeqLMWithValueHead,
@@ -68,6 +69,9 @@ def train_model(
     tie_encoder_decoder: bool = False,
     delete_repo_first: bool = False,
     training_args: Optional[Seq2SeqTrainingArguments] = None,
+    resume_from_checkpoint: Optional[str] = None,
+    optuna_search: bool = False,
+    n_trials: int = 20,
 ):
     """Trains a model on a given dataset.
     
@@ -118,12 +122,6 @@ def train_model(
     #     print('-' * 80)
     #     print(f"Training model {hub_model_id} on dataset: {ds_name}.")
     #     print('-' * 80)
-    bert2bert = get_model(
-        pretrained_encoder=pretrained_encoder,
-        pretrained_decoder=pretrained_decoder,
-        max_length=encoder_max_length,
-        tie_encoder_decoder=tie_encoder_decoder,
-    )
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     elif tokenizer is None:
@@ -192,17 +190,45 @@ def train_model(
         tokenizer=tokenizer,
         fpgen=fpgen,
     )
+    bert2bert = lambda: get_model(
+        pretrained_encoder=pretrained_encoder,
+        pretrained_decoder=pretrained_decoder,
+        max_length=encoder_max_length,
+        tie_encoder_decoder=tie_encoder_decoder,
+    )
     trainer = Seq2SeqTrainer(
-        model=bert2bert,
+        model_init=bert2bert,
         tokenizer=tokenizer,
         args=training_args,
         compute_metrics=metric,
         train_dataset=dataset_tokenized["train"],
-        eval_dataset=dataset_tokenized["validation"], # .select(range(10)),
+        eval_dataset=dataset_tokenized["validation"],
     )
-    trainer.train(
-        # resume_from_checkpoint="last-checkpoint",
-    )
+    if optuna_search:
+        def optuna_hp_space(trial):
+            return {
+                "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),
+                "per_device_train_batch_size": trial.suggest_categorical("per_device_train_batch_size", [16, 32, 64, 128]),
+                "lr_scheduler_type": trial.suggest_categorical("lr_scheduler_type", ["linear", "cosine"]),
+            }
+
+        def compute_objective(metrics: Dict[str, float]):
+            return metrics["eval_loss"], metrics["eval_valid_smiles"]
+
+        best_trials = trainer.hyperparameter_search(
+            direction=["minimize", "maximize"],
+            backend="optuna",
+            hp_space=optuna_hp_space,
+            n_trials=n_trials,
+            compute_objective=compute_objective,
+        )
+        print("-" * 80)
+        print(f"Best trials:\n{best_trials}")
+        print("-" * 80)
+    else:
+        trainer.train(
+            resume_from_checkpoint=resume_from_checkpoint, # "last-checkpoint",
+        )
     if hub_model_id is not None:
         trainer.push_to_hub(
             commit_message="Initial version",
@@ -485,11 +511,13 @@ def train_dpo_model(
     num_train_epochs: int = -1,
     batch_size: int = 128,
     gradient_accumulation_steps: int = 4,
+    resume_from_checkpoint: bool = False,
     hub_token: Optional[str] = None,
     pretrained_model_name: str = "ailab-bio/PROTAC-Splitter_untied_80-20-split",
     pretrained_ref_model_name: str = "ailab-bio/PROTAC-Splitter_untied_80-20-split",
-    max_length: int = 512,
-    delete_repo_first: bool = False,     
+    max_length: int = None,
+    delete_repo_first: bool = False,
+    optuna_search: bool = False,  
 ):
     """ Trains a DPO model on a given dataset.
     
@@ -499,7 +527,7 @@ def train_dpo_model(
     """
     if hub_token is not None:
         hf.login(token=hub_token)
-    if delete_repo_first:
+    if delete_repo_first and not resume_from_checkpoint:
         delete_hf_repository(repo_id=model_name, token=hub_token)
     tokenizer = AutoTokenizer.from_pretrained(
         pretrained_model_name,
@@ -513,10 +541,11 @@ def train_dpo_model(
         token=hub_token,
     )
     # Setup models
-    model = EncoderDecoderModel.from_pretrained(
-        pretrained_model_name,
-        token=hub_token,
-    )
+    def model_init():
+        return EncoderDecoderModel.from_pretrained(
+            pretrained_model_name,
+            token=hub_token,
+        )
     model_ref = EncoderDecoderModel.from_pretrained(
         pretrained_ref_model_name,
         token=hub_token,
@@ -537,7 +566,7 @@ def train_dpo_model(
         # torch_compile=True,
         fp16=True,
         # Evaluation and checkpointing configs
-        evaluation_strategy="steps",
+        evaluation_strategy="steps", # TODO: Why is it not working? "steps",
         max_steps=max_steps,
         num_train_epochs=num_train_epochs,
         eval_steps=100,
@@ -547,7 +576,7 @@ def train_dpo_model(
         save_strategy="steps",
         save_total_limit=1,
         load_best_model_at_end=True,
-        metric_for_best_model="valid_smiles",
+        # metric_for_best_model="valid_smiles",
         # Logging configs
         log_level="info",
         logging_steps=50,
@@ -564,6 +593,9 @@ def train_dpo_model(
         data_seed=42,
     )
     # Setup Matrics
+    # TODO: The metric is not working because the predictions include rewards,
+    # or something like that, i.e., real values, which cannot be decoded by the
+    # tokenizer. Skipping for now and using the default one.
     rouge = evaluate.load("rouge")
     fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
         radius=8,
@@ -576,15 +608,22 @@ def train_dpo_model(
         fpgen=fpgen,
     )
     # Setup trainer and start training
+    if max_length is None:
+        max_length = AutoConfig.from_pretrained(
+            pretrained_model_name,
+            token=hub_token,
+        ).max_length
+        # max_length = model.config.max_length
     dpo_trainer = DPOTrainer(
-        model,
-        model_ref,
+        model=model_init(),
+        ref_model=model_ref,
         beta=beta,
         loss_type=loss_type,
         train_dataset=dataset["train"],
         eval_dataset=dataset["validation"],
         tokenizer=tokenizer,
-        compute_metrics=metric,
+        model_init=model_init if optuna_search else None,
+        # compute_metrics=metric,
         max_length=max_length,
         max_prompt_length=max_length,
         max_target_length=max_length,
@@ -593,10 +632,39 @@ def train_dpo_model(
         truncation_mode="keep_start",
         args=training_args,
     )
-    dpo_trainer.train()
-    hub_configs = {
-        "repo_id": model_name,
-        "commit_message": "Initial version",
-        "private": True,
-    }
-    dpo_trainer.push_to_hub(**hub_configs)
+    if optuna_search and False:
+        # TODO: This is not working because the training arguments do NOT
+        # include the beta parameter...
+        def optuna_hp_space(trial):
+            return {
+                "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),
+                "per_device_train_batch_size": trial.suggest_categorical("per_device_train_batch_size", [16, 32, 64, 128]),
+                "beta": trial.suggest_float("beta", 0.1, 0.5),
+            }
+        best_trials = dpo_trainer.hyperparameter_search(
+            direction=["minimize"],
+            backend="optuna",
+            hp_space=optuna_hp_space,
+            n_trials=20,
+            # compute_objective=compute_objective,
+        )
+        print("-" * 80)
+        print(f"Best trials:\n{best_trials}")
+        print("-" * 80)
+    else:
+        if resume_from_checkpoint:
+            resume_from_checkpoint = "last-checkpoint"
+        else:
+            resume_from_checkpoint = None
+        dpo_trainer.train(
+            resume_from_checkpoint=resume_from_checkpoint,
+        )
+    dpo_trainer.push_to_hub(
+        commit_message="Initial version",
+        model_name=model_name,
+        license="mit",
+        finetuned_from=pretrained_model_name,
+        tasks=["Text2Text Generation"],
+        tags=["PROTAC", "cheminformatics"],
+        dataset="ailab-bio/PROTAC-Substructures-DPO",
+    )
