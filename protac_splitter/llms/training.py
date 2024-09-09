@@ -1,5 +1,9 @@
 from typing import Optional, Dict
 from functools import partial
+import subprocess
+import ssl
+
+ssl._create_default_https_context = ssl._create_unverified_context
 
 import evaluate
 import huggingface_hub as hf
@@ -10,13 +14,13 @@ from transformers import (
     AutoTokenizer,
 )
 
-from .llms.data_utils import load_tokenized_dataset
-from .llms.evaluation import compute_metrics_with_chem
-from .llms.hf_utils import (
+from .data_utils import load_tokenized_dataset
+from .evaluation import compute_metrics_with_chem
+from .hf_utils import (
     create_hf_repository,
     delete_hf_repository,
 )
-from .llms.model_utils import get_model
+from .model_utils import get_model
 
 
 def train_model(
@@ -41,8 +45,7 @@ def train_model(
     delete_repo_first: bool = False,
     training_args: Optional[Seq2SeqTrainingArguments] = None,
     resume_from_checkpoint: Optional[str] = None,
-    optuna_search: bool = False,
-    n_trials: int = 20,
+    optuna_n_trials: int = 0,
 ):
     """Trains a model on a given dataset.
     
@@ -65,6 +68,9 @@ def train_model(
         encoder_max_length (int, optional): The maximum length of the encoder. Defaults to 256.
         decoder_max_length (int, optional): The maximum length of the decoder. Defaults to 256.
         delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
+        training_args (Optional[Seq2SeqTrainingArguments], optional): The training arguments. Defaults to None.
+        resume_from_checkpoint (Optional[str], optional): The checkpoint to resume training from. Defaults to None.
+        optuna_n_trials (int, optional): The number of Optuna trials. Defaults to 0, i.e., no Optuna hyperparameter search.
     """
     if hub_token is not None:
         hf.login(token=hub_token)
@@ -144,14 +150,15 @@ def train_model(
             hub_model_id=hub_model_id,
             hub_strategy="checkpoint", # NOTE: Allows to resume training from last checkpoint 
             hub_private_repo=True,
+            report_to=["tensorboard"],
             # Other configs
             seed=42,
             data_seed=42,
         )
     rouge = evaluate.load("rouge")
     fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
-        radius=8,
-        fpSize=2048,
+        radius=11,
+        fpSize=1024,
     )
     metric = partial(
         compute_metrics_with_chem,
@@ -171,9 +178,9 @@ def train_model(
         args=training_args,
         compute_metrics=metric,
         train_dataset=dataset_tokenized["train"],
-        eval_dataset=dataset_tokenized["validation"],
+        eval_dataset=dataset_tokenized["test"],
     )
-    if optuna_search:
+    if optuna_n_trials > 0:
         def optuna_hp_space(trial):
             return {
                 "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),
@@ -182,13 +189,13 @@ def train_model(
             }
 
         def compute_objective(metrics: Dict[str, float]):
-            return metrics["eval_loss"], metrics["eval_valid_smiles"]
+            return metrics["eval_loss"], metrics["eval_reassembly"]
 
         best_trials = trainer.hyperparameter_search(
             direction=["minimize", "maximize"],
             backend="optuna",
             hp_space=optuna_hp_space,
-            n_trials=n_trials,
+            n_trials=optuna_n_trials,
             compute_objective=compute_objective,
         )
         print("-" * 80)
@@ -199,6 +206,10 @@ def train_model(
             resume_from_checkpoint=resume_from_checkpoint, # "last-checkpoint",
         )
     if hub_model_id is not None:
+        # Disable LFS locking API for the current repository
+        subprocess.run([
+            "git", "config", f"lfs.https://huggingface.co/ailab-bio/{hub_model_id}.git/info/lfs.locksverify", "false"
+        ])
         trainer.push_to_hub(
             commit_message="Initial version",
             model_name=hub_model_id,

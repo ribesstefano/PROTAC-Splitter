@@ -3,11 +3,43 @@ import numpy as np
 from rdkit import Chem, DataStructs
 import evaluate
 
-from .evaluation import (
+from ..evaluation import (
     is_valid_smiles,
     has_three_substructures,
     has_all_attachment_points,
+    check_substructs,
 )
+
+
+def split_prediction(
+        pred: str,
+        poi_attachment_id: int = 1,
+        e3_attachment_id: int = 2,
+) -> dict[str, str] | None:
+    """ Split a PROTAC SMILES prediction into its three substructures.
+
+    Args:
+        pred (str): The SMILES notation for the PROTAC molecule.
+        poi_attachment_id (int): The attachment point ID for the POI substructure.
+        e3_attachment_id (int): The attachment point ID for the E3 substructure.
+
+    Returns:
+        dict[str, str] | None: A dictionary containing the SMILES notations for the POI, linker, and E3 substructures, or None if the prediction is invalid
+    """
+    sbstructs = pred.split('.')
+    if len(sbstructs) != 3:
+        return None
+    ret = {}
+    for substr in sbstructs:
+        if f'[*:{poi_attachment_id}]' in substr and f'[*:{e3_attachment_id}]' not in substr:
+            ret['poi'] = substr
+        elif f'[*:{e3_attachment_id}]' in substr and f'[*:{poi_attachment_id}]' not in substr:
+            ret['e3'] = substr
+        elif f'[*:{poi_attachment_id}]' in substr and f'[*:{e3_attachment_id}]' in substr:
+            ret['linker'] = substr
+        else:
+            return None
+    return ret
 
 
 def compute_metrics_with_chem(
@@ -37,6 +69,21 @@ def compute_metrics_with_chem(
     # Get has_all_attachment_points score
     num_attach_points = np.array([has_all_attachment_points(s) for s in pred_str])
     scores['has_all_attachment_points'] = num_attach_points.mean()
+    # Check if re-combining the substructures results in the original PROTAC
+    checks = []
+    for pred_smiles, protac_smiles in zip(pred_str, label_str):
+        substructs = split_prediction(pred_smiles)
+        if substructs is None:
+            checks.append(False)
+            continue
+        checks.append(check_substructs(
+            protac_smiles,
+            substructs['poi'],
+            substructs['linker'],
+            substructs['e3'],
+        ))
+    scores['reassembly'] = np.array(checks).astype(int).mean()
+
     # # Get tanimoto score
     # pred_str = np.array(pred_str)[valid_smiles == 1]
     # label_str = np.array(label_str)[valid_smiles == 1]

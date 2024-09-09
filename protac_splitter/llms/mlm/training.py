@@ -28,7 +28,7 @@ from transformers import (
 )
 import huggingface_hub as hf
 
-from .llms.hf_utils import (
+from .hf_utils import (
     create_hf_repository,
     delete_hf_repository,
 )
@@ -38,6 +38,7 @@ def train_mlm_model(
     model_name: str,
     ds_name: str = 'ailab-bio/PROTAC-Substructures',
     ds_config: str = 'encoder_mlm_dataset',
+    eval_ds_config: str = 'standard',
     max_steps: int = 2000,
     num_train_epochs: int = -1,
     batch_size: int = 128,
@@ -114,8 +115,8 @@ def train_mlm_model(
     )
     eval_mlm_dataset = load_dataset(
         ds_name,
-        "80-20-split",
-        split="validation",
+        eval_ds_config,
+        split="test",
         token=hub_token,
     )
     tokenized_mlm_dataset = mlm_dataset.map(

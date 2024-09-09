@@ -303,7 +303,7 @@ def train_dpo_model(
         beta=beta,
         loss_type=loss_type,
         train_dataset=dataset["train"],
-        eval_dataset=dataset["validation"],
+        eval_dataset=dataset["test"],
         tokenizer=tokenizer,
         model_init=model_init if optuna_search else None,
         # compute_metrics=metric,
