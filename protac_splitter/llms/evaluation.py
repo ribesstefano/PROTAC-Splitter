@@ -50,11 +50,15 @@ def compute_metrics_with_chem(
 ):
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+    input_ids = pred.inputs
     labels_ids = pred.label_ids
     pred_ids = pred.predictions
     # Replace -100 in the IDs with the tokenizer pad token id
-    labels_ids[labels_ids == -100] = tokenizer.pad_token_id
+    # NOTE: Check the `ignore_index` argument in nn.CrossEntropyLoss.
+    ignore_index = -100
+    labels_ids[labels_ids == ignore_index] = tokenizer.pad_token_id
     # Get strings from IDs
+    input_str = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
     pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
     label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
     # Get Rouge score
@@ -62,16 +66,35 @@ def compute_metrics_with_chem(
     scores = {k: round(v, 4) for k, v in rouge_output.items()}
     # Get valid SMILES score
     valid_smiles = np.array([is_valid_smiles(s) for s in pred_str])
-    scores['valid_smiles'] = valid_smiles.mean()
+    scores['valid_smiles'] = valid_smiles.astype(int).mean()
     # Get has_three_substructures score
     num_substructures = np.array([has_three_substructures(s) for s in pred_str])
-    scores['has_three_substructures'] = num_substructures.mean()
+    scores['has_three_substructures'] = num_substructures.astype(int).mean()
     # Get has_all_attachment_points score
     num_attach_points = np.array([has_all_attachment_points(s) for s in pred_str])
-    scores['has_all_attachment_points'] = num_attach_points.mean()
+    scores['has_all_attachment_points'] = num_attach_points.astype(int).mean()
+
+    print('=' * 80)
+    print(pred)
+    print(pred.inputs)
+    print(pred.predictions)
+    print(pred_str)
+    print(label_str)
+    print('=' * 80)
+
     # Check if re-combining the substructures results in the original PROTAC
     checks = []
-    for pred_smiles, protac_smiles in zip(pred_str, label_str):
+    for i, (pred_smiles, protac_smiles, label_smiles) in enumerate(zip(pred_str, input_str, label_str)):
+        if i < 5:
+            print(f'protac: {protac_smiles}')
+            print(f'label:  {label_smiles}')
+            print(f'pred:   {pred_smiles}')
+            print(f'\t- valid: {is_valid_smiles(pred_smiles)}')
+            print(f'\t- has_three_substructures: {has_three_substructures(pred_smiles)}')
+            print(f'\t- has_all_attachment_points: {has_all_attachment_points(pred_smiles)}')
+            for j, s in enumerate(pred_smiles.split('.')):
+                print(f'Substruct n.{j}: {s} (valid: {is_valid_smiles(s)})')
+            print('-' * 80)
         substructs = split_prediction(pred_smiles)
         if substructs is None:
             checks.append(False)
@@ -83,6 +106,10 @@ def compute_metrics_with_chem(
             substructs['e3'],
         ))
     scores['reassembly'] = np.array(checks).astype(int).mean()
+
+    # Count how many times the character '*' appears in the prediction
+    num_stars = np.array([s.count('*') for s in pred_str])
+    scores['num_stars'] = num_stars.mean()
 
     # # Get tanimoto score
     # pred_str = np.array(pred_str)[valid_smiles == 1]

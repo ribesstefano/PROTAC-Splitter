@@ -1,5 +1,5 @@
-from transformers import AutoTokenizer, EncoderDecoderModel
 from typing import Optional
+from transformers import AutoTokenizer, EncoderDecoderModel
 
 
 def get_model(
@@ -7,16 +7,16 @@ def get_model(
     pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
     max_length: Optional[int] = 512,
     tie_encoder_decoder: bool = False,
-    do_sample: bool = False,
+    do_sample: bool = True,
 ) -> EncoderDecoderModel:
     """Get an EncoderDecoder model for training.
 
     Args:
         pretrained_encoder (str, optional): The name of the pretrained encoder. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
         pretrained_decoder (str, optional): The name of the pretrained decoder. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
-        max_length (Optional[int], optional): The maximum length. Defaults to 512.
+        max_length (Optional[int], optional): The maximum length. Defaults to 512. NOTE: Only used in generation, the maximum length of the input is determined by the positional embeddings.
         tie_encoder_decoder (bool, optional): Whether to tie the encoder and decoder weights. Defaults to False.
-        do_sample (bool, optional): Whether to sample. Defaults to False.
+        do_sample (bool, optional): Whether to sample. Defaults to True, i.e., 5 beams and top-k sampling (k = 20).
 
     Returns:
         EncoderDecoderModel: The model.
@@ -41,13 +41,13 @@ def get_model(
     bert2bert.decoder.config.max_length = max_length
     # bert2bert.config.min_length = 20
 
-    # # NOTE: Never sample, i.e., always return the token w/ highest probability
     if do_sample:
         bert2bert.config.do_sample = True
         bert2bert.config.num_beams = 5
         bert2bert.config.top_k = 20
     else:
         bert2bert.config.do_sample = False
+        bert2bert.config.num_beams = 1
     
     # bert2bert.config.max_new_tokens = 514
     # bert2bert.config.early_stopping = True

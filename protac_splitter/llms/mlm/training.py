@@ -200,3 +200,10 @@ def train_mlm_model(
             dataset=ds_name,
             dataset_args=ds_config,
         )
+        tokenizer.push_to_hub(
+            repo_id=hub_model_name,
+            commit_message="Upload tokenizer",
+            private=True,
+            token=hub_token,
+            tags=["PROTAC", "cheminformatics"],
+        )

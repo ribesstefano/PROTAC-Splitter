@@ -1,12 +1,3 @@
-# %% [markdown]
-# # Assemble Text Datasets
-# 
-# This notebook assembles the datasets in a text form so to be used for training LLMs.
-
-# %% [markdown]
-# ## Setup
-
-# %%
 import os
 import sys
 from typing import Mapping, Literal, Callable, List, ClassVar, Any, Tuple, Dict
@@ -23,11 +14,23 @@ from rdkit import RDLogger
 from rdkit import rdBase
 from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from datasets import Dataset, DatasetDict
+from numba import jit
 
 if 'ipykernel' in sys.modules:
     from tqdm.auto import tqdm  # for notebooks
 else:
     from tqdm import tqdm
+
+sys.path.append(os.path.join(os.getcwd(), 'protac_splitter'))
+
+from protac_splitter.protac_cheminformatics import (
+    reassemble_protac,
+)
+
+# Disable the RDKit warnings that pop up when RDKit fails to create molecules
+RDLogger.DisableLog("rdApp.*")
+blocker = rdBase.BlockLogs()
+
 
 def safe_display(*args):
     """Displays content only if running in a Jupyter notebook."""
@@ -37,46 +40,7 @@ def safe_display(*args):
     else:
         print(*args)
 
-# Disable the RDKit warnings that pop up when RDKit fails to create molecules
-RDLogger.DisableLog("rdApp.*")
-blocker = rdBase.BlockLogs()
 
-data_dir = os.path.join(os.getcwd(), 'data')
-
-# %%
-import sys
-
-sys.path.append(os.path.join(os.getcwd(), 'protac_splitter'))
-
-from protac_splitter.protac_cheminformatics import (
-    reassemble_protac,
-)
-
-# %%
-ds = {
-    'standard': {
-        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'standard', 'train.csv')),
-        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'standard', 'test.csv'))
-    },
-    'hardest': {
-        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'hardest', 'train.csv')),
-        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'hardest', 'test.csv'))
-    },
-    'e3_unique': {
-        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'e3_unique', 'train.csv')),
-        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'e3_unique', 'test.csv'))
-    },
-    'linker_unique': {
-        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'linker_unique', 'train.csv')),
-        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'linker_unique', 'test.csv'))
-    },
-    'poi_unique': {
-        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'poi_unique', 'train.csv')),
-        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'poi_unique', 'test.csv'))
-    }
-}
-
-# %%
 def remove_stereo(smiles: str) -> str:
     try:
         mol = Chem.MolFromSmiles(smiles)
@@ -85,6 +49,7 @@ def remove_stereo(smiles: str) -> str:
     except Exception as e:
         # print(e)
         return np.nan
+
 
 def randomize_smiles(smiles: str) -> str:
     try:
@@ -102,6 +67,7 @@ def canonize_smiles(smiles: str) -> str:
         return np.nan
 
 
+@jit(nopython=True)
 def levenshtein_distance(s1: str, s2: str) -> int:
     """ Returns the Levenshtein distance between two strings.
     
@@ -191,6 +157,7 @@ def join_substructures(
         e3_smiles: str,
         linker_smiles: str,
         poi_smiles: str,
+        random_order_prob: float = 0.0,
 ) -> str:
     """Joins the substructures with the linker to create a PROTAC SMILES string.
     
@@ -203,49 +170,15 @@ def join_substructures(
     Returns:
         The PROTAC SMILES string.
     """
-    first_substruct, second_substruct = get_ordered_substruct(protac_smiles, e3_smiles, poi_smiles)
-    return f'{first_substruct}.{linker_smiles}.{second_substruct}'
+    if np.random.rand() < random_order_prob:
+        # Randomly order all the three substructures
+        substructs = np.random.permutation([e3_smiles, linker_smiles, poi_smiles])
+        return f'{substructs[0]}.{substructs[1]}.{substructs[2]}'
+    else:
+        first_substruct, second_substruct = get_ordered_substruct(protac_smiles, e3_smiles, poi_smiles)
+        return f'{first_substruct}.{linker_smiles}.{second_substruct}'
 
 
-relevant_cols = [c for c in ds['standard']['train'].columns if 'smiles' in c.lower()]
-for i, row in ds['standard']['train'][relevant_cols].sample(5, random_state=42).iterrows():
-    protac_smiles = row.to_dict()['PROTAC SMILES']
-    e3_smiles = row.to_dict()['E3 Binder SMILES with direction']
-    linker_smiles = row.to_dict()['Linker SMILES with direction']
-    poi_smiles = row.to_dict()['POI Ligand SMILES with direction']
-    first_substruct, second_substruct = get_ordered_substruct(protac_smiles, e3_smiles, poi_smiles)
-
-    new_protac, _ = reassemble_protac(
-        randomize_smiles(poi_smiles),
-        randomize_smiles(linker_smiles),
-        randomize_smiles(e3_smiles),
-        e3_bond_type='rand_uniform',
-        poi_bond_type='rand_uniform',
-    )
-
-
-    # print('PROTAC:', protac_smiles)
-    # print('PROTAC:', canonize_smiles(new_protac))
-    # print('PROTAC:', new_protac)
-    # print('SUBSTRUCT:', f'{first_substruct}.{linker_smiles}.{second_substruct}')
-    # print('SUBSTRUCT:', randomize_smiles(f'{first_substruct}.{linker_smiles}.{second_substruct}'))
-    # print('SUBSTRUCT:', randomize_smiles(f'{first_substruct}.{linker_smiles}.{second_substruct}'))
-    # print('SUBSTRUCT:', randomize_smiles(f'{first_substruct}.{linker_smiles}.{second_substruct}'))
-    # safe_display(Chem.MolFromSmiles(protac_smiles))
-    # safe_display(Chem.MolFromSmiles(new_protac))
-    # safe_display(Chem.MolFromSmiles(randomize_smiles(protac_smiles)))
-    # safe_display(Chem.MolFromSmiles(randomize_smiles(protac_smiles)))
-    # safe_display(Chem.MolFromSmiles(randomize_smiles(protac_smiles)))
-    # safe_display(Chem.MolFromSmiles(first_substruct))
-    # print('-' * 80)
-
-# %% [markdown]
-# ## Augmentations
-# 
-# - 20x randomized SMILES per PROTACs
-# 
-
-# %%
 def get_unique_substructs(df: pd.DataFrame) -> Dict[str, np.ndarray]:
     return {
         'e3': df['E3 Binder SMILES with direction'].unique(),
@@ -322,8 +255,9 @@ def get_recombined_df(
     test_fps = df['test']['PROTAC SMILES'].apply(get_fingerprint).to_list()
 
     recombined_df = []
-    for i, (e3, linker, poi) in tqdm(enumerate(combinations), total=max_combinations, desc='Recombining PROTACs'):
-        if i >= max_combinations:
+    recombined_len = 0
+    for i, (e3, linker, poi) in tqdm(enumerate(combinations), total=max_combinations * 2, desc='Recombining PROTACs'):
+        if recombined_len >= max_combinations:
             break
         new_protac = None
         while not new_protac:
@@ -352,6 +286,7 @@ def get_recombined_df(
             'Linker SMILES with direction': linker,
             'POI Ligand SMILES with direction': poi,
         })
+        recombined_len += 1
         if i < 5 and verbose:
             print(f'{e3}.{linker}.{poi}')
             print(new_protac)
@@ -361,7 +296,6 @@ def get_recombined_df(
 
     return pd.DataFrame(recombined_df)
 
-np.random.seed(42)
 
 def push_ds_to_hub(train_df, test_df, config_name):
     dataset_dict = DatasetDict({
@@ -375,13 +309,51 @@ def push_ds_to_hub(train_df, test_df, config_name):
         token=os.getenv('HF_TOKEN'),
     )
 
-# %%
+
+def shuffle_substructs(s: str, shuffle_prob: float = 0.0) -> str:
+    if np.random.rand() < shuffle_prob:
+        substructs = s.split('.')
+        np.random.shuffle(substructs)
+        return '.'.join(substructs)
+    else:
+        return s
+
+
+np.random.seed(42)
+
+data_dir = os.path.join(os.getcwd(), 'data')
+
+ds = {
+    'standard': {
+        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'standard', 'train.csv')),
+        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'standard', 'test.csv'))
+    },
+    'hardest': {
+        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'hardest', 'train.csv')),
+        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'hardest', 'test.csv'))
+    },
+    'e3_unique': {
+        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'e3_unique', 'train.csv')),
+        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'e3_unique', 'test.csv'))
+    },
+    'linker_unique': {
+        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'linker_unique', 'train.csv')),
+        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'linker_unique', 'test.csv'))
+    },
+    'poi_unique': {
+        'train': pd.read_csv(os.path.join(data_dir, 'datasets', 'poi_unique', 'train.csv')),
+        'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'poi_unique', 'test.csv'))
+    }
+}
+
 protac_col = 'PROTAC SMILES'
 e3_col = 'E3 Binder SMILES with direction'
 linker_col = 'Linker SMILES with direction'
 poi_col = 'POI Ligand SMILES with direction'
 
 max_rand_smiles_per_protac = 20
+max_rand_samples = 100_000
+shuffle_prob = 0.3
 
 text_ds = {}
 for config_name, datasets in ds.items():
@@ -399,7 +371,6 @@ for config_name, datasets in ds.items():
 
         # Rename 'PROTAC SMILES' column to 'text'
         text_df = text_df.rename(columns={'PROTAC SMILES': 'text'})
-
         text_ds[config_name][split] = text_df[['text', 'labels']]
 
 
@@ -409,12 +380,17 @@ for config_name, datasets in ds.items():
 
     # TODO: Add configuration with randomized data
     randomized_df = []
-    for _ in tqdm(range(max_rand_smiles_per_protac), desc=f'Randomizing {config_name} substructures'):
+    num_samples = len(train_df)
+    while num_samples < max_rand_samples:
         tmp = train_df.copy()
         tmp['text'] = tmp['text'].apply(randomize_smiles)
         tmp['labels'] = tmp['labels'].apply(randomize_smiles)
         randomized_df.append(tmp)
+        num_samples += len(tmp)
     randomized_df = pd.concat(randomized_df).drop_duplicates()[['text', 'labels']]
+    # Shuffle the substructures with a certain probability
+    randomized_df['labels'] = randomized_df['labels'].apply(shuffle_substructs, shuffle_prob=shuffle_prob)
+    print(f'Number of randomized PROTACs: {len(randomized_df)}')
     push_ds_to_hub(pd.concat([train_df, randomized_df]), test_df, f'{config_name}_randomized')
 
     # TODO: Add configuration with recombined data
@@ -423,6 +399,9 @@ for config_name, datasets in ds.items():
     recombined_df['labels'] = recombined_df.progress_apply(lambda x: join_substructures(x[protac_col], x[e3_col], x[linker_col], x[poi_col]), axis=1)
     recombined_df = recombined_df.rename(columns={'PROTAC SMILES': 'text'})
     recombined_df = recombined_df.drop_duplicates()[['text', 'labels']]
+    # Shuffle the substructures with a certain probability
+    recombined_df['labels'] = recombined_df['labels'].apply(shuffle_substructs, shuffle_prob=shuffle_prob)
+    print(f'Number of recombined PROTACs: {len(recombined_df)}')
     push_ds_to_hub(pd.concat([train_df, recombined_df]), test_df, f'{config_name}_recombined')
 
     # TODO: Add configuration with recombined and randomized data
@@ -430,4 +409,7 @@ for config_name, datasets in ds.items():
     rec_rand_df['text'] = rec_rand_df['text'].apply(randomize_smiles)
     rec_rand_df['labels'] = rec_rand_df['labels'].apply(randomize_smiles)
     rec_rand_df = rec_rand_df.drop_duplicates()[['text', 'labels']]
+    # Shuffle the substructures with a certain probability
+    rec_rand_df['labels'] = rec_rand_df['labels'].apply(shuffle_substructs, shuffle_prob=shuffle_prob)
+    print(f'Number of recombined and randomized PROTACs: {len(rec_rand_df)}')
     push_ds_to_hub(pd.concat([train_df, rec_rand_df]), test_df, f'{config_name}_rand_recombined')

@@ -1,9 +1,7 @@
-from typing import Optional, Dict
+import os
+from typing import Optional, Dict, Any
 from functools import partial
 import subprocess
-import ssl
-
-ssl._create_default_https_context = ssl._create_unverified_context
 
 import evaluate
 import huggingface_hub as hf
@@ -11,7 +9,9 @@ from rdkit import Chem
 from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
+    DataCollatorForSeq2Seq,
     AutoTokenizer,
+    GenerationConfig,
 )
 
 from .data_utils import load_tokenized_dataset
@@ -19,6 +19,7 @@ from .evaluation import compute_metrics_with_chem
 from .hf_utils import (
     create_hf_repository,
     delete_hf_repository,
+    repo_exists,
 )
 from .model_utils import get_model
 
@@ -42,8 +43,9 @@ def train_model(
     encoder_max_length: int = 512,
     decoder_max_length: int = 512,
     tie_encoder_decoder: bool = False,
-    delete_repo_first: bool = False,
-    training_args: Optional[Seq2SeqTrainingArguments] = None,
+    delete_repo_if_exists: bool = False,
+    delete_local_repo_if_exists: bool = False,
+    training_args: Optional[Seq2SeqTrainingArguments | Dict[str, Any]] = None,
     resume_from_checkpoint: Optional[str] = None,
     optuna_n_trials: int = 0,
 ):
@@ -67,7 +69,7 @@ def train_model(
         pretrained_decoder (str, optional): The name of the pretrained decoder. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
         encoder_max_length (int, optional): The maximum length of the encoder. Defaults to 256.
         decoder_max_length (int, optional): The maximum length of the decoder. Defaults to 256.
-        delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
+        delete_repo_if_exists (bool, optional): Whether to delete the repository first. Defaults to False.
         training_args (Optional[Seq2SeqTrainingArguments], optional): The training arguments. Defaults to None.
         resume_from_checkpoint (Optional[str], optional): The checkpoint to resume training from. Defaults to None.
         optuna_n_trials (int, optional): The number of Optuna trials. Defaults to 0, i.e., no Optuna hyperparameter search.
@@ -78,8 +80,20 @@ def train_model(
     output_dir += f"/{model_id}"
     if organization is not None:
         hub_model_id = f"{organization}/{model_id}"
-        if delete_repo_first:
+        if delete_repo_if_exists and repo_exists(hub_model_id, token=hub_token):
             delete_hf_repository(repo_id=hub_model_id, token=hub_token)
+            if not repo_exists(hub_model_id, token=hub_token):
+                print(f"Repository '{hub_model_id}' deleted.")
+            else:
+                print(f"Repository '{hub_model_id}' could not be deleted.")
+                return
+        if delete_local_repo_if_exists and os.path.exists(output_dir):
+            subprocess.run(["rm", "-rf", output_dir])
+            if not os.path.exists(output_dir):
+                print(f"Local repository '{output_dir}' deleted.")
+            else:
+                print(f"Local repository '{output_dir}' could not be deleted.")
+                return
         repo_url = create_hf_repository(
             repo_id=hub_model_id,
             repo_type="model",
@@ -90,6 +104,7 @@ def train_model(
         print(f"Repository '{hub_model_id}' created at URL: {repo_url}")
     else:
         hub_model_id = None
+    print(f"Hub model ID: {hub_model_id}")
     # try:
     #     bert2bert = EncoderDecoderModel.from_pretrained(hub_model_id)
     #     print(f"Skipping pretrained model {hub_model_id}.")
@@ -101,6 +116,7 @@ def train_model(
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     elif tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(pretrained_encoder)
+
     dataset_tokenized = load_tokenized_dataset(
         ds_name,
         ds_config,
@@ -112,15 +128,23 @@ def train_model(
     )
     per_device_batch_size = batch_size // gradient_accumulation_steps
     if training_args is None:
+        generation_config = GenerationConfig(
+            max_length=512,
+            do_sample=True,
+            num_beams=5,
+            temperature=1.0,
+        )
         training_args = Seq2SeqTrainingArguments(
             output_dir=output_dir,
             # Optimizer-related configs
             learning_rate=learning_rate,
             optim="adamw_torch",
             lr_scheduler_type="cosine", # Default: "linear"
+            warmup_ratio=0.05,
             # Generation configs
             predict_with_generate=True,
-            generation_num_beams=1, # Greedy strategy
+            generation_num_beams=5, # Greedy strategy
+            generation_config=generation_config,
             # Batch size and device configs
             per_device_train_batch_size=per_device_batch_size,
             per_device_eval_batch_size=per_device_batch_size,
@@ -132,14 +156,15 @@ def train_model(
             evaluation_strategy="steps",
             max_steps=max_steps,
             num_train_epochs=num_train_epochs,
-            eval_steps=100,
+            eval_steps=5, # NOTE: 100
             save_steps=200,
             # eval_steps=7500,
             # warmup_steps=2000,
             save_strategy="steps",
             save_total_limit=1,
             load_best_model_at_end=True,
-            metric_for_best_model="valid_smiles",
+            metric_for_best_model="loss",
+            include_inputs_for_metrics=True,
             # Logging configs
             log_level="info",
             logging_steps=50,
@@ -155,6 +180,8 @@ def train_model(
             seed=42,
             data_seed=42,
         )
+    elif isinstance(training_args, dict):
+        training_args = Seq2SeqTrainingArguments(**training_args)
     rouge = evaluate.load("rouge")
     fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
         radius=11,
@@ -172,9 +199,11 @@ def train_model(
         max_length=encoder_max_length,
         tie_encoder_decoder=tie_encoder_decoder,
     )
+    data_collator = DataCollatorForSeq2Seq(tokenizer, model=bert2bert)
     trainer = Seq2SeqTrainer(
         model_init=bert2bert,
         tokenizer=tokenizer,
+        data_collator=data_collator,
         args=training_args,
         compute_metrics=metric,
         train_dataset=dataset_tokenized["train"],
@@ -206,17 +235,21 @@ def train_model(
             resume_from_checkpoint=resume_from_checkpoint, # "last-checkpoint",
         )
     if hub_model_id is not None:
-        # Disable LFS locking API for the current repository
-        subprocess.run([
-            "git", "config", f"lfs.https://huggingface.co/ailab-bio/{hub_model_id}.git/info/lfs.locksverify", "false"
-        ])
+        tokenizer.save_pretrained(output_dir)
         trainer.push_to_hub(
             commit_message="Initial version",
             model_name=hub_model_id,
             license="mit",
             finetuned_from=f"{pretrained_encoder}",
-            tasks=["Text2Text Generation"],
+            tasks=["Text2Text Generation", "question-answering"],
             tags=["PROTAC", "cheminformatics"],
-            dataset=ds_name,
-            dataset_args=ds_config,
+            dataset=[ds_name],
+            dataset_args=[ds_config],
         )
+        # tokenizer.push_to_hub(
+        #     repo_id=hub_model_id,
+        #     commit_message="Upload tokenizer",
+        #     private=True,
+        #     token=hub_token,
+        #     tags=["PROTAC", "cheminformatics"],
+        # )

@@ -5,6 +5,7 @@ from datasets import load_dataset, concatenate_datasets, Dataset
 from transformers import AutoTokenizer
 from typing import Optional
 
+
 def process_data_to_model_inputs(
     batch,
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
@@ -19,8 +20,9 @@ def process_data_to_model_inputs(
     batch["input_ids"] = inputs.input_ids
     batch["attention_mask"] = inputs.attention_mask
     batch["labels"] = outputs.input_ids.copy()
-    # because BERT automatically shifts the labels, the labels correspond exactly to `decoder_input_ids`.
-    # We have to make sure that the PAD token is ignored
+    # Because BERT automatically shifts the labels, the labels correspond exactly to `decoder_input_ids`.
+    # We have to make sure that the PAD token is ignored when calculating the loss.
+    # NOTE: Check the `ignore_index` argument in nn.CrossEntropyLoss.
     batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
     return batch
 
