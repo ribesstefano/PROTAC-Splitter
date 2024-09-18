@@ -1,20 +1,17 @@
 import os
 import sys
-from typing import Mapping, Literal, Callable, List, ClassVar, Any, Tuple, Dict
+from typing import Literal, Tuple, Dict, Optional, Tuple, Generator
 from collections import Counter, defaultdict
 from itertools import product
 
 import numpy as np
+import numba as nb
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from rdkit import Chem
-from rdkit.Chem import AllChem, DataStructs, MACCSkeys, rdFMCS, Draw
+from rdkit.Chem import AllChem, DataStructs
 from rdkit import RDLogger
 from rdkit import rdBase
-from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from datasets import Dataset, DatasetDict
-from numba import jit
 
 if 'ipykernel' in sys.modules:
     from tqdm.auto import tqdm  # for notebooks
@@ -23,9 +20,9 @@ else:
 
 sys.path.append(os.path.join(os.getcwd(), 'protac_splitter'))
 
-from protac_splitter.protac_cheminformatics import (
-    reassemble_protac,
-)
+from protac_splitter.protac_cheminformatics import reassemble_protac
+from protac_splitter.evaluation import check_substructs
+
 
 # Disable the RDKit warnings that pop up when RDKit fails to create molecules
 RDLogger.DisableLog("rdApp.*")
@@ -67,7 +64,7 @@ def canonize_smiles(smiles: str) -> str:
         return np.nan
 
 
-@jit(nopython=True)
+@nb.jit(nopython=True)
 def levenshtein_distance(s1: str, s2: str) -> int:
     """ Returns the Levenshtein distance between two strings.
     
@@ -152,31 +149,40 @@ def get_ordered_substruct(
         return substruct2, substruct1
     
 
+@nb.jit(nopython=True)
 def join_substructures(
         protac_smiles: str,
         e3_smiles: str,
         linker_smiles: str,
         poi_smiles: str,
         random_order_prob: float = 0.0,
+        fixed_first_sub: Optional[Literal['e3', 'poi']] = 'e3',
 ) -> str:
-    """Joins the substructures with the linker to create a PROTAC SMILES string.
-    
+    """Joins the substructures with the linker to create a PROTAC SMILES string. Default is to always have the E3 substructure first, then the linker, and finally the POI substructure.
+
     Args:
         protac_smiles: The PROTAC SMILES string.
         e3_smiles: The E3 ligand SMILES string.
         linker_smiles: The linker SMILES string.
         poi_smiles: The POI ligand SMILES string.
+        random_order_prob: The probability of randomly ordering the substructures.
+        fixed_first_sub: The first substructure to be fixed in the PROTAC SMILES string.
         
     Returns:
-        The PROTAC SMILES string.
+        The concatenated SMILES strings of the substructures.
     """
     if np.random.rand() < random_order_prob:
         # Randomly order all the three substructures
-        substructs = np.random.permutation([e3_smiles, linker_smiles, poi_smiles])
-        return f'{substructs[0]}.{substructs[1]}.{substructs[2]}'
-    else:
-        first_substruct, second_substruct = get_ordered_substruct(protac_smiles, e3_smiles, poi_smiles)
-        return f'{first_substruct}.{linker_smiles}.{second_substruct}'
+        rand_idx = np.random.permutation(np.arange(3))
+        substructs = [e3_smiles, linker_smiles, poi_smiles]
+        return f'{substructs[rand_idx[0]]}.{substructs[rand_idx[1]]}.{substructs[rand_idx[2]]}'
+    elif fixed_first_sub == 'e3':
+        return f'{e3_smiles}.{linker_smiles}.{poi_smiles}'
+    elif fixed_first_sub == 'poi':
+        return f'{poi_smiles}.{linker_smiles}.{e3_smiles}'
+    # else:
+    #     first_substruct, second_substruct = get_ordered_substruct(protac_smiles, e3_smiles, poi_smiles)
+    #     return f'{first_substruct}.{linker_smiles}.{second_substruct}'
 
 
 def get_unique_substructs(df: pd.DataFrame) -> Dict[str, np.ndarray]:
@@ -217,60 +223,97 @@ def get_fingerprint(smiles: str, morgan_fpgen = None, radius: int = 10, fpSize: 
     return morgan_fpgen.GetFingerprint(Chem.MolFromSmiles(smiles))
 
 
+# @nb.jit()
+def rand_combinations(
+        unique_substructs: Dict[str, np.ndarray],
+        probs: Dict[str, Optional[np.ndarray]],
+        # unique_e3s: np.ndarray,
+        # unique_linkers: np.ndarray,
+        # unique_pois: np.ndarray,
+        # prob_e3s: Optional[np.ndarray],
+        # prob_linkers: Optional[np.ndarray],
+        # prob_pois: Optional[np.ndarray],
+) -> Generator[Tuple[str, str, str], None, None]:
+
+    keys = ['e3', 'linker', 'poi']
+    substruct2idx = {}
+    for key in keys:
+        substruct2idx[key] = {idx: item for idx, item in enumerate(unique_substructs[key])}
+    
+    # Step 3: Initialize
+    yielded_combs = set()
+    max_combinations = np.prod([len(unique_substructs[k]) for k in keys])
+
+    # Step 4: Generate combinations
+    for _ in range(max_combinations):
+        # Generate a combination tuple of indices
+        comb_indices = tuple(np.random.choice(len(unique_substructs[s]), p=probs[s]) for s in keys)
+
+        # Encode into single integer before checking set membership
+        # Assuming each substructure has less than 2^32 items, i.e., ~4B items
+        # NOTE: This option is more memory-efficient but requires encoding and
+        # decoding.
+        encoded = (comb_indices[0] << 64) | (comb_indices[1] << 32) | comb_indices[2]
+        if encoded not in yielded_combs:
+            yielded_combs.add(encoded)
+            comb = {s: substruct2idx[s][idx] for s, idx in zip(keys, comb_indices)}
+            yield comb
+
+
 def get_recombined_df(
         df: Dict[str, pd.DataFrame],
         max_combinations: int = 5000,
         uniform_sampling: bool = True,
         similarity_threshold: float = 0.4,
+        max_tries_per_combination: int = 15,
         verbose: int = 0,
 ) -> pd.DataFrame:
+    """Recombine the substructures of PROTACs to create new PROTACs.
+
+    Args:
+        df: The dataset containing the substructures.
+        max_combinations: The maximum number of combinations to generate.
+        uniform_sampling: Whether to sample uniformly from the substructures.
+        similarity_threshold: The Tanimoto similarity threshold.
+        verbose: The verbosity level.
+
+    Returns:
+        pd.DataFrame: The recombined PROTACs.
+    """
+    # Get unique substructures, then convert them to NumBa-friendly dict format
     unique_substructs = get_unique_substructs(df['train'])
 
-    # max_samples = int(max_combinations**(1/3))
-    # if uniform_sampling:
-    #     probs = {k: None for k in ['e3', 'linker', 'poi']}
-    # else:
-    #     probs = get_substruct_prob(df['train'])
-
-    # combinations = product(
-    #     np.random.choice(unique_substructs['e3'], min(max_samples, unique_substructs['e3'].size), replace=False, p=probs['e3']),
-    #     np.random.choice(unique_substructs['linker'], min(max_samples, unique_substructs['e3'].size), replace=False, p=probs['linker']),
-    #     np.random.choice(unique_substructs['poi'], min(max_samples, unique_substructs['e3'].size), replace=False, p=probs['poi']),
-    # )
-    # num_combinations = min(max_samples, unique_substructs['e3'].size) * min(max_samples, unique_substructs['e3'].size) * min(max_samples, unique_substructs['e3'].size)
-    # if verbose:
-    #     print(f'Maximum number of samples: {max_samples}')
-    #     print(f'Number of actual combinations: {num_combinations:,}')
-
-    np.random.shuffle(unique_substructs['e3']),
-    np.random.shuffle(unique_substructs['linker']),
-    np.random.shuffle(unique_substructs['poi']),
-    combinations = product(
-        unique_substructs['e3'],
-        unique_substructs['linker'],
-        unique_substructs['poi'],
-    )
+    # Get substructure probabilities, then convert them to NumBa-friendly dict format
+    if uniform_sampling:
+        probs = {k: None for k in ['e3', 'linker', 'poi']}
+    else:
+        probs = get_substruct_prob(df['train'])
 
     # Precompute fingerprints of test PROTACs
     test_fps = df['test']['PROTAC SMILES'].apply(get_fingerprint).to_list()
 
+    # Generation loop
     recombined_df = []
     recombined_len = 0
-    for i, (e3, linker, poi) in tqdm(enumerate(combinations), total=max_combinations * 2, desc='Recombining PROTACs'):
+    for comb in tqdm(rand_combinations(unique_substructs, probs), total=max_combinations * 2, desc='Recombining PROTACs'):
         if recombined_len >= max_combinations:
             break
         new_protac = None
-        while not new_protac:
+        for _ in range(max_tries_per_combination):
             try:
                 new_protac, _ = reassemble_protac(
-                    poi,
-                    linker,
-                    e3,
+                    poi_smiles=comb['poi'],
+                    linker_smiles=comb['linker'],
+                    e3_smiles=comb['e3'],
                     e3_bond_type='rand_uniform',
                     poi_bond_type='rand_uniform',
                 )
-            except:
+            except Exception as e:
                 pass
+            if new_protac:
+                break
+        if new_protac is None:
+            continue
 
         # Calculate bulk Tanimoto similarity
         fp = get_fingerprint(new_protac)
@@ -282,19 +325,84 @@ def get_recombined_df(
 
         recombined_df.append({
             'PROTAC SMILES': new_protac,
-            'E3 Binder SMILES with direction': e3,
-            'Linker SMILES with direction': linker,
-            'POI Ligand SMILES with direction': poi,
+            'E3 Binder SMILES with direction': comb['e3'],
+            'Linker SMILES with direction': comb['linker'],
+            'POI Ligand SMILES with direction': comb['poi'],
         })
         recombined_len += 1
-        if i < 5 and verbose:
-            print(f'{e3}.{linker}.{poi}')
+
+        if recombined_len < 5 and verbose:
+            print(f'{comb["e3"]}.{comb["linker"]}.{comb["poi"]}')
             print(new_protac)
             print(randomize_smiles(new_protac))
             safe_display(Chem.MolFromSmiles(new_protac))
             print('-' * 80)
 
     return pd.DataFrame(recombined_df)
+
+    # # combinations = product(
+    # #     np.random.choice(unique_substructs['e3'], min(max_samples, unique_substructs['e3'].size), replace=False, p=probs['e3']),
+    # #     np.random.choice(unique_substructs['linker'], min(max_samples, unique_substructs['e3'].size), replace=False, p=probs['linker']),
+    # #     np.random.choice(unique_substructs['poi'], min(max_samples, unique_substructs['e3'].size), replace=False, p=probs['poi']),
+    # # )
+    # # num_combinations = min(max_samples, unique_substructs['e3'].size) * min(max_samples, unique_substructs['e3'].size) * min(max_samples, unique_substructs['e3'].size)
+    # # if verbose:
+    # #     print(f'Maximum number of samples: {max_samples}')
+    # #     print(f'Number of actual combinations: {num_combinations:,}')
+
+    # np.random.shuffle(unique_substructs['e3']),
+    # np.random.shuffle(unique_substructs['linker']),
+    # np.random.shuffle(unique_substructs['poi']),
+    # combinations = product(
+    #     unique_substructs['e3'],
+    #     unique_substructs['linker'],
+    #     unique_substructs['poi'],
+    # )
+
+    # # Precompute fingerprints of test PROTACs
+    # test_fps = df['test']['PROTAC SMILES'].apply(get_fingerprint).to_list()
+
+    # recombined_df = []
+    # recombined_len = 0
+    # for i, (e3, linker, poi) in tqdm(enumerate(combinations), total=max_combinations * 2, desc='Recombining PROTACs'):
+    #     if recombined_len >= max_combinations:
+    #         break
+    #     new_protac = None
+    #     while not new_protac:
+    #         try:
+    #             new_protac, _ = reassemble_protac(
+    #                 poi,
+    #                 linker,
+    #                 e3,
+    #                 e3_bond_type='rand_uniform',
+    #                 poi_bond_type='rand_uniform',
+    #             )
+    #         except:
+    #             pass
+
+    #     # Calculate bulk Tanimoto similarity
+    #     fp = get_fingerprint(new_protac)
+    #     similarities = DataStructs.BulkTanimotoSimilarity(fp, test_fps)
+    #     avg_similarity = np.mean(similarities)
+
+    #     if new_protac in df['test']['PROTAC SMILES'].values or avg_similarity > similarity_threshold:
+    #         continue
+
+    #     recombined_df.append({
+    #         'PROTAC SMILES': new_protac,
+    #         'E3 Binder SMILES with direction': e3,
+    #         'Linker SMILES with direction': linker,
+    #         'POI Ligand SMILES with direction': poi,
+    #     })
+    #     recombined_len += 1
+    #     if i < 5 and verbose:
+    #         print(f'{e3}.{linker}.{poi}')
+    #         print(new_protac)
+    #         print(randomize_smiles(new_protac))
+    #         safe_display(Chem.MolFromSmiles(new_protac))
+    #         print('-' * 80)
+
+    # return pd.DataFrame(recombined_df)
 
 
 def push_ds_to_hub(train_df, test_df, config_name):
@@ -317,6 +425,37 @@ def shuffle_substructs(s: str, shuffle_prob: float = 0.0) -> str:
         return '.'.join(substructs)
     else:
         return s
+
+
+def randomize_dataset(df):
+    df['text'] = df['text'].apply(randomize_smiles)
+    df['labels'] = df['labels'].apply(randomize_smiles)
+    return df
+
+
+def shuffle_dataset(df, shuffle_prob=0.3):
+    df['labels'] = df['labels'].apply(shuffle_substructs, shuffle_prob=shuffle_prob)
+    return df
+
+
+def check_dataset(d):
+    tqdm.pandas(desc='Checking train dataset')
+    train_check = all(d['train'].progress_apply(lambda x: check_substructs(
+            x['PROTAC SMILES'],
+            x['POI Ligand SMILES with direction'],
+            x['Linker SMILES with direction'],
+            x['E3 Binder SMILES with direction'],
+        ), axis=1)
+    )
+    tqdm.pandas(desc='Checking test dataset')
+    test_check = all(d['test'].progress_apply(lambda x: check_substructs(
+            x['PROTAC SMILES'],
+            x['POI Ligand SMILES with direction'],
+            x['Linker SMILES with direction'],
+            x['E3 Binder SMILES with direction'],
+        ), axis=1)
+    )
+    return train_check and test_check
 
 
 np.random.seed(42)
@@ -346,20 +485,31 @@ ds = {
     }
 }
 
+print('Checking datasets...')
+for config_name, datasets in ds.items():
+    print(f'Checking {config_name} dataset...')
+    if not check_dataset(datasets):
+        print(f'Error in {config_name} dataset: reassembly failed.')
+        sys.exit(1)
+print('All datasets are correct (i.e., reassemblying substructures works).')
+
 protac_col = 'PROTAC SMILES'
 e3_col = 'E3 Binder SMILES with direction'
 linker_col = 'Linker SMILES with direction'
 poi_col = 'POI Ligand SMILES with direction'
 
-max_rand_smiles_per_protac = 20
 max_rand_samples = 100_000
-shuffle_prob = 0.3
+shuffle_prob = 0.3 # Augmentation not used, for now...
 
 text_ds = {}
 for config_name, datasets in ds.items():
     # TODO: The hardest split is not done yet.
-    if config_name == 'hardest':
+    if config_name != 'standard':
         continue
+
+    print('-' * 80)
+    print(f'Processing {config_name} dataset...')
+    print('-' * 80)
 
     text_ds[config_name] = {}
     for split, dataset in datasets.items():
@@ -373,43 +523,50 @@ for config_name, datasets in ds.items():
         text_df = text_df.rename(columns={'PROTAC SMILES': 'text'})
         text_ds[config_name][split] = text_df[['text', 'labels']]
 
-
     train_df = text_ds[config_name]['train']
     test_df = text_ds[config_name]['test']
     push_ds_to_hub(train_df, test_df, config_name)
 
+    print('-' * 80)
+    print(f'Processing {config_name} dataset with randomized substructures...')
+    print('-' * 80)
     # TODO: Add configuration with randomized data
     randomized_df = []
     num_samples = len(train_df)
     while num_samples < max_rand_samples:
-        tmp = train_df.copy()
-        tmp['text'] = tmp['text'].apply(randomize_smiles)
-        tmp['labels'] = tmp['labels'].apply(randomize_smiles)
+        tmp = randomize_dataset(train_df.copy())
         randomized_df.append(tmp)
         num_samples += len(tmp)
-    randomized_df = pd.concat(randomized_df).drop_duplicates()[['text', 'labels']]
-    # Shuffle the substructures with a certain probability
-    randomized_df['labels'] = randomized_df['labels'].apply(shuffle_substructs, shuffle_prob=shuffle_prob)
+    randomized_df = pd.concat(randomized_df)[['text', 'labels']].drop_duplicates()
     print(f'Number of randomized PROTACs: {len(randomized_df)}')
     push_ds_to_hub(pd.concat([train_df, randomized_df]), test_df, f'{config_name}_randomized')
 
+    print('-' * 80)
+    print(f'Processing {config_name} dataset with recombined substructures...')
+    print('-' * 80)
     # TODO: Add configuration with recombined data
     recombined_df = get_recombined_df(datasets, max_combinations=len(randomized_df))
     tqdm.pandas(desc=f'Joining {config_name} recombined substructures', total=len(recombined_df))
     recombined_df['labels'] = recombined_df.progress_apply(lambda x: join_substructures(x[protac_col], x[e3_col], x[linker_col], x[poi_col]), axis=1)
     recombined_df = recombined_df.rename(columns={'PROTAC SMILES': 'text'})
-    recombined_df = recombined_df.drop_duplicates()[['text', 'labels']]
-    # Shuffle the substructures with a certain probability
-    recombined_df['labels'] = recombined_df['labels'].apply(shuffle_substructs, shuffle_prob=shuffle_prob)
+    recombined_df = recombined_df[['text', 'labels']].drop_duplicates()
     print(f'Number of recombined PROTACs: {len(recombined_df)}')
     push_ds_to_hub(pd.concat([train_df, recombined_df]), test_df, f'{config_name}_recombined')
 
+    print('-' * 80)
+    print(f'Processing {config_name} dataset with recombined and randomized substructures...')
+    print('-' * 80)
     # TODO: Add configuration with recombined and randomized data
     rec_rand_df = recombined_df.copy()
-    rec_rand_df['text'] = rec_rand_df['text'].apply(randomize_smiles)
-    rec_rand_df['labels'] = rec_rand_df['labels'].apply(randomize_smiles)
-    rec_rand_df = rec_rand_df.drop_duplicates()[['text', 'labels']]
-    # Shuffle the substructures with a certain probability
-    rec_rand_df['labels'] = rec_rand_df['labels'].apply(shuffle_substructs, shuffle_prob=shuffle_prob)
+    # Shuffle the rows of the DataFrame
+    rec_rand_df = rec_rand_df.sample(frac=1).reset_index(drop=True)
+    # Get 50% of the DataFrame rows
+    rand_df = rec_rand_df.iloc[:len(rec_rand_df) // 2, :].copy()
+    rec_df = rec_rand_df.iloc[len(rec_rand_df) // 2:, :].copy()
+    # Randomize one half of the DataFrame
+    rand_df = randomize_dataset(rand_df)
+    # Join them back together
+    rec_rand_df = pd.concat([rec_df, rand_df]).reset_index(drop=True)
+    rec_rand_df = rec_rand_df[['text', 'labels']].drop_duplicates()
     print(f'Number of recombined and randomized PROTACs: {len(rec_rand_df)}')
-    push_ds_to_hub(pd.concat([train_df, rec_rand_df]), test_df, f'{config_name}_rand_recombined')
+    push_ds_to_hub(pd.concat([train_df, rec_rand_df]), test_df, f'{config_name}_randomized_recombined')

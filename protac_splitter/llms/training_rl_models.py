@@ -1,5 +1,7 @@
 from typing import Optional, Literal, Dict
 from functools import partial
+import os
+import subprocess
 
 import torch
 import evaluate
@@ -19,26 +21,23 @@ from trl import (
     PPOTrainer,
     DPOTrainer,
 )
+from accelerate.utils import LoggerType
 
-from .llms.data_utils import (
+from .data_utils import (
     load_trl_dataset,
     data_collator_for_trl,
 )
 
-from .llms.hf_utils import (
+from .hf_utils import (
     create_hf_repository,
     delete_hf_repository,
-)
-from .llms.evaluation import (
-    is_valid_smiles,
-    compute_metrics_with_chem,
+    repo_exists,
 )
 from .evaluation import (
-    has_three_substructures,
-    has_all_attachment_points,
-    same_atom_counts_and_types,
+    compute_metrics_with_chem,
+    split_prediction,
 )
-from .evaluation import is_substructure, check_substructs
+from ..evaluation import check_substructs
 
 
 def clean_text(text: str) -> str:
@@ -58,21 +57,10 @@ def reward_function(
     Returns:
         float: The reward value.
     """
-    if not has_three_substructures(response):
-        return 0.
-    if not has_all_attachment_points(response):
-        return 0.
 
-    substructs = {}
-    for s in response.split('.'):
-        if not is_valid_smiles(s):
-            return 0.
-        if '[*:1]' in s and '[*:2]' in s:
-            substructs['linker'] = s
-        elif '[*:1]' in s and '[*:2]' not in s:
-            substructs['poi'] = s
-        elif '[*:1]' not in s and '[*:2]' in s:
-            substructs['e3'] = s
+    substructs = split_prediction(response)
+    if substructs is None:
+        return torch.Tensor(-1.)
     
     if not check_substructs(
         protac_smiles=query,
@@ -83,40 +71,37 @@ def reward_function(
         poi_attachment_id=1,
         e3_attachment_id=2,
     ):
-        return 0.
+        return torch.Tensor(0.)
 
-    # response_mol = Chem.MolFromSmiles(response)
-    # if response_mol is None:
-    #     return 0.
-    # if not same_atom_counts_and_types(response_mol, query):
-    #     return 0.
-    # return 1. - same_atom_counts_and_types(response, query, get_atoms_diff=True)
-    # substructures = response.split(".")
-    # for substructure in substructures:
-    #     if not is_substructure(query, response):
-    #         return 0.
-    return 1.
+    return torch.Tensor(1.)
 
 
 def train_ppo_model(
-    model_name: str = "ailab-bio/PROTAC-Splitter-PPO",
+    model_id: str = "PROTAC-Splitter-PPO-standard_rand_recombined-ChemBERTa-zinc-base",
+    organization: str = 'ailab-bio',
+    output_dir: str = "./models/",
     max_steps: int = 2000,
-    ppo_epochs: int = 4,
+    ppo_epochs: int = 5,
     batch_size: int = 128,
     hub_token: Optional[str] = None,
-    pretrained_model_name: str = "ailab-bio/PROTAC-Splitter_untied_80-20-split",
+    pretrained_model_name: str = "ailab-bio/PROTAC-Splitter-standard_rand_recombined-ChemBERTa-zinc-base",
     max_length: int = 512,
-    delete_repo_first: bool = False,     
+    delete_repo_if_exists: bool = False,
+    delete_local_repo_if_exists: bool = False,
+    ds_name: str = "ailab-bio/PROTAC-Splitter-Dataset",
+    ds_config: str = "standard",
 ):
     """ Trains a PPO model on a given dataset.
     
     Args:
-        model_name (str, optional): The name of the model to be trained. Defaults to "ailab-bio/PROTAC-Splitter-PPO".
+        model_id (str, optional): The name of the model to be trained. Defaults to "PROTAC-Splitter-PPO-standard_rand_recombined-ChemBERTa-zinc-base".
+        organization (str, optional): The organization name. Defaults to 'ailab-bio'.
+        output_dir (str, optional): The output directory. Defaults to "./models/".
         max_steps (int, optional): The maximum number of training steps. Defaults to 2000.
         ppo_epochs (int, optional): The number of PPO epochs. Defaults to 4.
         batch_size (int, optional): The batch size. Defaults to 128.
         hub_token (Optional[str], optional): The Hugging Face token. Defaults to None.
-        pretrained_model_name (str, optional): The name of the pretrained model. Defaults to "ailab-bio/PROTAC-Splitter_untied_80-20-split".
+        pretrained_model_name (str, optional): The name of the pretrained model. Defaults to "ailab-bio/PROTAC-Splitter-standard_rand_recombined-ChemBERTa-zinc-base".
         max_length (int, optional): The maximum length of the input sequence. Defaults to 512.
         delete_repo_first (bool, optional): Whether to delete the repository first. Defaults to False.
     """
@@ -124,64 +109,131 @@ def train_ppo_model(
         raise ValueError(f"ppo_epochs must be >= 1, got {ppo_epochs}.")
     if hub_token is not None:
         hf.login(token=hub_token)
-    if delete_repo_first:
-        delete_hf_repository(repo_id=model_name, token=hub_token)
+    
+    # Setup output directory and Hugging Face repository
+    output_dir += f"/{model_id}"
+    if organization is not None:
+        hub_model_id = f"{organization}/{model_id}"
+        if delete_repo_if_exists and repo_exists(hub_model_id, token=hub_token):
+            delete_hf_repository(repo_id=hub_model_id, token=hub_token)
+            if not repo_exists(hub_model_id, token=hub_token):
+                print(f"Repository '{hub_model_id}' deleted.")
+            else:
+                print(f"Repository '{hub_model_id}' could not be deleted.")
+                return
+        if delete_local_repo_if_exists and os.path.exists(output_dir):
+            subprocess.run(["rm", "-rf", output_dir])
+            if not os.path.exists(output_dir):
+                print(f"Local repository '{output_dir}' deleted.")
+            else:
+                print(f"Local repository '{output_dir}' could not be deleted.")
+                return
+        repo_url = create_hf_repository(
+            repo_id=hub_model_id,
+            repo_type="model",
+            exist_ok=True,
+            private=True,
+            token=hub_token,
+        )
+        print(f"Repository '{hub_model_id}' created at URL: {repo_url}")
+    else:
+        hub_model_id = None
+    print(f"Hub model ID: {hub_model_id}")
+
     # Load pretrained model
     model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(
         pretrained_model_name,
         max_length=max_length,
     )
+    ref_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(
+        pretrained_model_name,
+        max_length=max_length,
+    )
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name)
     tokenizer.pad_token = tokenizer.eos_token
+
     # Get dataset
     train_dataset = load_trl_dataset(
         tokenizer=tokenizer,
         token=hub_token,
         max_length=max_length,
+        dataset_name=ds_name,
+        ds_config=ds_config,
     ).shuffle(seed=42).flatten_indices()
+
     # Setup PPO trainer
     hub_configs = {
-        "repo_id": model_name,
+        "repo_id": hub_model_id,
         "commit_message": "Initial version",
         "private": True,
     }
     ppo_config = PPOConfig(
-        model_name=model_name,
+        # Learning parameters
         learning_rate=1e-5,
         steps=max_steps, # Default: 20_000
         ppo_epochs=ppo_epochs, # Default: 4
         batch_size=batch_size, # Default: 256
         gradient_accumulation_steps=1, # Default: 1
-        # global_batch_size=8,
         optimize_device_cache=True,
+        # PPO parameters
+        init_kl_coef=1.0,
+        adap_kl_ctrl=True,
+        target=0.5,
+        horizon=1000,
+        cliprange=0.1,
+        early_stopping=True,
+        target_kl=0.5,
+        max_grad_norm=1.0,
+        use_score_scaling=True,
+        use_score_norm=True,
+        whiten_rewards=True,
+        # Logging parameters
+        # NOTE: Check this guide for more information about the logged metrics:
+        # https://huggingface.co/docs/trl/v0.10.1/logging
+        model_name=hub_model_id,
         push_to_hub_if_best_kwargs=hub_configs,
+        log_with="tensorboard", # ["wandb", LoggerType.TENSORBOARD],
+        project_kwargs={"logging_dir": output_dir},
         seed=42,
     )
     ppo_trainer = PPOTrainer(
         model=model,
+        ref_model=ref_model,
+        num_shared_layers=0,
         config=ppo_config,
         tokenizer=tokenizer,
         dataset=train_dataset,
         data_collator=data_collator_for_trl,
+        # lr_scheduler=torch.optim.lr_scheduler.LRScheduler, # NOTE: It must be that, CosineAnnealingLR is not supported
     )
+
     # Training Loop
     generation_kwargs = {
-        "do_sample": False,
+        "do_sample": True,
+        "num_beams": 5,
+        "top_k": 20,
+        "max_length": 512,
         "pad_token_id": tokenizer.eos_token_id,
     }
+
     for epoch, batch in tqdm(enumerate(ppo_trainer.dataloader), total=len(ppo_trainer.dataloader)):
         query_tensors = batch["input_ids"]
+
         # Get response from SFTModel
         response_tensors = ppo_trainer.generate(query_tensors, **generation_kwargs)
         batch["response"] = [tokenizer.decode(r.squeeze()) for r in response_tensors]
+
         # Compute reward score
         rewards = [reward_function(clean_text(q), clean_text(r)) for q, r in zip(batch["query"], batch["response"])]
         rewards = [torch.tensor(r) for r in rewards]
+
         # Run PPO step
         stats = ppo_trainer.step(query_tensors, response_tensors, rewards)
         ppo_trainer.log_stats(stats, batch, rewards)
-    # Save model
+
+    # Save model and tokenizer
     ppo_trainer.push_to_hub(**hub_configs)
+    tokenizer.push_to_hub(**hub_configs)
 
 
 def train_dpo_model(

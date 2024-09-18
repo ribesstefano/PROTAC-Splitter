@@ -105,13 +105,7 @@ def train_model(
     else:
         hub_model_id = None
     print(f"Hub model ID: {hub_model_id}")
-    # try:
-    #     bert2bert = EncoderDecoderModel.from_pretrained(hub_model_id)
-    #     print(f"Skipping pretrained model {hub_model_id}.")
-    # except:
-    #     print('-' * 80)
-    #     print(f"Training model {hub_model_id} on dataset: {ds_name}.")
-    #     print('-' * 80)
+
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     elif tokenizer is None:
@@ -130,6 +124,7 @@ def train_model(
     if training_args is None:
         generation_config = GenerationConfig(
             max_length=512,
+            max_new_tokens=512,
             do_sample=True,
             num_beams=5,
             temperature=1.0,
@@ -156,18 +151,18 @@ def train_model(
             evaluation_strategy="steps",
             max_steps=max_steps,
             num_train_epochs=num_train_epochs,
-            eval_steps=5, # NOTE: 100
+            eval_steps=100, # NOTE: 100
             save_steps=200,
             # eval_steps=7500,
             # warmup_steps=2000,
             save_strategy="steps",
             save_total_limit=1,
             load_best_model_at_end=True,
-            metric_for_best_model="loss",
+            metric_for_best_model="reassembly",
             include_inputs_for_metrics=True,
             # Logging configs
             log_level="info",
-            logging_steps=50,
+            logging_steps=100,
             disable_tqdm=True,
             # Hub information configs
             push_to_hub=True, # NOTE: Done manually further down
@@ -246,10 +241,10 @@ def train_model(
             dataset=[ds_name],
             dataset_args=[ds_config],
         )
-        # tokenizer.push_to_hub(
-        #     repo_id=hub_model_id,
-        #     commit_message="Upload tokenizer",
-        #     private=True,
-        #     token=hub_token,
-        #     tags=["PROTAC", "cheminformatics"],
-        # )
+        tokenizer.push_to_hub(
+            repo_id=hub_model_id,
+            commit_message="Upload tokenizer",
+            private=True,
+            token=hub_token,
+            tags=["PROTAC", "cheminformatics"],
+        )

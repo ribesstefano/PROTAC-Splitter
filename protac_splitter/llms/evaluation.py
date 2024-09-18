@@ -39,6 +39,8 @@ def split_prediction(
             ret['linker'] = substr
         else:
             return None
+    if set(ret.keys()) != {'poi', 'linker', 'e3'}:
+        ret = None
     return ret
 
 
@@ -74,18 +76,10 @@ def compute_metrics_with_chem(
     num_attach_points = np.array([has_all_attachment_points(s) for s in pred_str])
     scores['has_all_attachment_points'] = num_attach_points.astype(int).mean()
 
-    print('=' * 80)
-    print(pred)
-    print(pred.inputs)
-    print(pred.predictions)
-    print(pred_str)
-    print(label_str)
-    print('=' * 80)
-
     # Check if re-combining the substructures results in the original PROTAC
     checks = []
     for i, (pred_smiles, protac_smiles, label_smiles) in enumerate(zip(pred_str, input_str, label_str)):
-        if i < 5:
+        if i < 1:
             print(f'protac: {protac_smiles}')
             print(f'label:  {label_smiles}')
             print(f'pred:   {pred_smiles}')
@@ -107,9 +101,9 @@ def compute_metrics_with_chem(
         ))
     scores['reassembly'] = np.array(checks).astype(int).mean()
 
-    # Count how many times the character '*' appears in the prediction
-    num_stars = np.array([s.count('*') for s in pred_str])
-    scores['num_stars'] = num_stars.mean()
+    # # Count how many times the character '*' appears in the prediction
+    # num_stars = np.array([s.count('*') for s in pred_str])
+    # scores['num_stars'] = num_stars.mean()
 
     # # Get tanimoto score
     # pred_str = np.array(pred_str)[valid_smiles == 1]

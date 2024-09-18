@@ -77,29 +77,36 @@ def load_trl_dataset(
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",  
     token: Optional[str] = None,
     max_length: int = 512,
+    dataset_name: str = "ailab-bio/PROTAC-Splitter-Dataset",
+    ds_config: str = "standard",
+    ds_unalabeled: Optional[str] = None,
 ) -> Dataset:
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     # Load training data
     train_dataset = load_dataset(
-        "ailab-bio/PROTAC-Substructures",
-        "80-20-split",
+        dataset_name,
+        ds_config,
         split="train",
         token=token,
     )
     train_dataset = train_dataset.rename_column("text", "query")
     train_dataset = train_dataset.remove_columns(["labels"])
-    # Load un-labelled data
-    unlabeled_dataset = load_dataset(
-        "ailab-bio/PROTAC-Substructures",
-        "unlabeled",
-        split="train",
-        token=token,
-    )
-    unlabeled_dataset = unlabeled_dataset.rename_column("text", "query")
-    unlabeled_dataset = unlabeled_dataset.remove_columns(["labels"])
-    # Concatenate datasets row-wise
-    dataset = concatenate_datasets([train_dataset, unlabeled_dataset])
+
+    if ds_unalabeled is not None:
+        # Load un-labelled data
+        unlabeled_dataset = load_dataset(
+            dataset_name,
+            ds_unalabeled,
+            split="train",
+            token=token,
+        )
+        unlabeled_dataset = unlabeled_dataset.rename_column("text", "query")
+        unlabeled_dataset = unlabeled_dataset.remove_columns(["labels"])
+        # Concatenate datasets row-wise
+        dataset = concatenate_datasets([train_dataset, unlabeled_dataset])
+    else:
+        dataset = train_dataset
     return dataset.map(lambda x: tokenize(x, tokenizer, max_length), batched=False)
 
 

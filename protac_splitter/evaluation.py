@@ -35,6 +35,15 @@ def check_substructs(
     Returns:
         bool | Tuple[bool, dict[str, str]]: True if the reassembled PROTAC is correct, False otherwise. If return_bond_types is True, also return the bond types used for the reassembly.
     """
+    if f"[*:{poi_attachment_id}]" in e3_smiles:
+        return False
+    if f"[*:{e3_attachment_id}]" in poi_smiles:
+        return False
+    if f"[*:{poi_attachment_id}]" not in linker_smiles:
+        return False
+    if f"[*:{e3_attachment_id}]" not in linker_smiles:
+        return False
+    
     correct_substructs = False
     protac_mol = Chem.MolFromSmiles(protac_smiles)
     protac_inchi = Chem.MolToInchi(protac_mol)

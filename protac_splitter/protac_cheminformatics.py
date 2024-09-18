@@ -1,5 +1,6 @@
-from typing import List, Tuple, Callable, Any, Union, Dict, Optional, Literal
 import logging
+from typing import List, Tuple, Callable, Any, Union, Dict, Optional, Literal
+from functools import lru_cache
 
 from rdkit import Chem
 from rdkit.Chem import rdchem
@@ -15,7 +16,12 @@ from .chemoinformatics import (
 RDLogger.DisableLog("rdApp.*")
 
 
-def find_atom_idx_of_map_atoms(mol: rdchem.Mol) -> Tuple[List[int], List[int]]:
+@lru_cache(maxsize=None)
+def get_mol(smiles: str) -> rdchem.Mol:
+    return Chem.MolFromSmiles(smiles)
+
+
+def find_atom_idx_of_map_atoms(mol: rdchem.Mol, find_first: True, find_second: True) -> int | Tuple[int, int]:
     """ Find the indices of the attachment points in the molecule.
 
     Args:
@@ -24,13 +30,25 @@ def find_atom_idx_of_map_atoms(mol: rdchem.Mol) -> Tuple[List[int], List[int]]:
     Returns:
         tuple: The indices of the attachment points.
     """
-    poi_l_attachment_point = [atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomMapNum() == 1]
-    e3_l_attachment_point = [atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomMapNum() == 2]
-
-    if len(poi_l_attachment_point) > 1 or len(e3_l_attachment_point) > 1:
-        raise ValueError("Too many attachement points")
-
-    return poi_l_attachment_point, e3_l_attachment_point
+    if find_first and find_second:
+        poi_idx = None
+        e3_idx = None
+        for atom in mol.GetAtoms():
+            if atom.GetAtomMapNum() == 1:
+                poi_idx = atom.GetIdx()
+            elif atom.GetAtomMapNum() == 2:
+                e3_idx = atom.GetIdx()
+            if poi_idx is not None and e3_idx is not None:
+                break
+        return poi_idx, e3_idx
+    elif find_first:
+        for atom in mol.GetAtoms():
+            if atom.GetAtomMapNum() == 1:
+                return atom.GetIdx()
+    elif find_second:
+        for atom in mol.GetAtoms():
+            if atom.GetAtomMapNum() == 2:
+                return atom.GetIdx()
 
 
 def reassemble_protac(
@@ -70,48 +88,26 @@ def reassemble_protac(
         Tuple[str, Chem.rdchem.Mol]: The SMILES notation and RDKit molecule object for the reassembled PROTAC molecule.
     """
 
-    if f"[*:{poi_attachment_id}]" in e3_smiles:
-        raise ValueError(f"[*:{poi_attachment_id}] found among E3-SMILES: {e3_smiles}]")
-    if f"[*:{e3_attachment_id}]" in poi_smiles:
-        raise ValueError(f"[*:{e3_attachment_id}] found among POI-SMILES: {poi_smiles}]")
-    if f"[*:{poi_attachment_id}]" not in linker_smiles:
-        raise ValueError(f"[*:{poi_attachment_id}] missing among Linker-SMILES: {linker_smiles}]")
-    if f"[*:{e3_attachment_id}]" not in linker_smiles:
-        raise ValueError(f"[*:{e3_attachment_id}] missing among Linker-SMILES: {linker_smiles}]")
-
     # Convert SMILES to RDKit Molecule objects
-    poi_mol = Chem.MolFromSmiles(poi_smiles)
-    linker_mol = Chem.MolFromSmiles(linker_smiles)
-    e3_mol = Chem.MolFromSmiles(e3_smiles)
+    poi_mol = get_mol(poi_smiles)
+    linker_mol = get_mol(linker_smiles)
+    e3_mol = get_mol(e3_smiles)
 
     if poi_mol is None or linker_mol is None or e3_mol is None:
         raise ValueError("Invalid substructures SMILES")
 
     # Find the indices of the attachment points
-    poi_l_attachment_points, _ = find_atom_idx_of_map_atoms(poi_mol)
-    linker_poi_attachment_points, linker_e3_attachment_points = find_atom_idx_of_map_atoms(linker_mol)
-    _, e3_l_attachment_points = find_atom_idx_of_map_atoms(e3_mol)
+    poi_idx = find_atom_idx_of_map_atoms(poi_mol, find_first=True, find_second=False)
+    linker_poi_idx, linker_e3_idx = find_atom_idx_of_map_atoms(linker_mol, find_first=True, find_second=True)
+    e3_idx = find_atom_idx_of_map_atoms(e3_mol, find_first=False, find_second=True)
 
     # Ensure that each molecule has the correct number of attachment points
-    if not poi_l_attachment_points or not linker_poi_attachment_points or not linker_e3_attachment_points or not e3_l_attachment_points:
+    if poi_idx is None or linker_poi_idx is None or linker_e3_idx is None or e3_idx is None:
         raise ValueError("Missing attachment points in one or more substructures")
-
-    # Select the first (and only) attachment point for POI and E3, and the appropriate ones for the linker
-    poi_idx = poi_l_attachment_points[0]
-    linker_e3_idx = linker_e3_attachment_points[0]
-    e3_idx = e3_l_attachment_points[0]
-
-    logging.debug(f"POI attachment point: {poi_idx}")
-    logging.debug(f"Linker attachment point for E3: {linker_e3_idx}")
-    logging.debug(f"E3 attachment point: {e3_idx}")
 
     # Merge E3 with Linker
     e3_linker_mol = merge_molecules(e3_mol, linker_mol, e3_idx, linker_e3_idx, bond_type=e3_bond_type)
-    linker_e3_mol_attachment_point, _ = find_atom_idx_of_map_atoms(e3_linker_mol)
-    linker_e3_mol_idx = linker_e3_mol_attachment_point[0]
-
-    logging.debug(f"Linker attachment point for POI: {linker_poi_attachment_points}")
-    logging.debug(f"Linker attachment point for E3: {linker_e3_mol_idx}")
+    linker_e3_mol_idx = find_atom_idx_of_map_atoms(e3_linker_mol, find_first=True, find_second=False)
 
     protac_mol = merge_molecules(e3_linker_mol, poi_mol, linker_e3_mol_idx, poi_idx, bond_type=poi_bond_type)
     Chem.SanitizeMol(protac_mol)

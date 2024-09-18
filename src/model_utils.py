@@ -11,6 +11,13 @@ def get_model(
         pretrained_encoder,
         pretrained_decoder,
         tie_encoder_decoder=tie_encoder_decoder,
+
+        decoder_is_decoder = True,
+        decoder_do_sample = False,
+        decoder_num_beams = 5,
+        decoder_top_k = 20,
+        decoder_max_length=512,
+        decoder_max_new_tokens = 512,
     )
     print(f"Number of parameters: {bert2bert.num_parameters():,}")
     tokenizer = AutoTokenizer.from_pretrained(pretrained_encoder)
@@ -27,9 +34,28 @@ def get_model(
 
     # # NOTE: Never sample, i.e., always return the token w/ highest probability
     # bert2bert.config.do_sample = False
-    bert2bert.config.do_sample = True
-    bert2bert.config.num_beams = 5
-    bert2bert.config.top_k = 20
+    def setup_gen(config):
+        config.do_sample = False
+        config.num_beams = 5
+        config.top_k = 20
+        config.max_length=512
+        config.max_new_tokens = 512
+        return config
+    
+    bert2bert.config = setup_gen(bert2bert.config)
+    bert2bert.encoder.config = setup_gen(bert2bert.encoder.config)
+    bert2bert.decoder.config = setup_gen(bert2bert.decoder.config)
+    bert2bert.generation_config = setup_gen(bert2bert.generation_config)
+    
+    # bert2bert.config.do_sample = True
+    # bert2bert.config.num_beams = 5
+    # bert2bert.config.top_k = 20
+    # bert2bert.config.max_length=512
+    # bert2bert.config.max_new_tokens=512
+
+    # bert2bert.generation_config.max_new_tokens = 512
+    # bert2bert.generation_config.min_new_tokens = 512
+
     
     # bert2bert.config.max_new_tokens = 514
     # bert2bert.config.early_stopping = True

@@ -197,20 +197,27 @@ def merge_molecules(
     Returns:
         rdkit.Chem.rdchem.Mol: The combined molecule.
     """
-    combined_mol = Chem.CombineMols(mol1, mol2)
-    editable_mol = Chem.EditableMol(combined_mol)
-
     # Find neighbors of the attachment points
-    neighbor_atom_idx1 = [nbr.GetIdx() for nbr in mol1.GetAtomWithIdx(atom_idx1).GetNeighbors() if nbr.GetAtomicNum() > 1][0]
-    neighbor_atom_idx2 = [nbr.GetIdx() + mol1.GetNumAtoms() for nbr in mol2.GetAtomWithIdx(atom_idx2).GetNeighbors() if nbr.GetAtomicNum() > 1]
+
+    neighbor_atom_idx2 = None
+    for nbr in mol2.GetAtomWithIdx(atom_idx2).GetNeighbors():
+        if nbr.GetAtomicNum() > 1:
+            neighbor_atom_idx2 = nbr.GetIdx() + mol1.GetNumAtoms()
+            break
     
-    if neighbor_atom_idx2 == []: #if linker has no length
+    # Handle case when linker has no length
+    if neighbor_atom_idx2 is None:
         smi_e3_linker_with_e3_attachment = Chem.MolToSmiles(mol1, canonical=True)
-        smi_e3_linker_with_poi_attachment = smi_e3_linker_with_e3_attachment.replace("[*:2]","[*:1]")
+        smi_e3_linker_with_poi_attachment = smi_e3_linker_with_e3_attachment.replace("[*:2]", "[*:1]")
         mol_e3_linker_with_poi_attachment = Chem.MolFromSmiles(smi_e3_linker_with_poi_attachment)
         return mol_e3_linker_with_poi_attachment
-    else:
-        neighbor_atom_idx2 = neighbor_atom_idx2[0]
+
+    for nbr in mol1.GetAtomWithIdx(atom_idx1).GetNeighbors():
+        if nbr.GetAtomicNum() > 1:
+            neighbor_atom_idx1 = nbr.GetIdx()
+            break
+
+    editable_mol = Chem.EditableMol(Chem.CombineMols(mol1, mol2))
 
     # Add a bond between the neighboring atoms (ignoring the dummy atoms)
     if bond_type == 'single':
@@ -228,7 +235,7 @@ def merge_molecules(
             rdchem.BondType.TRIPLE,
         ][0:max_bond]
         if bond_type == 'rand_uniform':
-            sampled_bond = random.sample(possible_bonds, 1)[0]
+            sampled_bond = random.choice(possible_bonds)
             editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=sampled_bond)
         elif bond_type == 'double' and len(possible_bonds) > 1:
             editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=rdchem.BondType.DOUBLE)
