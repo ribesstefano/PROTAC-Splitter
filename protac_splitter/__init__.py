@@ -8,8 +8,8 @@ from .evaluation import (
     has_all_attachment_points,
     is_substructure,
     same_atom_counts_and_types,
+    split_prediction,
 )
-from .llms.evaluation import split_prediction
 from .protac_splitter import split_protac
 
 __version__ = "0.0.1"
