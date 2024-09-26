@@ -33,11 +33,8 @@ from .hf_utils import (
     delete_hf_repository,
     repo_exists,
 )
-from .evaluation import (
-    compute_metrics_with_chem,
-    split_prediction,
-)
-from ..evaluation import check_substructs
+from .evaluation import decode_and_get_metrics
+from ..evaluation import check_substructs, split_prediction
 
 
 def clean_text(text: str) -> str:
@@ -337,7 +334,7 @@ def train_dpo_model(
         fpSize=2048,
     )
     metric = partial(
-        compute_metrics_with_chem,
+        decode_and_get_metrics,
         rouge=rouge,
         tokenizer=tokenizer,
         fpgen=fpgen,

@@ -269,9 +269,9 @@ def shuffle_substructs(s: str, shuffle_prob: float = 0.0) -> str:
         return s
 
 
-def check_datasets(d):
+def check_dataframe(df: pd.DataFrame) -> bool:
     tqdm.pandas(desc='Checking train dataset')
-    train_check = all(d['train'].progress_apply(lambda x: check_substructs(
+    train_check = all(df['train'].progress_apply(lambda x: check_substructs(
             x['PROTAC SMILES'],
             x['POI Ligand SMILES with direction'],
             x['Linker SMILES with direction'],
@@ -279,7 +279,7 @@ def check_datasets(d):
         ), axis=1)
     )
     tqdm.pandas(desc='Checking test dataset')
-    test_check = all(d['test'].progress_apply(lambda x: check_substructs(
+    test_check = all(df['test'].progress_apply(lambda x: check_substructs(
             x['PROTAC SMILES'],
             x['POI Ligand SMILES with direction'],
             x['Linker SMILES with direction'],
@@ -289,12 +289,59 @@ def check_datasets(d):
     return train_check and test_check
 
 
+def check_dataset(
+    ds: Dataset,
+    num_proc: int = 1,
+) -> bool:
+    """
+    Checks whether all samples in a dataset are correct.
+
+    Args:
+        ds (Dataset): The dataset to check.
+        checking_function (callable): A function that takes 'text' and 'labels' and returns True if the sample is correct.
+        num_proc (int): Number of processes to use.
+
+    Returns:
+        bool: True if all samples are correct, False otherwise.
+    """
+    # Filter out incorrect samples using the checking function
+    incorrect_samples = ds.filter(
+        lambda example: not check_substructs(protac_smiles=example['text'], pred=example['labels']),
+        num_proc=num_proc,
+    )
+    # If there are any incorrect samples, return False
+    if len(incorrect_samples) > 0:
+        print(f'Found {len(incorrect_samples)} incorrect samples.')
+        return False
+    else:
+        return True
+
+def convert_df_to_text(df: pd.DataFrame) -> pd.DataFrame:
+    """ Convert a DataFrame to a DataFrame with 'text' and 'labels' columns.
+    
+    Args:
+        df (pd.DataFrame): The DataFrame to convert.
+
+    Returns:
+        pd.DataFrame: The converted DataFrame.
+    """
+    protac_col = 'PROTAC SMILES'
+    e3_col = 'E3 Binder SMILES with direction'
+    linker_col = 'Linker SMILES with direction'
+    poi_col = 'POI Ligand SMILES with direction'
+    df['labels'] = df.apply(lambda x: join_substructures(x[protac_col], x[e3_col], x[linker_col], x[poi_col]), axis=1)
+    df = df.rename(columns={'PROTAC SMILES': 'text'})
+    return df[['text', 'labels']]
+
+
 def main(
         num_proc: int = 16,
         max_train_samples: int = 10_000,
+        disable_progress_bars: bool = False,
 ):
     # Disable the progress bar for Hugging Face Datasets (like map, filter, etc.)
-    # disable_progress_bar()
+    if disable_progress_bars:
+        disable_progress_bar()
 
     np.random.seed(42)
 
@@ -322,14 +369,22 @@ def main(
             'test': pd.read_csv(os.path.join(data_dir, 'datasets', 'poi_unique', 'test.csv'))
         }
     }
+    text_dfs = {}
 
-    # print('Checking datasets...')
-    # for config_name, datasets in ds.items():
-    #     print(f'Checking {config_name} dataset...')
-    #     if not check_datasets(datasets):
-    #         print(f'Error in {config_name} dataset: reassembly failed.')
-    #         sys.exit(1)
-    # print('All datasets are correct (i.e., reassemblying substructures works).')
+    print('Checking dataframes...')
+    for config_name, dataframes in ds.items():
+        print(f'Checking {config_name} dataset...')
+        train_df = convert_df_to_text(dataframes['train'])
+        test_df = convert_df_to_text(dataframes['test'])
+        text_dfs[config_name] = {'train': train_df, 'test': test_df}
+
+        train_check = check_dataset(Dataset.from_pandas(train_df, preserve_index=False), num_proc=max(1, num_proc // 2))
+        test_check = check_dataset(Dataset.from_pandas(test_df, preserve_index=False), num_proc=max(1, num_proc // 2))
+
+        if not train_check or not test_check:
+            print(f'Error in {config_name} dataset: reassembly failed.')
+            sys.exit(1)
+    print('All dataframes are correct (i.e., reassemblying substructures works).')
 
     shuffle_prob = 0.3 # Augmentation not used, for now...
 
@@ -341,18 +396,9 @@ def main(
         print('-' * 80)
         print(f'Processing {config_name} dataset...')
         print('-' * 80)
-
-        def convert_df_to_text(df: pd.DataFrame) -> pd.DataFrame:
-            protac_col = 'PROTAC SMILES'
-            e3_col = 'E3 Binder SMILES with direction'
-            linker_col = 'Linker SMILES with direction'
-            poi_col = 'POI Ligand SMILES with direction'
-            df['labels'] = df.apply(lambda x: join_substructures(x[protac_col], x[e3_col], x[linker_col], x[poi_col]), axis=1)
-            df = df.rename(columns={'PROTAC SMILES': 'text'})
-            return df[['text', 'labels']]
         
-        train_df = convert_df_to_text(train_test_dfs['train'])
-        test_df = convert_df_to_text(train_test_dfs['test'])
+        train_df = text_dfs[config_name]['train']
+        test_df = text_dfs[config_name]['test']
 
         # Get the test dataset to use for all the augmented datasets
         train_ds = Dataset.from_pandas(train_df, preserve_index=False, split='train')
@@ -512,12 +558,15 @@ def main(
         push_ds_to_hub(dataset=train_aug_ds, config_name=f'{config_name}_randomized_recombined', split='train')
         push_ds_to_hub(dataset=test_ds, config_name=f'{config_name}_randomized_recombined', split='test')
 
+    print('All done!')
+
 
 if __name__ == '__main__':
     # Setup main argument parser
     parser = argparse.ArgumentParser(description='Generate augmented datasets for PROTACs-Splitter.')
     parser.add_argument('--num_proc', type=int, default=16, help='The number of processes to use for parallel processing.')
     parser.add_argument('--max_train_samples', type=int, default=10000, help='The maximum number of training samples to generate.')
+    parser.add_argument('--disable_progress_bars', action='store_true', help='Disable progress bars.')
     args = parser.parse_args()
 
-    main(num_proc=args.num_proc, max_train_samples=args.max_train_samples)
+    main(num_proc=args.num_proc, max_train_samples=args.max_train_samples, disable_progress_bars=args.disable_progress_bars)

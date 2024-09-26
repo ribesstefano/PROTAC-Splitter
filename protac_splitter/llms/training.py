@@ -15,7 +15,7 @@ from transformers import (
 )
 
 from .data_utils import load_tokenized_dataset
-from .evaluation import compute_metrics_with_chem
+from .evaluation import decode_and_get_metrics
 from .hf_utils import (
     create_hf_repository,
     delete_hf_repository,
@@ -135,10 +135,13 @@ def train_model(
             learning_rate=learning_rate,
             optim="adamw_torch",
             lr_scheduler_type="cosine", # Default: "linear"
-            warmup_ratio=0.05,
+            # warmup_ratio=0.05,
+            warmup_steps=8000, # NOTE: ChemFormer: 8000
+            adam_beta1=0.9, # NOTE: ChemFormer: 0.9
+            adam_beta2=0.999, # NOTE: ChemFormer: 0.999
+            adam_epsilon=1e-8, # Default: 1e-8
             # Generation configs
             predict_with_generate=True,
-            generation_num_beams=5, # Greedy strategy
             generation_config=generation_config,
             # Batch size and device configs
             per_device_train_batch_size=per_device_batch_size,
@@ -148,21 +151,20 @@ def train_model(
             # torch_compile=True,
             fp16=True,
             # Evaluation and checkpointing configs
-            evaluation_strategy="steps",
             max_steps=max_steps,
             num_train_epochs=num_train_epochs,
-            eval_steps=100, # NOTE: 100
-            save_steps=200,
-            # eval_steps=7500,
-            # warmup_steps=2000,
+            save_steps=500, # NOTE: 200
             save_strategy="steps",
+            eval_steps=250, # NOTE: 100
+            evaluation_strategy="steps",
+            # warmup_steps=2000,
             save_total_limit=1,
             load_best_model_at_end=True,
             metric_for_best_model="reassembly",
             include_inputs_for_metrics=True,
             # Logging configs
             log_level="info",
-            logging_steps=100,
+            logging_steps=200,
             disable_tqdm=True,
             # Hub information configs
             push_to_hub=True, # NOTE: Done manually further down
@@ -171,6 +173,7 @@ def train_model(
             hub_strategy="checkpoint", # NOTE: Allows to resume training from last checkpoint 
             hub_private_repo=True,
             report_to=["tensorboard"],
+            save_only_model=False,
             # Other configs
             seed=42,
             data_seed=42,
@@ -183,7 +186,7 @@ def train_model(
         fpSize=1024,
     )
     metric = partial(
-        compute_metrics_with_chem,
+        decode_and_get_metrics,
         rouge=rouge,
         tokenizer=tokenizer,
         fpgen=fpgen,
@@ -205,6 +208,7 @@ def train_model(
         eval_dataset=dataset_tokenized["test"],
     )
     if optuna_n_trials > 0:
+        # Evaluate during training and a bit more often than the default to be able to prune bad trials early.
         def optuna_hp_space(trial):
             return {
                 "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),

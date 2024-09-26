@@ -59,6 +59,7 @@ def reassemble_protac(
         poi_bond_type: Literal['single', 'double', 'triple', 'rand_uniform'] = 'single',
         poi_attachment_id: int = 1,
         e3_attachment_id: int = 2,
+        rand_generator = None,
 ) -> Tuple[str, Chem.rdchem.Mol]:
     """ Reassemble a PROTAC molecule from its substructures. The SMILES must contain attachment points.
     
@@ -83,6 +84,7 @@ def reassemble_protac(
         poi_bond_type (str): The type of bond to be added between the POI ligand and the linker. Can be 'single', 'double', 'triple', or 'rand_uniform'.
         poi_attachment_id (int): The label of the attachment point for the POI ligand, i.e., "[*:{poi_attachment_id}]".
         e3_attachment_id (int): The label of the attachment point for the E3 binder, i.e., "[*:{e3_attachment_id}]".
+        rand_generator: A random number generator for 'rand_uniform' bond types. Defaults to None, i.e., standard library random.
     
     Returns:
         Tuple[str, Chem.rdchem.Mol]: The SMILES notation and RDKit molecule object for the reassembled PROTAC molecule.
@@ -106,10 +108,10 @@ def reassemble_protac(
         raise ValueError("Missing attachment points in one or more substructures")
 
     # Merge E3 with Linker
-    e3_linker_mol = merge_molecules(e3_mol, linker_mol, e3_idx, linker_e3_idx, bond_type=e3_bond_type)
+    e3_linker_mol = merge_molecules(e3_mol, linker_mol, e3_idx, linker_e3_idx, bond_type=e3_bond_type, rand_generator=rand_generator)
     linker_e3_mol_idx = find_atom_idx_of_map_atoms(e3_linker_mol, find_first=True, find_second=False)
 
-    protac_mol = merge_molecules(e3_linker_mol, poi_mol, linker_e3_mol_idx, poi_idx, bond_type=poi_bond_type)
+    protac_mol = merge_molecules(e3_linker_mol, poi_mol, linker_e3_mol_idx, poi_idx, bond_type=poi_bond_type, rand_generator=rand_generator)
     Chem.SanitizeMol(protac_mol)
     protac_smiles = Chem.MolToSmiles(protac_mol, canonical=True)
 

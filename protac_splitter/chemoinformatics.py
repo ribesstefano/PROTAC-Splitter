@@ -184,6 +184,7 @@ def merge_molecules(
         atom_idx1: int,
         atom_idx2: int,
         bond_type: Literal['single', 'double', 'triple', 'rand_uniform'] = 'single',
+        rand_generator = None,
 ) -> rdchem.Mol:
     """ Combine two molecules into a single editable molecule.
     
@@ -193,6 +194,7 @@ def merge_molecules(
         atom_idx1 (int): The index of the attachment point in the first molecule.
         atom_idx2 (int): The index of the attachment point in the second molecule.
         bond_type (str): The type of bond to be added between the attachment points. Can be 'single' or 'rand_uniform'.
+        rand_generator: A random number generator for 'rand_uniform'. Defaults to None, i.e., standard library random.
     
     Returns:
         rdkit.Chem.rdchem.Mol: The combined molecule.
@@ -235,7 +237,9 @@ def merge_molecules(
             rdchem.BondType.TRIPLE,
         ][0:max_bond]
         if bond_type == 'rand_uniform':
-            sampled_bond = random.choice(possible_bonds)
+            if rand_generator is None:
+                rand_generator = random
+            sampled_bond = rand_generator.choice(possible_bonds)
             editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=sampled_bond)
         elif bond_type == 'double' and len(possible_bonds) > 1:
             editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=rdchem.BondType.DOUBLE)
