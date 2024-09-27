@@ -13,6 +13,7 @@ from transformers import (
     AutoTokenizer,
     GenerationConfig,
 )
+from datasets import load_dataset
 
 from .data_utils import load_tokenized_dataset
 from .evaluation import decode_and_get_metrics
@@ -22,6 +23,29 @@ from .hf_utils import (
     repo_exists,
 )
 from .model_utils import get_model
+
+
+def get_lr_scheduler_kwargs(lr_scheduler_type: str) -> Dict[str, Any]:
+    """ Returns the default learning rate scheduler kwargs for a given type.
+    
+    Args:
+        lr_scheduler_type (str): The type of the learning rate scheduler.
+
+    Returns:
+        Dict[str, Any]: The default learning rate scheduler kwargs.
+    """
+    if lr_scheduler_type == "cosine":
+        return {}
+    elif lr_scheduler_type == "cosine_with_restarts":
+        return {"num_cycles": 5}
+    elif lr_scheduler_type == "cosine_with_min_lr":
+        return {}
+    elif lr_scheduler_type == "polynomial":
+        return {"power": 1.0}
+    elif lr_scheduler_type == "reduce_lr_on_plateau":
+        return {"min_lr": 1e-6}
+    else:
+        raise ValueError(f"Unknown learning rate scheduler type: '{lr_scheduler_type}'")
 
 
 def train_model(
@@ -45,9 +69,10 @@ def train_model(
     tie_encoder_decoder: bool = False,
     delete_repo_if_exists: bool = False,
     delete_local_repo_if_exists: bool = False,
-    training_args: Optional[Seq2SeqTrainingArguments | Dict[str, Any]] = None,
+    training_args: Optional[Dict[str, Any]] = None,
     resume_from_checkpoint: Optional[str] = None,
-    optuna_n_trials: int = 0,
+    num_optuna_trials: int = 0,
+    num_proc_map: int = 1,
 ):
     """Trains a model on a given dataset.
     
@@ -72,10 +97,16 @@ def train_model(
         delete_repo_if_exists (bool, optional): Whether to delete the repository first. Defaults to False.
         training_args (Optional[Seq2SeqTrainingArguments], optional): The training arguments. Defaults to None.
         resume_from_checkpoint (Optional[str], optional): The checkpoint to resume training from. Defaults to None.
-        optuna_n_trials (int, optional): The number of Optuna trials. Defaults to 0, i.e., no Optuna hyperparameter search.
+        num_optuna_trials (int, optional): The number of Optuna trials. Defaults to 0, i.e., no Optuna hyperparameter search.
     """
+    # Check if resume_from_checkpoint exists and it's a file
+    if resume_from_checkpoint is not None:
+        if not os.path.isfile(resume_from_checkpoint):
+            raise ValueError(f"Checkpoint file '{resume_from_checkpoint}' does not exist.")
+
     if hub_token is not None:
         hf.login(token=hub_token)
+    
     # Setup output directory and Hugging Face repository
     output_dir += f"/{model_id}"
     if organization is not None:
@@ -111,6 +142,8 @@ def train_model(
     elif tokenizer is None:
         tokenizer = AutoTokenizer.from_pretrained(pretrained_encoder)
 
+    # Load the tokenized dataset
+    print("Loading tokenized dataset.")
     dataset_tokenized = load_tokenized_dataset(
         ds_name,
         ds_config,
@@ -119,67 +152,35 @@ def train_model(
         encoder_max_length,
         decoder_max_length,
         token=hub_token,
+        num_proc_map=num_proc_map,
     )
-    per_device_batch_size = batch_size // gradient_accumulation_steps
-    if training_args is None:
-        generation_config = GenerationConfig(
-            max_length=512,
-            max_new_tokens=512,
-            do_sample=True,
-            num_beams=5,
-            temperature=1.0,
-        )
-        training_args = Seq2SeqTrainingArguments(
-            output_dir=output_dir,
-            # Optimizer-related configs
-            learning_rate=learning_rate,
-            optim="adamw_torch",
-            lr_scheduler_type="cosine", # Default: "linear"
-            # warmup_ratio=0.05,
-            warmup_steps=8000, # NOTE: ChemFormer: 8000
-            adam_beta1=0.9, # NOTE: ChemFormer: 0.9
-            adam_beta2=0.999, # NOTE: ChemFormer: 0.999
-            adam_epsilon=1e-8, # Default: 1e-8
-            # Generation configs
-            predict_with_generate=True,
-            generation_config=generation_config,
-            # Batch size and device configs
-            per_device_train_batch_size=per_device_batch_size,
-            per_device_eval_batch_size=per_device_batch_size,
-            gradient_accumulation_steps=gradient_accumulation_steps,
-            auto_find_batch_size=True,
-            # torch_compile=True,
-            fp16=True,
-            # Evaluation and checkpointing configs
-            max_steps=max_steps,
-            num_train_epochs=num_train_epochs,
-            save_steps=500, # NOTE: 200
-            save_strategy="steps",
-            eval_steps=250, # NOTE: 100
-            evaluation_strategy="steps",
-            # warmup_steps=2000,
-            save_total_limit=1,
-            load_best_model_at_end=True,
-            metric_for_best_model="reassembly",
-            include_inputs_for_metrics=True,
-            # Logging configs
-            log_level="info",
-            logging_steps=200,
-            disable_tqdm=True,
-            # Hub information configs
-            push_to_hub=True, # NOTE: Done manually further down
-            hub_token=hub_token,
-            hub_model_id=hub_model_id,
-            hub_strategy="checkpoint", # NOTE: Allows to resume training from last checkpoint 
-            hub_private_repo=True,
-            report_to=["tensorboard"],
-            save_only_model=False,
-            # Other configs
-            seed=42,
-            data_seed=42,
-        )
-    elif isinstance(training_args, dict):
-        training_args = Seq2SeqTrainingArguments(**training_args)
+    # Precompute a "length" column for the dataset using the map function
+    def add_length(x):
+        x["length"] = len(x["input_ids"])
+        return x
+    dataset_tokenized = dataset_tokenized.map(
+        add_length,
+        num_proc=num_proc_map,
+    )
+    print("Dataset loaded.")
+
+    # Setup the model for `model_init` in the Trainer
+    bert2bert = lambda: get_model(
+        pretrained_encoder=pretrained_encoder,
+        pretrained_decoder=pretrained_decoder,
+        max_length=encoder_max_length,
+        tie_encoder_decoder=tie_encoder_decoder,
+    )
+
+    # Setup the data collator, which will efficiently pad the inputs and targets
+    data_collator = DataCollatorForSeq2Seq(
+        tokenizer,
+        model=bert2bert(),
+        # max_length=encoder_max_length,
+        pad_to_multiple_of=8,
+    )
+
+    # Setup the metric function
     rouge = evaluate.load("rouge")
     fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
         radius=11,
@@ -191,49 +192,193 @@ def train_model(
         tokenizer=tokenizer,
         fpgen=fpgen,
     )
-    bert2bert = lambda: get_model(
-        pretrained_encoder=pretrained_encoder,
-        pretrained_decoder=pretrained_decoder,
-        max_length=encoder_max_length,
-        tie_encoder_decoder=tie_encoder_decoder,
-    )
-    data_collator = DataCollatorForSeq2Seq(tokenizer, model=bert2bert)
+
+    # Setup the training arguments
+    per_device_batch_size = batch_size // gradient_accumulation_steps
+    if training_args is None:
+        generation_config = GenerationConfig(
+            max_length=512,
+            max_new_tokens=512,
+            do_sample=True,
+            num_beams=5,
+            temperature=1.0,
+        )
+        training_args = {
+            "output_dir": output_dir,
+            # Optimizer-related configs
+            "learning_rate": learning_rate,
+            "optim": "adamw_torch",
+            "lr_scheduler_type": "cosine",
+            "warmup_steps": 8000, # NOTE: ChemFormer: 8000
+            "adam_beta1": 0.9, # NOTE: ChemFormer: 0.9
+            "adam_beta2": 0.999, # NOTE: ChemFormer: 0.999
+            "adam_epsilon": 1e-8, # Default: 1e-8
+            # Generation configs
+            "predict_with_generate": True,
+            "generation_config": generation_config,
+            "generation_max_length": 512,
+            # Batch size, device, and performance optimizations configs
+            # "torch_compile": True,
+            "group_by_length": True,
+            "per_device_train_batch_size": per_device_batch_size,
+            "per_device_eval_batch_size": per_device_batch_size,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "auto_find_batch_size": True,
+            "fp16": True,
+            # Evaluation and checkpointing configs
+            "max_steps": max_steps,
+            "num_train_epochs": num_train_epochs,
+            "save_steps": 1000, # NOTE: 200
+            "save_strategy": "steps",
+            "eval_steps": 500, # NOTE: 500
+            "evaluation_strategy": "steps",
+            "save_total_limit": 1,
+            "load_best_model_at_end": True,
+            "metric_for_best_model": "reassembly",
+            "include_inputs_for_metrics": True,
+            # Logging configs
+            "log_level": "warning",
+            "logging_steps": 500,
+            "disable_tqdm": True,
+            "report_to": ["tensorboard"],
+            "save_only_model": False, # Default: False
+            # Hub information configs
+            "push_to_hub": True, # NOTE: Also manually done further down
+            "hub_token": hub_token,
+            "hub_model_id": hub_model_id,
+            "hub_strategy": "checkpoint", # NOTE: Allows to resume training from last checkpoint 
+            "hub_private_repo": True,
+            # Other configs
+            "seed": 42,
+            "data_seed": 42,
+        }
+
+    # Modify the training arguments with Optuna hyperparameter search
+    if num_optuna_trials > 0:
+        def optuna_hp_space(trial):
+
+            # NOTE: Tuning generation config is not implemented yet, please refer to this issue: https://github.com/huggingface/transformers/issues/33755
+            # ------------------------------------------------------------------
+            # # Define default generation parameters
+            # generation_params = {
+            #     "max_length": 512,
+            #     "max_new_tokens": 512,
+            #     'top_k': 20,
+            # }
+            # 
+            # # Define the generation strategies and pick one with Optuna
+            # # REF: https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/generation/configuration_utils.py#L71
+            # generation_strategy_params = {
+            #     "greedy": {"num_beams": 1, "do_sample": False},
+            #     "contrastive_search": {"penalty_alpha": 0.1, "top_k": 10},
+            #     "multinomial_sampling": {"num_beams": 1, "do_sample": True},
+            #     "beam_search_decoding": {"num_beams": 5, "do_sample": False},
+            #     "beam_search_multinomial_sampling": {"num_beams": 5, "do_sample": True},
+            #     "diverse_beam_search_decoding": {"num_beams": 5, "num_beam_groups": 5, "diversity_penalty": 1.0},
+            # }
+            # gen_strategy = trial.suggest_categorical("generation_strategy", list(generation_strategy_params.keys()))
+            # generation_params.update(generation_strategy_params[gen_strategy])
+            # 
+            # # Update the generation params with the temperature
+            # temperature = trial.suggest_float("temperature", 0.5, 1.1, step=0.1)
+            # generation_params["temperature"] = temperature
+            # 
+            # # # Instantiate a GenerationConfig object to pass to the Trainer arguments
+            # # generation_config = GenerationConfig(**generation_params)
+            # ------------------------------------------------------------------
+
+            learning_rate = trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True)
+            lr_scheduler_type = trial.suggest_categorical("lr_scheduler_type", ["cosine", "cosine_with_restarts", "reduce_lr_on_plateau"]) # "cosine_with_min_lr", "polynomial"
+            warmup_ratio = trial.suggest_float("warmup_ratio", 0.0, 0.1, step=0.01)
+            generation_num_beams = trial.suggest_categorical("generation_num_beams", [1, 5])
+
+            # Change the number of evaluation steps based on the warmup ratio
+            # suggested by Optuna. This way, we should not prune too early
+            num_steps = max(max_steps, num_train_epochs * len(dataset_tokenized["train"]) // batch_size)
+            warmup_steps = int(warmup_ratio * num_steps)
+            hp_eval_steps = warmup_steps * 2
+
+            return {
+                "learning_rate": learning_rate,
+                "lr_scheduler_type": lr_scheduler_type,
+                "lr_scheduler_kwargs": get_lr_scheduler_kwargs(lr_scheduler_type),
+                "warmup_ratio": warmup_ratio,
+                "generation_num_beams": generation_num_beams,
+                "eval_steps": hp_eval_steps,
+                # "generation_config": generation_config,
+                # "generation_config": generation_params,
+                # **{f"generation_{k}": v for k, v in generation_params.items()},
+            }
+
+        def compute_objective(metrics: Dict[str, float]):
+            # NOTE: Having a higher eval_reassembly score should also correspond
+            # to a low eval loss, so we just focus on the reassembly score.
+            return metrics["eval_reassembly"]
+
+        # REF: Evaluate a bit more often than the default to be able to prune
+        # bad trials early.
+        # NOTE: Since the warmup can affect the objective, we instead increase
+        # the eval_steps to prevent pruning too early when the LR is still
+        # warming up.
+        num_steps = max(max_steps, num_train_epochs * len(dataset_tokenized["train"]) // batch_size)
+        eval_steps = training_args.get("eval_steps", 500)
+        hp_eval_steps = eval_steps * 2
+        training_args["eval_steps"] = hp_eval_steps + num_steps % hp_eval_steps
+
+        # Setup a "fake" Trainer for the hyperparameter search
+        trainer = Seq2SeqTrainer(
+            model_init=bert2bert,
+            tokenizer=tokenizer,
+            data_collator=data_collator,
+            args=Seq2SeqTrainingArguments(**(training_args.copy())),
+            compute_metrics=metric,
+            train_dataset=dataset_tokenized["train"],
+            eval_dataset=dataset_tokenized["test"],
+        )
+        best_trial = trainer.hyperparameter_search(
+            direction="maximize",
+            backend="optuna",
+            hp_space=optuna_hp_space,
+            n_trials=num_optuna_trials,
+            compute_objective=compute_objective,
+        )
+
+        # Set the best hyperparameters in the Trainer arguments (and log them)
+        print("-" * 80)
+        print(f"Best trial objective: {best_trial.objective:.4f} (eval_reassembly)")
+        for hparam, value in best_trial.hyperparameters.items():
+            print(f"\t* {hparam}: {value}")
+            training_args[hparam] = value
+            if hparam == "lr_scheduler_type":
+                training_args["lr_scheduler_kwargs"] = get_lr_scheduler_kwargs(value)
+        print("-" * 80)
+
+        # Setup the original eval_steps
+        training_args["eval_steps"] = eval_steps
+        
+    # Setup the Trainer and start training (with best hyperparameters)
     trainer = Seq2SeqTrainer(
         model_init=bert2bert,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        args=training_args,
+        args=Seq2SeqTrainingArguments(**training_args),
         compute_metrics=metric,
         train_dataset=dataset_tokenized["train"],
         eval_dataset=dataset_tokenized["test"],
     )
-    if optuna_n_trials > 0:
-        # Evaluate during training and a bit more often than the default to be able to prune bad trials early.
-        def optuna_hp_space(trial):
-            return {
-                "learning_rate": trial.suggest_float("learning_rate", 1e-6, 1e-4, log=True),
-                "per_device_train_batch_size": trial.suggest_categorical("per_device_train_batch_size", [16, 32, 64, 128]),
-                "lr_scheduler_type": trial.suggest_categorical("lr_scheduler_type", ["linear", "cosine"]),
-            }
-
-        def compute_objective(metrics: Dict[str, float]):
-            return metrics["eval_loss"], metrics["eval_reassembly"]
-
-        best_trials = trainer.hyperparameter_search(
-            direction=["minimize", "maximize"],
-            backend="optuna",
-            hp_space=optuna_hp_space,
-            n_trials=optuna_n_trials,
-            compute_objective=compute_objective,
-        )
-        print("-" * 80)
-        print(f"Best trials:\n{best_trials}")
-        print("-" * 80)
-    else:
+    if resume_from_checkpoint is not None and num_optuna_trials > 0:
         trainer.train(
-            resume_from_checkpoint=resume_from_checkpoint, # "last-checkpoint",
+            resume_from_checkpoint=resume_from_checkpoint,
         )
+    else:
+        trainer.train()
+    print("-" * 80)
+    print("Training completed.")
+    print("-" * 80)
+
     if hub_model_id is not None:
+        print("Pushing model to Hugging Face Hub.")
+        print("-" * 80)
         tokenizer.save_pretrained(output_dir)
         trainer.push_to_hub(
             commit_message="Initial version",
@@ -252,3 +397,4 @@ def train_model(
             token=hub_token,
             tags=["PROTAC", "cheminformatics"],
         )
+    print("All done.")
