@@ -5,6 +5,7 @@ from typing import List, Tuple, Callable, Any, Union, Dict, Optional, Literal
 import numpy as np
 from rdkit import Chem
 from rdkit import Chem, RDLogger
+from rdkit.Chem import AllChem, DataStructs
 
 # Disable RDKit logging: when checking SMILES validity, we suppress warnings
 RDLogger.DisableLog("rdApp.*")
@@ -159,8 +160,10 @@ def score_prediction(
         rouge = None,
         poi_attachment_id: int = 1,
         e3_attachment_id: int = 2,
+        fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=11, fpSize=2048),
+        compute_rdkit_metrics: bool = False,
         compute_graph_metrics: bool = False,
-        **graph_edit_kwargs,
+        graph_edit_kwargs: Dict[str, Any] = {},
 ) -> dict[str, float]:
     """ Score a PROTAC SMILES prediction.
 
@@ -193,6 +196,13 @@ def score_prediction(
             pred_substructs['linker'],
             pred_substructs['e3'],
         )
+        if scores['valid'] and compute_rdkit_metrics:
+            # Get Tanimoto similarity between the predicted PROTAC and the ground truth PROTAC
+            pred_mol = Chem.MolFromSmiles(pred_smiles)
+            label_mol = Chem.MolFromSmiles(label_smiles)
+            pred_fp = fpgen.GetFingerprint(pred_mol)
+            label_fp = fpgen.GetFingerprint(label_mol)
+            scores['tanimoto_similarity'] = DataStructs.TanimotoSimilarity(pred_fp, label_fp)
 
     label_substructs = split_prediction(label_smiles, poi_attachment_id, e3_attachment_id)
     for sub in ['e3', 'poi', 'linker']:
@@ -220,6 +230,14 @@ def score_prediction(
         
         if scores[f'{sub}_valid'] and compute_graph_metrics:
             scores[f'{sub}_graph_edit_distance'] = get_smiles2graph_edit_distance(pred_sub, label_sub, **graph_edit_kwargs)
+
+        if scores[f'{sub}_valid'] and compute_rdkit_metrics:
+            # Get Tanimoto similarity between the predicted substructure and the ground truth substructure
+            pred_mol = Chem.MolFromSmiles(pred_sub)
+            label_mol = Chem.MolFromSmiles(label_sub)
+            pred_fp = fpgen.GetFingerprint(pred_mol)
+            label_fp = fpgen.GetFingerprint(label_mol)
+            scores[f'{sub}_tanimoto_similarity'] = DataStructs.TanimotoSimilarity(pred_fp, label_fp)
 
         if rouge is not None:
             rouge_output = rouge.compute(predictions=[pred_sub], references=[label_sub])

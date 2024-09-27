@@ -15,15 +15,16 @@ def process_data_to_model_inputs(
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     # tokenize the inputs and labels
-    inputs = tokenizer(batch["text"], padding="max_length", truncation=True, max_length=encoder_max_length)
-    outputs = tokenizer(batch["labels"], padding="max_length", truncation=True, max_length=decoder_max_length)
+    inputs = tokenizer(batch["text"], truncation=True, max_length=encoder_max_length)
+    outputs = tokenizer(batch["labels"], truncation=True, max_length=decoder_max_length)
     batch["input_ids"] = inputs.input_ids
     batch["attention_mask"] = inputs.attention_mask
     batch["labels"] = outputs.input_ids.copy()
     # Because BERT automatically shifts the labels, the labels correspond exactly to `decoder_input_ids`.
     # We have to make sure that the PAD token is ignored when calculating the loss.
     # NOTE: Check the `ignore_index` argument in nn.CrossEntropyLoss.
-    batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
+    # NOTE: The following is done in the DataCollatorForSeq2Seq
+    # batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
     return batch
 
 
@@ -35,6 +36,7 @@ def load_tokenized_dataset(
     encoder_max_length:int = 512,
     decoder_max_length:int = 512,
     token: Optional[str] = None,
+    num_proc_map: int = 1,
 ) -> Dataset:
     """ Load dataset and tokenize it.
     
@@ -60,11 +62,12 @@ def load_tokenized_dataset(
             "encoder_max_length": encoder_max_length,
             "decoder_max_length": decoder_max_length,
         },
+        num_proc=num_proc_map,
     )
-    dataset_tokenized.set_format(
-        type="torch",
-        columns=["input_ids", "attention_mask", "labels"],
-    )
+    # dataset_tokenized.set_format(
+    #     type="torch",
+    #     columns=["input_ids", "attention_mask", "labels"],
+    # )
     return dataset_tokenized
 
 

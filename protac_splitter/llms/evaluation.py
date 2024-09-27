@@ -16,7 +16,7 @@ def decode_and_get_metrics(
     pred,
     rouge = evaluate.load("rouge"),
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
-    fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=8, fpSize=2048),
+    fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=11, fpSize=2048),
 ) -> dict[str, float]:
     """ Compute metrics for tokenized PROTAC predictions.
 
@@ -38,8 +38,11 @@ def decode_and_get_metrics(
     
     # Replace -100 in the IDs with the tokenizer pad token id
     # NOTE: Check the `ignore_index` argument in nn.CrossEntropyLoss.
+    # TODO: Understand why this needs to be done to the inputs as well
     ignore_index = -100
+    input_ids[input_ids == ignore_index] = tokenizer.pad_token_id
     labels_ids[labels_ids == ignore_index] = tokenizer.pad_token_id
+    pred_ids[pred_ids == ignore_index] = tokenizer.pad_token_id
     
     # Get strings from IDs
     input_str = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
@@ -56,7 +59,10 @@ def decode_and_get_metrics(
             protac_smiles=protac_smiles,
             label_smiles=label_smiles,
             pred_smiles=pred_smiles,
-            timeout=0.5,
+            fpgen=fpgen,
+            graph_edit_kwargs={"timeout": 0.5},
+            compute_rdkit_metrics=False,
+            compute_graph_metrics=False,
         ))
     scores = {k: np.array([s[k] for s in scores]).mean() for k in scores[0].keys()}
     scores.update({k: v for k, v in rouge_output.items()})
