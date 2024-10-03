@@ -1,7 +1,8 @@
 import os
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable, Tuple
 from functools import partial
 import subprocess
+import copy
 
 import evaluate
 import huggingface_hub as hf
@@ -14,6 +15,8 @@ from transformers import (
     GenerationConfig,
 )
 from datasets import load_dataset
+from optuna.samplers import QMCSampler
+from optuna.pruners import HyperbandPruner
 
 from .data_utils import load_tokenized_dataset
 from .evaluation import decode_and_get_metrics
@@ -27,6 +30,8 @@ from .model_utils import get_model
 
 def get_lr_scheduler_kwargs(lr_scheduler_type: str) -> Dict[str, Any]:
     """ Returns the default learning rate scheduler kwargs for a given type.
+
+    Reference: https://huggingface.co/docs/timm/en/reference/schedulers
     
     Args:
         lr_scheduler_type (str): The type of the learning rate scheduler.
@@ -46,6 +51,174 @@ def get_lr_scheduler_kwargs(lr_scheduler_type: str) -> Dict[str, Any]:
         return {"min_lr": 1e-6}
     else:
         raise ValueError(f"Unknown learning rate scheduler type: '{lr_scheduler_type}'")
+
+
+def get_best_hyperparameters(
+        model_init: Callable,
+        tokenizer: AutoTokenizer,
+        data_collator: DataCollatorForSeq2Seq,
+        compute_metrics: Callable,
+        dataset_tokenized: Dict[str, Any],
+        training_args: Dict[str, Any],
+        num_optuna_trials: int,
+) -> Tuple[float, Dict[str, Any], Dict[str, Any]]:
+    """Runs an Optuna hyperparameter search to find the best hyperparameters.
+
+    Args:
+        model_init (Callable): The model initialization function.
+        tokenizer (AutoTokenizer): The tokenizer.
+        data_collator (DataCollatorForSeq2Seq): The data collator.
+        compute_metrics (Callable): The compute metrics function.
+        dataset_tokenized (Dict[str, Any]): The tokenized dataset.
+        training_args (Dict[str, Any]): The training arguments.
+        num_optuna_trials (int): The number of Optuna trials.
+
+    Returns:
+        Tuple[float, Dict[str, Any], Dict[str, Any]]: The best objective, the best hyperparameters, and the best training arguments.
+    """
+    def optuna_hp_space(trial):
+        # NOTE: Tuning generation config is not implemented yet, please refer to this issue: https://github.com/huggingface/transformers/issues/33755
+        # ------------------------------------------------------------------
+        # # Define default generation parameters
+        # generation_params = {
+        #     "max_length": 512,
+        #     "max_new_tokens": 512,
+        #     'top_k': 20,
+        # }
+        # 
+        # # Define the generation strategies and pick one with Optuna
+        # # REF: https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/generation/configuration_utils.py#L71
+        # generation_strategy_params = {
+        #     "greedy": {"num_beams": 1, "do_sample": False},
+        #     "contrastive_search": {"penalty_alpha": 0.1, "top_k": 10},
+        #     "multinomial_sampling": {"num_beams": 1, "do_sample": True},
+        #     "beam_search_decoding": {"num_beams": 5, "do_sample": False},
+        #     "beam_search_multinomial_sampling": {"num_beams": 5, "do_sample": True},
+        #     "diverse_beam_search_decoding": {"num_beams": 5, "num_beam_groups": 5, "diversity_penalty": 1.0},
+        # }
+        # gen_strategy = trial.suggest_categorical("generation_strategy", list(generation_strategy_params.keys()))
+        # generation_params.update(generation_strategy_params[gen_strategy])
+        # 
+        # # Update the generation params with the temperature
+        # temperature = trial.suggest_float("temperature", 0.5, 1.1, step=0.1)
+        # generation_params["temperature"] = temperature
+        # 
+        # # # Instantiate a GenerationConfig object to pass to the Trainer arguments
+        # # generation_config = GenerationConfig(**generation_params)
+        # ------------------------------------------------------------------
+
+        learning_rate = trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True)
+
+        # NOTE: We might want to use QMCSampler instead of TPESampler, which
+        # doesn't support categorical parameters. Categories can be encoded as
+        # integers and then decoded back to the original categories.
+        generation_num_beams = trial.suggest_int("generation_num_beams", 0, 1)
+        generation_num_beams = 1 if generation_num_beams == 0 else 5
+
+        # lr_scheduler_type = trial.suggest_categorical("lr_scheduler_type", ["cosine", "cosine_with_restarts", "reduce_lr_on_plateau"]) # "cosine_with_min_lr", "polynomial"
+        lr_scheduler_types = ["cosine", "cosine_with_restarts", "reduce_lr_on_plateau"] # "cosine_with_min_lr", "polynomial"
+        lr_scheduler_type = trial.suggest_int("lr_scheduler_type", 0, len(lr_scheduler_types) - 1)
+        lr_scheduler_type = lr_scheduler_types[lr_scheduler_type]
+
+        # # Change the number of evaluation steps based on the warmup ratio
+        # # suggested by Optuna. This way, we should not prune too early
+        # warmup_ratio = trial.suggest_float("warmup_ratio", 0.01, 0.1, step=0.01)
+        # num_steps = max(max_steps, num_train_epochs * len(dataset_tokenized["train"]) // batch_size)
+        # warmup_steps = int(warmup_ratio * num_steps)
+        # hp_eval_steps = warmup_steps * 2
+
+        return {
+            "learning_rate": learning_rate,
+            "lr_scheduler_type": lr_scheduler_type,
+            "lr_scheduler_kwargs": get_lr_scheduler_kwargs(lr_scheduler_type),
+            "generation_num_beams": generation_num_beams,
+            # "warmup_ratio": warmup_ratio,
+            # "eval_steps": hp_eval_steps,
+            # "generation_config": generation_config,
+            # "generation_config": generation_params,
+            # **{f"generation_{k}": v for k, v in generation_params.items()},
+        }
+
+    def compute_objective(metrics: Dict[str, float]):
+        # NOTE: Having a higher eval_reassembly score should also correspond
+        # to a low eval loss, so we just focus on the reassembly score.
+        return metrics["eval_reassembly"]
+    
+    def hp_name(trial: Any) -> str:
+        trial_name = f"trial-number={trial.number}"
+        for hparam, value in trial.params.items():
+            # Check if the value is a float and round it to 3 decimals
+            if isinstance(value, float):
+                value = f"{value:.3f}"
+            elif hparam == "learning_rate":
+                value = f"{value:.1e}"
+            trial_name += f"-{hparam}={value}"
+        return trial_name
+
+    # REF: Evaluate a bit more often than the default to be able to prune
+    # bad trials early.
+    # NOTE: Since the warmup can affect the objective, we instead increase
+    # the eval_steps to prevent pruning too early when the LR is still
+    # warming up.
+    # Override the training steps
+    hp_training_args = copy.deepcopy(training_args)
+    hp_training_args["num_train_epochs"] = -1
+    hp_training_args["max_steps"] = 1200
+    hp_training_args["eval_steps"] = 30
+    hp_training_args["logging_steps"] = 30
+    hp_training_args["warmup_ratio"] = 0.01
+    hp_training_args["save_steps"] = 1200 # Do not save models during hyperparameter search
+
+    # num_steps = max(max_steps, num_train_epochs * len(dataset_tokenized["train"]) // (batch_size * gradient_accumulation_steps))
+    # eval_steps = hp_training_args.get("eval_steps", 500)
+    # hp_eval_steps = eval_steps * 2
+    # hp_training_args["eval_steps"] = hp_eval_steps + num_steps % hp_eval_steps
+
+    # Setup a "fake" Trainer for the hyperparameter search
+    trainer = Seq2SeqTrainer(
+        model_init=model_init,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+        args=Seq2SeqTrainingArguments(**hp_training_args),
+        compute_metrics=compute_metrics,
+        train_dataset=dataset_tokenized["train"],
+        eval_dataset=dataset_tokenized["test"],
+    )
+    best_trial = trainer.hyperparameter_search(
+        direction="maximize",
+        backend="optuna",
+        hp_space=optuna_hp_space,
+        hp_name=hp_name,
+        n_trials=num_optuna_trials,
+        # compute_objective=compute_objective, # Default: Will sum over all metrics but loss
+        sampler=QMCSampler(scramble=True, seed=42),
+        pruner=HyperbandPruner(
+            max_resource=hp_training_args["max_steps"] // hp_training_args["eval_steps"],
+            min_resource=1,
+            reduction_factor=3,
+        ),
+    )
+
+    # Set the best hyperparameters in the original Trainer arguments
+    print("-" * 80)
+    print(f"Best trial objective: {best_trial.objective:.4f} (sum of metrics)")
+    
+    # NOTE: We need to copy the training_args to keep the original settings
+    best_training_args = copy.deepcopy(training_args)
+    for hparam, value in best_trial.hyperparameters.items():
+        if hparam == "lr_scheduler_type":
+            lr_scheduler_types = ["cosine", "cosine_with_restarts", "reduce_lr_on_plateau"] # "cosine_with_min_lr", "polynomial"
+            value = lr_scheduler_types[value]
+            best_training_args["lr_scheduler_kwargs"] = get_lr_scheduler_kwargs(value)
+        elif hparam == "generation_num_beams":
+            value = 1 if value == 0 else 5
+            best_training_args["generation_num_beams"] = value
+        else:
+            best_training_args[hparam] = value
+        print(f"\t* {hparam}: {value}")
+        print("-" * 80)
+
+    return best_trial.objective, best_trial.hyperparameters.items(), best_training_args
 
 
 def train_model(
@@ -73,6 +246,7 @@ def train_model(
     resume_from_checkpoint: Optional[str] = None,
     num_optuna_trials: int = 0,
     num_proc_map: int = 1,
+    per_device_batch_size: Optional[int] = None,
 ):
     """Trains a model on a given dataset.
     
@@ -180,13 +354,13 @@ def train_model(
         pad_to_multiple_of=8,
     )
 
-    # Setup the metric function
+    # Setup the compute_metrics function
     rouge = evaluate.load("rouge")
     fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
         radius=11,
         fpSize=1024,
     )
-    metric = partial(
+    compute_metrics = partial(
         decode_and_get_metrics,
         rouge=rouge,
         tokenizer=tokenizer,
@@ -194,7 +368,8 @@ def train_model(
     )
 
     # Setup the training arguments
-    per_device_batch_size = batch_size // gradient_accumulation_steps
+    if per_device_batch_size is None:
+        per_device_batch_size = batch_size // gradient_accumulation_steps
     if training_args is None:
         generation_config = GenerationConfig(
             max_length=512,
@@ -209,7 +384,8 @@ def train_model(
             "learning_rate": learning_rate,
             "optim": "adamw_torch",
             "lr_scheduler_type": "cosine",
-            "warmup_steps": 8000, # NOTE: ChemFormer: 8000
+            # "warmup_steps": 8000, # NOTE: ChemFormer: 8000
+            "warmup_ratio": 0.01,
             "adam_beta1": 0.9, # NOTE: ChemFormer: 0.9
             "adam_beta2": 0.999, # NOTE: ChemFormer: 0.999
             "adam_epsilon": 1e-8, # Default: 1e-8
@@ -244,8 +420,10 @@ def train_model(
             "save_only_model": False, # Default: False
             # Hub information configs
             "push_to_hub": True, # NOTE: Also manually done further down
-            "hub_token": hub_token,
+            "push_to_hub_model_id": model_id,
+            "push_to_hub_organization": organization,
             "hub_model_id": hub_model_id,
+            "hub_token": hub_token,
             "hub_strategy": "checkpoint", # NOTE: Allows to resume training from last checkpoint 
             "hub_private_repo": True,
             # Other configs
@@ -255,114 +433,41 @@ def train_model(
 
     # Modify the training arguments with Optuna hyperparameter search
     if num_optuna_trials > 0:
-        def optuna_hp_space(trial):
-
-            # NOTE: Tuning generation config is not implemented yet, please refer to this issue: https://github.com/huggingface/transformers/issues/33755
-            # ------------------------------------------------------------------
-            # # Define default generation parameters
-            # generation_params = {
-            #     "max_length": 512,
-            #     "max_new_tokens": 512,
-            #     'top_k': 20,
-            # }
-            # 
-            # # Define the generation strategies and pick one with Optuna
-            # # REF: https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/generation/configuration_utils.py#L71
-            # generation_strategy_params = {
-            #     "greedy": {"num_beams": 1, "do_sample": False},
-            #     "contrastive_search": {"penalty_alpha": 0.1, "top_k": 10},
-            #     "multinomial_sampling": {"num_beams": 1, "do_sample": True},
-            #     "beam_search_decoding": {"num_beams": 5, "do_sample": False},
-            #     "beam_search_multinomial_sampling": {"num_beams": 5, "do_sample": True},
-            #     "diverse_beam_search_decoding": {"num_beams": 5, "num_beam_groups": 5, "diversity_penalty": 1.0},
-            # }
-            # gen_strategy = trial.suggest_categorical("generation_strategy", list(generation_strategy_params.keys()))
-            # generation_params.update(generation_strategy_params[gen_strategy])
-            # 
-            # # Update the generation params with the temperature
-            # temperature = trial.suggest_float("temperature", 0.5, 1.1, step=0.1)
-            # generation_params["temperature"] = temperature
-            # 
-            # # # Instantiate a GenerationConfig object to pass to the Trainer arguments
-            # # generation_config = GenerationConfig(**generation_params)
-            # ------------------------------------------------------------------
-
-            learning_rate = trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True)
-            lr_scheduler_type = trial.suggest_categorical("lr_scheduler_type", ["cosine", "cosine_with_restarts", "reduce_lr_on_plateau"]) # "cosine_with_min_lr", "polynomial"
-            warmup_ratio = trial.suggest_float("warmup_ratio", 0.0, 0.1, step=0.01)
-            generation_num_beams = trial.suggest_categorical("generation_num_beams", [1, 5])
-
-            # Change the number of evaluation steps based on the warmup ratio
-            # suggested by Optuna. This way, we should not prune too early
-            num_steps = max(max_steps, num_train_epochs * len(dataset_tokenized["train"]) // batch_size)
-            warmup_steps = int(warmup_ratio * num_steps)
-            hp_eval_steps = warmup_steps * 2
-
-            return {
-                "learning_rate": learning_rate,
-                "lr_scheduler_type": lr_scheduler_type,
-                "lr_scheduler_kwargs": get_lr_scheduler_kwargs(lr_scheduler_type),
-                "warmup_ratio": warmup_ratio,
-                "generation_num_beams": generation_num_beams,
-                "eval_steps": hp_eval_steps,
-                # "generation_config": generation_config,
-                # "generation_config": generation_params,
-                # **{f"generation_{k}": v for k, v in generation_params.items()},
-            }
-
-        def compute_objective(metrics: Dict[str, float]):
-            # NOTE: Having a higher eval_reassembly score should also correspond
-            # to a low eval loss, so we just focus on the reassembly score.
-            return metrics["eval_reassembly"]
-
-        # REF: Evaluate a bit more often than the default to be able to prune
-        # bad trials early.
-        # NOTE: Since the warmup can affect the objective, we instead increase
-        # the eval_steps to prevent pruning too early when the LR is still
-        # warming up.
-        num_steps = max(max_steps, num_train_epochs * len(dataset_tokenized["train"]) // batch_size)
-        eval_steps = training_args.get("eval_steps", 500)
-        hp_eval_steps = eval_steps * 2
-        training_args["eval_steps"] = hp_eval_steps + num_steps % hp_eval_steps
-
-        # Setup a "fake" Trainer for the hyperparameter search
-        trainer = Seq2SeqTrainer(
+        # Run the HP search (and update the training_args accordingly)
+        best_objective, _, training_args = get_best_hyperparameters(
             model_init=bert2bert,
             tokenizer=tokenizer,
             data_collator=data_collator,
-            args=Seq2SeqTrainingArguments(**(training_args.copy())),
-            compute_metrics=metric,
-            train_dataset=dataset_tokenized["train"],
-            eval_dataset=dataset_tokenized["test"],
-        )
-        best_trial = trainer.hyperparameter_search(
-            direction="maximize",
-            backend="optuna",
-            hp_space=optuna_hp_space,
-            n_trials=num_optuna_trials,
-            compute_objective=compute_objective,
+            compute_metrics=compute_metrics,
+            dataset_tokenized=dataset_tokenized,
+            training_args=copy.deepcopy(training_args),
+            num_optuna_trials=num_optuna_trials,
         )
 
-        # Set the best hyperparameters in the Trainer arguments (and log them)
-        print("-" * 80)
-        print(f"Best trial objective: {best_trial.objective:.4f} (eval_reassembly)")
-        for hparam, value in best_trial.hyperparameters.items():
-            print(f"\t* {hparam}: {value}")
-            training_args[hparam] = value
-            if hparam == "lr_scheduler_type":
-                training_args["lr_scheduler_kwargs"] = get_lr_scheduler_kwargs(value)
-        print("-" * 80)
+        # Save to output directory the best hyperparameters
+        with open(f"{output_dir}/best_hyperparameters.md", "w") as f:
+            f.write(f"Number of Optuna trials: {num_optuna_trials}\n\n")
+            f.write(f"Best trial objective: {best_objective:.4f} (sum of metrics)\n\n")
+            for hparam, value in training_args.items():
+                if hparam == "token":
+                    continue
+                f.write(f"- {hparam}: {value}\n")
 
-        # Setup the original eval_steps
-        training_args["eval_steps"] = eval_steps
-        
+        api = hf.HfApi()
+        api.upload_file(
+            path_or_fileobj=f"{output_dir}/best_hyperparameters.md",
+            path_in_repo="best_hyperparameters.md",
+            repo_id=hub_model_id,
+            token=hub_token,
+        )
+
     # Setup the Trainer and start training (with best hyperparameters)
     trainer = Seq2SeqTrainer(
         model_init=bert2bert,
         tokenizer=tokenizer,
         data_collator=data_collator,
         args=Seq2SeqTrainingArguments(**training_args),
-        compute_metrics=metric,
+        compute_metrics=compute_metrics,
         train_dataset=dataset_tokenized["train"],
         eval_dataset=dataset_tokenized["test"],
     )
