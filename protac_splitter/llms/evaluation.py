@@ -60,9 +60,9 @@ def decode_and_get_metrics(
             label_smiles=label_smiles,
             pred_smiles=pred_smiles,
             fpgen=fpgen,
-            graph_edit_kwargs={"timeout": 0.5},
             compute_rdkit_metrics=False,
-            compute_graph_metrics=False,
+            compute_graph_metrics=True,
+            graph_edit_kwargs={"timeout": 0.5},
         ))
     scores = {k: np.array([s[k] for s in scores]).mean() for k in scores[0].keys()}
     scores.update({k: v for k, v in rouge_output.items()})

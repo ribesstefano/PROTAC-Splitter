@@ -27,19 +27,14 @@ def get_smiles2graph_edit_distance(smi1: str, smi2: str, **kwargs) -> float:
 def get_mol2graph_edit_distance(mol1: str, mol2: str, **kwargs) -> float:
     return nx.graph_edit_distance(mol2graph(mol1), mol2graph(mol2), **kwargs)
 
-def mol2graph(mol: Chem.Mol) -> nx.Graph:
-    G = nx.Graph()
-    for atom in mol.GetAtoms():
-        if atom.GetAtomicNum() != 0:
-            G.add_node(atom.GetIdx(), label=atom.GetSymbol())
-    for bond in mol.GetBonds():
-        if bond.GetBeginAtom().GetAtomicNum() == 0 or bond.GetEndAtom().GetAtomicNum() == 0:
-            continue
-        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), label=str(bond.GetBondType()))
-    return G
-
-def smiles2graph(smiles: str) -> nx.Graph:
-    return mol2graph(Chem.MolFromSmiles(smiles))
+def get_smiles2graph_edit_distance_norm(smi1: str, smi2: str, ged_G1_G2: None, **kwargs) -> float:
+    G1 = smiles2graph(smi1)
+    G2 = smiles2graph(smi2)
+    G0 = nx.empty_graph()
+    ged_G1_G2 = ged_G1_G2 if ged_G1_G2 is not None else nx.graph_edit_distance(G1, G2, **kwargs)
+    ged_G1_G0 = nx.graph_edit_distance(G1, G0, **kwargs)
+    ged_G2_G0 = nx.graph_edit_distance(G2, G0, **kwargs)
+    return ged_G1_G2 / (ged_G1_G0 + ged_G2_G0)
 
 def smiles2adjacency_matrix(smiles: str) -> np.ndarray:
     return nx.adjacency_matrix(smiles2graph(smiles)).todense()

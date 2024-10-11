@@ -11,8 +11,11 @@ from rdkit.Chem import AllChem, DataStructs
 RDLogger.DisableLog("rdApp.*")
 
 from .chemoinformatics import standardize_smiles
-from .graphs_utils import get_smiles2graph_edit_distance
 from .protac_cheminformatics import reassemble_protac
+from .graphs_utils import (
+    get_smiles2graph_edit_distance,
+    get_smiles2graph_edit_distance_norm,
+)
 
 
 def is_valid_smiles(smiles: str) -> bool:
@@ -59,7 +62,7 @@ def split_prediction(
     """
     ret = {k: None for k in ['poi', 'linker', 'e3']}
     substructs = pred.split('.')
-    if len(substructs) < 2:
+    if len(substructs) != 3:
         return ret
     for substr in substructs:
         if f'[*:{poi_attachment_id}]' in substr and f'[*:{e3_attachment_id}]' not in substr:
@@ -182,6 +185,7 @@ def score_prediction(
 
     scores['has_three_substructures'] = has_three_substructures(pred_smiles)
     scores['has_all_attachment_points'] = has_all_attachment_points(pred_smiles)
+    scores['tanimoto_similarity'] = 0.0 # Default value
 
     pred_substructs = split_prediction(pred_smiles, poi_attachment_id, e3_attachment_id)
 
@@ -204,15 +208,22 @@ def score_prediction(
             label_fp = fpgen.GetFingerprint(label_mol)
             scores['tanimoto_similarity'] = DataStructs.TanimotoSimilarity(pred_fp, label_fp)
 
+
     label_substructs = split_prediction(label_smiles, poi_attachment_id, e3_attachment_id)
     for sub in ['e3', 'poi', 'linker']:
         pred_sub = pred_substructs[sub]
         label_sub = label_substructs[sub]
 
+        # Set default values
         scores[f'{sub}_valid'] = False
         scores[f'{sub}_has_attachment_point(s)'] = False
-        if compute_graph_metrics:
-            scores[f'{sub}_graph_edit_distance'] = np.inf
+        scores[f'{sub}_tanimoto_similarity'] = 0.0
+        # NOTE: The graph edit distance can be very high and dependant on the
+        # graphs, but when the molecule is not valid, then we cannot compute it.
+        # Because of that, we instead set it to something very large, in case we
+        # need to sum the eval metrics.
+        scores[f'{sub}_graph_edit_distance'] = 1e64
+        scores[f'{sub}_graph_edit_distance_norm'] = 1.0
 
         if pred_sub is None:
             continue
@@ -230,6 +241,13 @@ def score_prediction(
         
         if scores[f'{sub}_valid'] and compute_graph_metrics:
             scores[f'{sub}_graph_edit_distance'] = get_smiles2graph_edit_distance(pred_sub, label_sub, **graph_edit_kwargs)
+            scores[f'{sub}_graph_edit_distance_norm'] = get_smiles2graph_edit_distance_norm(
+                pred_sub,
+                label_sub,
+                scores[f'{sub}_graph_edit_distance'],
+                **graph_edit_kwargs,
+            )
+
 
         if scores[f'{sub}_valid'] and compute_rdkit_metrics:
             # Get Tanimoto similarity between the predicted substructure and the ground truth substructure

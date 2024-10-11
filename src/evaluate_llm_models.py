@@ -1,16 +1,20 @@
+import os
 from collections import defaultdict
 import logging
 import sys
+import argparse
 from typing import Tuple, Optional, Dict
 
+import pandas as pd
 
 from protac_splitter.evaluation import (
-    is_valid_smiles,
-    has_three_substructures,
-    has_all_attachment_points,
+    # is_valid_smiles,
+    # has_three_substructures,
+    # has_all_attachment_points,
+    split_prediction,
     check_substructs,
+    score_prediction,
 )
-from protac_splitter.llms.evaluation import split_prediction
 
 import evaluate
 from rdkit import Chem
@@ -23,9 +27,9 @@ import networkx as nx
 import torch
 import numpy as np
 from jsonargparse import CLI
-from datasets import load_dataset
+from datasets import load_dataset, Dataset
+from transformers import AutoTokenizer, pipeline, GenerationConfig
 from transformers.pipelines.pt_utils import KeyDataset
-from transformers import AutoTokenizer, pipeline
 from tqdm import tqdm
 
 
@@ -64,11 +68,26 @@ def dummy2query(mol: Chem.Mol) -> Chem.Mol:
     return Chem.AdjustQueryProperties(mol, p)
 
 
+def get_smiles_nostereo(smiles: str) -> str:
+    """ Removes stereochemistry from a SMILES string.
+    
+    Args:
+        smiles: The SMILES string to remove stereochemistry from.
+
+    Returns:
+        The SMILES string without stereochemistry.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    Chem.RemoveStereochemistry(mol)
+    return Chem.MolToSmiles(mol, canonical=True)
+
+
 def fix_prediction(
         protac_smiles: str,
         pred_smiles: str,
         poi_attachment_id: int = 1,
         e3_attachment_id: int = 2,
+        remove_stereochemistry: bool = False,
 ) -> Optional[Dict[str, str]]:
     """ Fixes a prediction by replacing the substructure that does not match the PROTAC with the rest of the PROTAC.
     
@@ -84,29 +103,39 @@ def fix_prediction(
     
     substructs = split_prediction(pred_smiles)
 
-    if substructs is None:
+    # If there are at least two None values, there's nothing we can do to fix it
+    if sum(v is None for v in substructs.values()) >= 2:
         logging.warning(f'Invalid prediction for "{pred_smiles}"')
         return None
-    
-    if check_substructs(
-        protac_smiles,
-        substructs['poi'],
-        substructs['linker'],
-        substructs['e3'],
-    ):
-        return substructs
-    
-    # TODO: Check if removing stereochemistry results in a valid prediction
     
     protac_mol = Chem.MolFromSmiles(protac_smiles)
     substructs = {k: {'smiles': v, 'mol': Chem.MolFromSmiles(v)} for k, v in substructs.items()}
 
-    # Check if any of the substructures is NOT a substruction of the PROTAC
+    # TODO: Check if removing stereochemistry results in a valid prediction
+    if remove_stereochemistry:
+        Chem.RemoveStereochemistry(protac_mol)
+        protac_smiles = Chem.MolToSmiles(protac_mol, canonical=True)
+        for k, v in substructs.items():
+            if v['mol'] is not None:
+                Chem.RemoveStereochemistry(v['mol'])
+                substructs[k]['smiles'] = Chem.MolToSmiles(v['mol'], canonical=True)
+    
+    if all(v['mol'] is not None for v in substructs.values()):
+        if check_substructs(
+            protac_smiles,
+            poi_smiles=substructs['poi']['smiles'],
+            linker_smiles=substructs['linker']['smiles'],
+            e3_smiles=substructs['e3']['smiles'],
+        ):
+            return {k: v['smiles'] for k, v in substructs.items()}
+
+    # Check if any of the substructures is NOT a substructure of the PROTAC
     num_matches = 0
     wrong_substruct = None
     for sub in ['poi', 'linker', 'e3']:
         if substructs[sub]['mol'] is None:
-            return None
+            substructs[sub]['match'] = False
+            wrong_substruct = sub
         elif protac_mol.HasSubstructMatch(dummy2query(substructs[sub]['mol'])):
             substructs[sub]['match'] = True
             num_matches += 1
@@ -119,8 +148,8 @@ def fix_prediction(
         return None
 
     if num_matches == 3:
-        logging.warning(f'Prediction contains all substructures of the PROTAC. Prediction SMILES: "{pred_smiles}"')
-        return None
+        logging.warning(f'Prediction already contains all matching substructures of the PROTAC. Prediction SMILES: "{pred_smiles}"')
+        return {k: v['smiles'] for k, v in substructs.items()}
 
     fixed_mol = protac_mol
     for sub in ['poi', 'e3', 'linker']:
@@ -134,6 +163,11 @@ def fix_prediction(
             if fixed_mol is None:
                 logging.warning(f'Failed to replace substructure "{sub}" in prediction SMILES: "{pred_smiles}"')
                 return None
+            
+            # TODO: Try again with another order if when replacing the core we
+            # obtain TWO molecules instead of one. This might happen when a
+            # substructure is still matching but it is "smaller" than the right
+            # one, resulting in "dangling" atoms.
 
             # Rename the attachment points
             attachment_id = poi_attachment_id if sub == 'poi' else e3_attachment_id
@@ -151,92 +185,215 @@ def fix_prediction(
 
 
 def main(
-        hub_token: str,
+        hub_token: Optional[str] = None,
+        model_name: str = "ailab-bio/PROTAC-Splitter-standard_recombined-ChemBERTa-zinc-base-v1",
         batch_size: int = 64,
+        log_dir: str = 'logs',
+        num_proc: int = 8,
+        geration_config_kwargs: Optional[Dict[str, any]] = None,
+        force_recompute: bool = False,
 ):
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model_name = "ailab-bio/PROTAC-Splitter-standard_rand_recombined-ChemBERTa-zinc-base"
+    # Set log level to ERROR
+    logging.basicConfig(level=logging.ERROR)
 
-    tokenizer = AutoTokenizer.from_pretrained(model_name, token=hub_token)
-    pipe = pipeline(
-        "text2text-generation",
-        model=model_name, # "ailab-bio/PROTAC-Splitter-standard-ChemBERTa-zinc-base",
-        tokenizer=tokenizer,
-        device=device,
-        token=hub_token,
-    )
+    # Check if hub_token is provided
+    if hub_token is None:
+        hub_token = os.getenv('HF_TOKEN', None)
+        if hub_token is None:
+            raise ValueError('Hugging Face API token not provided. Please provide a token using the --hub_token argument or set the HF_TOKEN environment variable')
+    
+    print('Loading dataset...')
     ds = load_dataset('ailab-bio/PROTAC-Splitter-Dataset', 'standard', token=hub_token)
+    test_ds = ds['test']
+
+    # Create a different test dataset with removed stereochemistry
+    print('Removing stereochemistry from test dataset...')
+    test_ds_nostereo = test_ds.map(
+        lambda x: {
+            'text': get_smiles_nostereo(x['text']),
+            'labels': get_smiles_nostereo(x['labels']),
+        },
+        num_proc=num_proc,
+    )
+
+    # Remove duplicates from test_ds_nostereo
+    test_df_nostereo = test_ds_nostereo.to_pandas()
+    test_df_nostereo = test_df_nostereo.drop_duplicates(subset=['text'])
+    test_ds_nostereo = Dataset.from_pandas(test_df_nostereo, preserve_index=False)
+
+    # Create logs directory if not exists and setup filenames
+    os.makedirs(log_dir, exist_ok=True)
+    log_name = model_name.split('/')[-1].replace('PROTAC-Splitter', 'logs')
+    pred_name = model_name.split('/')[-1].replace('PROTAC-Splitter', 'preds')
+    metrics_name = model_name.split('/')[-1].replace('PROTAC-Splitter', 'metrics')
+    log_filename = os.path.join(log_dir, f'{log_name}.log')
+    pred_filename = os.path.join(log_dir, f'{pred_name}.csv')
+    metrics_filename = os.path.join(log_dir, f'{metrics_name}.csv')
 
     # Load predictions if already generated
-    try:
-        with open('predictions.txt', 'r') as f:
-            preds = f.readlines()
-    except FileNotFoundError as e:
+    if os.path.exists(pred_filename) and not force_recompute:
+        print('Loading predictions from file...')
+        with open(pred_filename, 'r') as f:
+            input_preds = f.readlines()
+        preds = [line.split(',')[1].strip() for line in input_preds[1:]]
+    else:
+        print(f'Pre-generated predictions file "{pred_filename}" not found. Generating predictions...')
+
+        # Load model and tokenizer
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=hub_token)
+        if geration_config_kwargs is None:
+            pipe = pipeline(
+                "text2text-generation",
+                model=model_name,
+                tokenizer=tokenizer,
+                device='cuda' if torch.cuda.is_available() else 'cpu',
+                token=hub_token,
+            )
+        else:
+            generation_config = GenerationConfig(
+                max_length=512,
+                max_new_tokens=512,
+                **geration_config_kwargs,
+            )
+            pipe = pipeline(
+                "text2text-generation",
+                model=model_name,
+                tokenizer=tokenizer,
+                device='cuda' if torch.cuda.is_available() else 'cpu',
+                token=hub_token,
+                generation_config=generation_config,
+            )
+
+        # Generate predictions
         preds = []
-        for pred in tqdm(pipe(KeyDataset(ds['test'], 'text'), batch_size=batch_size), total=len(ds) // batch_size):
+        for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(ds) // batch_size):
             preds.append(pred[0]['generated_text'])
 
+        inputs = []
+        for text in KeyDataset(test_ds, 'text'):
+            inputs.append(text)
+
         # Save text predictions to file
-        with open('predictions.txt', 'w') as f:
-            for pred in preds:
-                f.write(pred + '\n')
+        with open(pred_filename, 'w') as f:
+            f.write('input,prediction\n')
+            for text, pred in zip(inputs, preds):
+                f.write(f'{text},{pred}\n')
+        
+        # Generate predictions
+        preds_nostereo = []
+        for pred in tqdm(pipe(KeyDataset(test_ds_nostereo, 'text'), batch_size=batch_size), total=len(ds) // batch_size):
+            preds_nostereo.append(pred[0]['generated_text'])
+
+        inputs_nostereo = []
+        for text in KeyDataset(test_ds_nostereo, 'text'):
+            inputs_nostereo.append(text)
+
+        # Save text predictions to file
+        with open(pred_filename.replace('preds', 'preds-nostereo'), 'w') as f:
+            f.write('input,prediction\n')
+            for text, pred in zip(inputs_nostereo, preds_nostereo):
+                f.write(f'{text},{pred}\n')
 
     print('Predictions collected. Evaluating predictions...')
 
-    metrics = defaultdict(list)
-    for (protac_smiles, label_smiles, pred_smiles) in tqdm(zip(ds['test']['text'], ds['test']['labels'], preds), total=len(preds)):
-        split_pred = split_prediction(pred_smiles)
-        if split_pred is None:
-            metrics['reassembly'].append(False)
-        else:
-            metrics['reassembly'].append(check_substructs(protac_smiles, split_pred['poi'], split_pred['linker'], split_pred['e3']))
-
-        # FindMCS: maximum common substructure (MCS) search method that allows atom and/or bond mismatches in the substructures shared among two small molecules.
-        split_label = split_prediction(label_smiles)
-        for sub in ['poi', 'linker', 'e3']:
-            label_mol = Chem.MolFromSmiles(split_label[sub])
-            label_graph = smiles2graph(split_label[sub])
-            max_edit_dist = label_graph.number_of_edges() + label_graph.number_of_nodes()
-
-            if split_pred is None or split_label is None:
-                metrics[f'findmcs_{sub}'].append(0)
-                metrics[f'graph_edit_{sub}'].append(max_edit_dist)
-                continue
-            sub_mol = Chem.MolFromSmiles(split_pred[sub])
-            if sub_mol is None:
-                metrics[f'findmcs_{sub}'].append(0)
-                metrics[f'graph_edit_{sub}'].append(max_edit_dist)
-                continue
-            mcs = rdFMCS.FindMCS(
-                [sub_mol, label_mol],
-                ringMatchesRingOnly=True,
-                completeRingsOnly=True,
-                matchValences=True,
-            )
-            metrics[f'findmcs_{sub}'].append(mcs.numAtoms)
-            metrics[f'graph_edit_{sub}'].append(
-                nx.graph_edit_distance(smiles2graph(split_pred[sub]), label_graph, timeout=2)
-            )
-
-        substructs = fix_prediction(protac_smiles, pred_smiles)
-        if substructs is None:
-            fix_reassembly = False
-        else:
-            fix_reassembly = check_substructs(
-                protac_smiles,
-                substructs['poi'],
-                substructs['linker'],
-                substructs['e3'],
-            )
-        metrics['fix_reassembly'].append(fix_reassembly)
+    # Add `preds` to the test dataset
+    test_ds = test_ds.add_column('preds', preds)
+    test_ds_nostereo = test_ds_nostereo.add_column('preds', preds_nostereo)
 
     rouge = evaluate.load("rouge")
-    for k, v in rouge.compute(predictions=preds, references=ds['test']['labels']).items():
-        metrics[k].append(v)
 
-    for k, v in metrics.items():
-        print(f'{k}: {np.mean(v)}')
+    def get_scores(sample):
+        protac_smiles = sample['text']
+        label_smiles = sample['labels']
+        pred_smiles = sample['preds']
+
+        scores = score_prediction(
+            protac_smiles,
+            label_smiles,
+            pred_smiles,
+            rouge=rouge,
+            poi_attachment_id=1, # Default ones...
+            e3_attachment_id=2, # Default ones...
+            compute_graph_metrics=True,
+            graph_edit_kwargs={'timeout': 1},
+        )
+
+        if scores['reassembly']:
+            scores['fix_reassembly'] = True
+            scores['fix_reassembly_nostereo'] = True
+        else:
+            substructs = fix_prediction(protac_smiles, pred_smiles)
+            if substructs is None:
+                fix_reassembly = False
+            else:
+                fix_reassembly = check_substructs(
+                    protac_smiles,
+                    substructs['poi'],
+                    substructs['linker'],
+                    substructs['e3'],
+                )
+            scores['fix_reassembly'] = fix_reassembly
+
+            # Try to fix prediction by removing stereochemistry
+            substructs = fix_prediction(protac_smiles, pred_smiles, remove_stereochemistry=True)
+            if substructs is None:
+                fix_reassembly = False
+            else:
+                fix_reassembly = check_substructs(
+                    protac_smiles,
+                    substructs['poi'],
+                    substructs['linker'],
+                    substructs['e3'],
+                )
+            scores['fix_reassembly_nostereo'] = fix_reassembly
+
+        scores['protac_smiles'] = protac_smiles
+        scores['label_smiles'] = label_smiles
+        scores['pred_smiles'] = pred_smiles
+
+        return scores
+    
+    # Evaluate predictions
+    metrics = test_ds.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
+    metrics = metrics.to_pandas()
+    metrics_nostereo = test_ds_nostereo.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
+    metrics_nostereo = metrics_nostereo.to_pandas()
+
+    # Save metrics to CSV
+    metrics.to_csv(metrics_filename, index=False)
+    metrics_nostereo.to_csv(metrics_filename.replace('metrics', 'metrics-nostereo'), index=False)
+
+    # Select non-smiles metrics
+    non_smiles_metrics = metrics.drop(columns=['protac_smiles', 'label_smiles', 'pred_smiles'])
+    non_smiles_metrics_nostereo = metrics_nostereo.drop(columns=['protac_smiles', 'label_smiles', 'pred_smiles'])
+
+    # Print out average metrics
+    print('-' * 80)
+    for k, v in non_smiles_metrics.mean().items():
+        print(f'{k}: {v}')
+    print('-' * 80)
+    print('No stereochemistry:')
+    print('-' * 80)
+    for k, v in non_smiles_metrics_nostereo.mean().items():
+        print(f'{k}: {v}')
+    print('-' * 80)
 
 
 if __name__ == '__main__':
-    CLI(main)
+    # Setup arg parser
+    parser = argparse.ArgumentParser(description='Evaluate PROTAC-Splitter models.')
+    parser.add_argument('--hub_token', type=str, required=True, help='Hugging Face API token')
+    parser.add_argument('--model_name', type=str, default="ailab-bio/PROTAC-Splitter-standard_recombined-ChemBERTa-zinc-base-v1", help='Model name')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
+    parser.add_argument('--log_dir', type=str, default='logs', help='Directory to save logs and predictions')
+    parser.add_argument('--num_proc', type=int, default=8, help='Number of processes to use for evaluation')
+    parser.add_argument('--force_recompute', action='store_true', help='Force recompute predictions')
+    args = parser.parse_args()
+    main(
+        hub_token=args.hub_token,
+        model_name=args.model_name,
+        batch_size=args.batch_size,
+        log_dir=args.log_dir,
+        num_proc=args.num_proc,
+        force_recompute=args.force_recompute,
+    )
