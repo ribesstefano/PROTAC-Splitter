@@ -153,3 +153,5 @@ lightning_logs
 logs/
 
 **/**/SSL_*
+**/**/slurm-*
+**/**/sbatch-*
