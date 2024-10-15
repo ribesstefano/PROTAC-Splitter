@@ -1,5 +1,6 @@
 """ Evaluation functions for the protac_splitter package. They need to be generic to accomodate predictions coming from different models. """
 
+import itertools
 from typing import List, Tuple, Callable, Any, Union, Dict, Optional, Literal
 
 import numpy as np
@@ -10,7 +11,7 @@ from rdkit.Chem import AllChem, DataStructs
 # Disable RDKit logging: when checking SMILES validity, we suppress warnings
 RDLogger.DisableLog("rdApp.*")
 
-from .chemoinformatics import standardize_smiles
+from .chemoinformatics import canonize_smiles, remove_stereo
 from .protac_cheminformatics import reassemble_protac
 from .graphs_utils import (
     get_smiles2graph_edit_distance,
@@ -18,8 +19,11 @@ from .graphs_utils import (
 )
 
 
-def is_valid_smiles(smiles: str) -> bool:
-    return Chem.MolFromSmiles(smiles) is not None
+def is_valid_smiles(smiles: str, return_mol: bool = False) -> bool:
+    mol = Chem.MolFromSmiles(smiles)
+    if return_mol:
+        return mol is not None, mol
+    return mol is not None
 
 
 def has_three_substructures(smiles: str) -> bool:
@@ -34,8 +38,8 @@ def is_substructure(protac_smiles: str, substruct_smiles: str) -> bool:
     """ Check if a molecule is a substructure of another molecule.
 
     Args:
-        protac_smiles (str): The SMILES notation for the PROTAC molecule.
-        substruct_smiles (str): The SMILES notation for the substructure molecule.
+        protac_smiles (str): The SMILES of the PROTAC molecule.
+        substruct_smiles (str): The SMILES of the substructure molecule.
 
     Returns:
         bool: True if the substructure molecule is a substructure of the PROTAC molecule, False otherwise.
@@ -53,7 +57,7 @@ def split_prediction(
     """ Split a PROTAC SMILES prediction into its three substructures.
 
     Args:
-        pred (str): The SMILES notation for the PROTAC molecule.
+        pred (str): The SMILES of the PROTAC molecule.
         poi_attachment_id (int): The attachment point ID for the POI substructure.
         e3_attachment_id (int): The attachment point ID for the E3 substructure.
 
@@ -87,13 +91,14 @@ def check_substructs(
     """ Check if the reassembled PROTAC is correct.
     
     Args:
-        protac_smiles (str): The SMILES notation for the PROTAC molecule.
-        poi_smiles (str): The SMILES notation for the POI ligand.
-        linker_smiles (str): The SMILES notation for the linker.
-        e3_smiles (str): The SMILES notation for the E3 binder.
+        protac_smiles (str): The SMILES of the PROTAC molecule.
+        poi_smiles (str): The SMILES of the POI ligand.
+        linker_smiles (str): The SMILES of the linker.
+        e3_smiles (str): The SMILES of the E3 binder.
         return_bond_types (bool): If True, return the bond types used for the reassembly.
         poi_attachment_id (int): The label of the attachment point for the POI ligand, i.e., "[*:{poi_attachment_id}]".
         e3_attachment_id (int): The label of the attachment point for the E3 binder, i.e., "[*:{e3_attachment_id}]".
+        pred (str): The SMILES of the predicted PROTAC molecule.
 
     Returns:
         bool | Tuple[bool, dict[str, str]]: True if the reassembled PROTAC is correct, False otherwise. If return_bond_types is True, also return the bond types used for the reassembly.
@@ -121,10 +126,12 @@ def check_substructs(
     correct_substructs = False
     protac_mol = Chem.MolFromSmiles(protac_smiles)
     protac_inchi = Chem.MolToInchi(protac_mol)
-    protac_smiles_canon = standardize_smiles(protac_smiles)
+    protac_smiles_canon = canonize_smiles(protac_smiles)
     bond_types = {}
-    for e3_bond_type in ['single', 'double', 'triple']:
-        for poi_bond_type in ['single', 'double', 'triple']:
+    bonds = ['single', 'double', 'triple']
+    # for e3_bond_type, poi_bond_type in itertools.product([bonds, bonds]):
+    for e3_bond_type in bonds:
+        for poi_bond_type in bonds:
             try:
                 _, assmbl_mol = reassemble_protac(
                     poi_smiles,
@@ -144,7 +151,7 @@ def check_substructs(
                         bond_types['e3_bond_type'] = e3_bond_type
                         bond_types['poi_bond_type'] = poi_bond_type
                         break
-                    if protac_smiles_canon == standardize_smiles(Chem.MolToSmiles(assmbl_mol)):
+                    if protac_smiles_canon == canonize_smiles(Chem.MolToSmiles(assmbl_mol)):
                         correct_substructs = True
                         bond_types['e3_bond_type'] = e3_bond_type
                         bond_types['poi_bond_type'] = poi_bond_type
@@ -171,9 +178,9 @@ def score_prediction(
     """ Score a PROTAC SMILES prediction.
 
     Args:
-        protac_smiles (str): The SMILES notation for the PROTAC molecule.
-        label_smiles (str): The SMILES notation for the ground truth PROTAC molecule.
-        pred_smiles (str): The SMILES notation for the predicted PROTAC molecule.
+        protac_smiles (str): The SMILES of the PROTAC molecule.
+        label_smiles (str): The SMILES of the ground truth PROTAC molecule.
+        pred_smiles (str): The SMILES of the predicted PROTAC molecule.
         rouge (Rouge | None): The Rouge object to use for scoring. If None, do not compute Rouge scores. Example: `rouge = evaluate.load("rouge")`
         poi_attachment_id (int): The attachment point ID for the POI substructure.
         e3_attachment_id (int): The attachment point ID for the E3 substructure.
@@ -186,21 +193,29 @@ def score_prediction(
     scores['has_three_substructures'] = has_three_substructures(pred_smiles)
     scores['has_all_attachment_points'] = has_all_attachment_points(pred_smiles)
     scores['tanimoto_similarity'] = 0.0 # Default value
+    scores['valid'] = False
+    scores['reassembly'] = False
+    scores['reassembly_nostereo'] = False
 
     pred_substructs = split_prediction(pred_smiles, poi_attachment_id, e3_attachment_id)
 
-    if any(v is None for v in pred_substructs.values()):
-        scores['valid'] = False
-        scores['reassembly'] = False
-    else:
+    # Compute metrics for the "entire" predicted PROTAC molecule
+    if all(v is not None for v in pred_substructs.values()):
         scores['valid'] = is_valid_smiles(pred_smiles)
         scores['reassembly'] = check_substructs(
-            protac_smiles,
-            pred_substructs['poi'],
-            pred_substructs['linker'],
-            pred_substructs['e3'],
+            protac_smiles=protac_smiles,
+            poi_smiles=pred_substructs['poi'],
+            linker_smiles=pred_substructs['linker'],
+            e3_smiles=pred_substructs['e3'],
         )
-        if scores['valid'] and compute_rdkit_metrics:
+        if scores['valid']:
+            scores['reassembly_nostereo'] = check_substructs(
+                protac_smiles=remove_stereo(protac_smiles),
+                poi_smiles=remove_stereo(pred_substructs['poi']),
+                linker_smiles=remove_stereo(pred_substructs['linker']),
+                e3_smiles=remove_stereo(pred_substructs['e3']),
+            )
+        if scores['valid'] and compute_rdkit_metrics and fpgen is not None:
             # Get Tanimoto similarity between the predicted PROTAC and the ground truth PROTAC
             pred_mol = Chem.MolFromSmiles(pred_smiles)
             label_mol = Chem.MolFromSmiles(label_smiles)
@@ -208,14 +223,17 @@ def score_prediction(
             label_fp = fpgen.GetFingerprint(label_mol)
             scores['tanimoto_similarity'] = DataStructs.TanimotoSimilarity(pred_fp, label_fp)
 
+    if rouge is not None:
+        rouge_output = rouge.compute(predictions=[pred_smiles], references=[label_smiles])
+        scores.update({k: v for k, v in rouge_output.items()})
 
+    # Compute metrics for each substructure
     label_substructs = split_prediction(label_smiles, poi_attachment_id, e3_attachment_id)
-    for sub in ['e3', 'poi', 'linker']:
-        pred_sub = pred_substructs[sub]
-        label_sub = label_substructs[sub]
 
+    for sub in ['e3', 'poi', 'linker']:
         # Set default values
         scores[f'{sub}_valid'] = False
+        scores[f'{sub}_equal'] = False
         scores[f'{sub}_has_attachment_point(s)'] = False
         scores[f'{sub}_tanimoto_similarity'] = 0.0
         # NOTE: The graph edit distance can be very high and dependant on the
@@ -225,10 +243,16 @@ def score_prediction(
         scores[f'{sub}_graph_edit_distance'] = 1e64
         scores[f'{sub}_graph_edit_distance_norm'] = 1.0
 
+        # Skip if the predicted substructure is None from `split_prediction`
+        pred_sub = pred_substructs[sub]
+        label_sub = label_substructs[sub]
         if pred_sub is None:
             continue
 
-        scores[f'{sub}_valid'] = is_valid_smiles(pred_sub)
+        # Check if the predicted substructure is a valid RDKit molecule
+        scores[f'{sub}_valid'], sub_mol = is_valid_smiles(pred_sub, return_mol=True)
+
+        # Check if the predicted substructure has the correct attachment point(s)
         if sub == 'e3':
             if f'[*:{e3_attachment_id}]' in pred_sub and f'[*:{poi_attachment_id}]' not in pred_sub:
                 scores[f'{sub}_has_attachment_point(s)'] = True
@@ -239,31 +263,35 @@ def score_prediction(
             if f'[*:{poi_attachment_id}]' in pred_sub and f'[*:{e3_attachment_id}]' in pred_sub:
                 scores[f'{sub}_has_attachment_point(s)'] = True
         
+        # Check if the predicted substructure InChI is the same as the ground truth substructure InChI
+        if scores[f'{sub}_valid']:
+            # scores[f'{sub}_equal'] = Chem.MolToInchi(sub_mol) == Chem.MolToInchi(Chem.MolFromSmiles(label_sub))
+            canon_pred = canonize_smiles(pred_sub)
+            canon_label = canonize_smiles(label_sub)
+            scores[f'{sub}_equal'] = canon_pred == canon_label
+        
+        # Compute graph-related metrics
         if scores[f'{sub}_valid'] and compute_graph_metrics:
             scores[f'{sub}_graph_edit_distance'] = get_smiles2graph_edit_distance(pred_sub, label_sub, **graph_edit_kwargs)
             scores[f'{sub}_graph_edit_distance_norm'] = get_smiles2graph_edit_distance_norm(
-                pred_sub,
-                label_sub,
-                scores[f'{sub}_graph_edit_distance'],
+                smi1=pred_sub,
+                smi2=label_sub,
+                ged_G1_G2=scores[f'{sub}_graph_edit_distance'],
                 **graph_edit_kwargs,
             )
 
-
+        # Get Tanimoto similarity b/w the predicted substructure and the ground truth
         if scores[f'{sub}_valid'] and compute_rdkit_metrics:
-            # Get Tanimoto similarity between the predicted substructure and the ground truth substructure
             pred_mol = Chem.MolFromSmiles(pred_sub)
             label_mol = Chem.MolFromSmiles(label_sub)
             pred_fp = fpgen.GetFingerprint(pred_mol)
             label_fp = fpgen.GetFingerprint(label_mol)
             scores[f'{sub}_tanimoto_similarity'] = DataStructs.TanimotoSimilarity(pred_fp, label_fp)
 
+        # Compute Rouge scores
         if rouge is not None:
             rouge_output = rouge.compute(predictions=[pred_sub], references=[label_sub])
             scores.update({f'{sub}_{k}': v for k, v in rouge_output.items()})
-
-    if rouge is not None:
-        rouge_output = rouge.compute(predictions=[pred_smiles], references=[label_smiles])
-        scores.update({k: v for k, v in rouge_output.items()})
 
     return scores
 
@@ -273,8 +301,8 @@ def same_atom_counts_and_types(smiles1, smiles2, get_atoms_diff=False):
     Check if two molecules have the same number and types of atoms.
 
     Args:
-    smiles1 (str): SMILES notation for the first molecule.
-    smiles2 (str): SMILES notation for the second molecule.
+    smiles1 (str): SMILES of the first molecule.
+    smiles2 (str): SMILES of the second molecule.
 
     Returns:
     bool: True if the molecules have the same atom counts and types, False otherwise.

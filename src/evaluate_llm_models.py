@@ -218,7 +218,7 @@ def main(
 
     # Remove duplicates from test_ds_nostereo
     test_df_nostereo = test_ds_nostereo.to_pandas()
-    test_df_nostereo = test_df_nostereo.drop_duplicates(subset=['text'])
+    test_df_nostereo = test_df_nostereo.drop_duplicates(subset=['text', 'labels'])
     test_ds_nostereo = Dataset.from_pandas(test_df_nostereo, preserve_index=False)
 
     # Create logs directory if not exists and setup filenames
@@ -231,15 +231,19 @@ def main(
     metrics_filename = os.path.join(log_dir, f'{metrics_name}.csv')
 
     # Load predictions if already generated
-    if os.path.exists(pred_filename) and not force_recompute:
+    if os.path.exists(pred_filename) and os.path.exists(pred_filename.replace('preds', 'preds-nostereo')) and not force_recompute:
         print('Loading predictions from file...')
         with open(pred_filename, 'r') as f:
             input_preds = f.readlines()
         preds = [line.split(',')[1].strip() for line in input_preds[1:]]
-    else:
-        print(f'Pre-generated predictions file "{pred_filename}" not found. Generating predictions...')
 
+        print('Loading predictions from file...')
+        with open(pred_filename.replace('preds', 'preds-nostereo'), 'r') as f:
+            input_preds = f.readlines()
+        preds_nostereo = [line.split(',')[1].strip() for line in input_preds[1:]]
+    else:
         # Load model and tokenizer
+        print(f'Loading tokenizer and pipeline...')
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=hub_token)
         if geration_config_kwargs is None:
             pipe = pipeline(
@@ -265,8 +269,9 @@ def main(
             )
 
         # Generate predictions
+        print('Generating predictions...')
         preds = []
-        for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(ds) // batch_size):
+        for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
             preds.append(pred[0]['generated_text'])
 
         inputs = []
@@ -274,14 +279,16 @@ def main(
             inputs.append(text)
 
         # Save text predictions to file
+        print('Saving predictions to file...')
         with open(pred_filename, 'w') as f:
             f.write('input,prediction\n')
             for text, pred in zip(inputs, preds):
                 f.write(f'{text},{pred}\n')
         
-        # Generate predictions
+        # Generate predictions with removed stereochemistry
+        print('Generating predictions with removed stereochemistry...')
         preds_nostereo = []
-        for pred in tqdm(pipe(KeyDataset(test_ds_nostereo, 'text'), batch_size=batch_size), total=len(ds) // batch_size):
+        for pred in tqdm(pipe(KeyDataset(test_ds_nostereo, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
             preds_nostereo.append(pred[0]['generated_text'])
 
         inputs_nostereo = []
@@ -289,6 +296,7 @@ def main(
             inputs_nostereo.append(text)
 
         # Save text predictions to file
+        print('Saving predictions with removed stereochemistry to file...')
         with open(pred_filename.replace('preds', 'preds-nostereo'), 'w') as f:
             f.write('input,prediction\n')
             for text, pred in zip(inputs_nostereo, preds_nostereo):
@@ -347,15 +355,18 @@ def main(
                 )
             scores['fix_reassembly_nostereo'] = fix_reassembly
 
-        scores['protac_smiles'] = protac_smiles
-        scores['label_smiles'] = label_smiles
-        scores['pred_smiles'] = pred_smiles
+        scores['protac_smiles'] = sample['text']
+        scores['label_smiles'] = sample['labels']
+        scores['pred_smiles'] = sample['preds']
 
         return scores
     
     # Evaluate predictions
+    print('Evaluating predictions...')
     metrics = test_ds.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
     metrics = metrics.to_pandas()
+
+    print('Evaluating predictions with removed stereochemistry...')
     metrics_nostereo = test_ds_nostereo.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
     metrics_nostereo = metrics_nostereo.to_pandas()
 

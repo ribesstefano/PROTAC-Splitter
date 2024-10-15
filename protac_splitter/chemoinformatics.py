@@ -10,14 +10,12 @@ from rdkit.Chem import (
     AllChem,
     rdFingerprintGenerator,
     rdMolHash,
-    rdFMCS,
-    rdMolAlign,
 )
 
 
-def standardize_smiles(smiles: str, fail_on_error: bool = False) -> str:
+def canonize_smiles(smiles: str, fail_on_error: bool = False) -> str:
     """
-    Standardizes a given SMILES string.
+    Canonize a given SMILES string.
 
     Args:
         smiles (str): The input SMILES string to be standardized.
@@ -27,20 +25,20 @@ def standardize_smiles(smiles: str, fail_on_error: bool = False) -> str:
     """
     try:
         mol = Chem.MolFromSmiles(smiles)
-        if mol:
-            return Chem.MolToSmiles(mol, isomericSmiles=False, canonical=True)
+        if mol is not None:
+            return Chem.MolToSmiles(mol, canonical=True)
         else:
             if fail_on_error:
                 raise ValueError(f'Smile returned error: {smiles}')
             else:
                 logging.warning(f'Smile returned error: {smiles}')
-                return float('nan')
+                return None
     except Exception as e:
         if fail_on_error:
             raise e
         else:
             logging.warning(f'Smile returned error: {smiles}')
-        return float('nan')
+        return None
 
 
 def remove_stereo(smiles: str) -> str:
@@ -58,10 +56,10 @@ def remove_stereo(smiles: str) -> str:
         Chem.rdmolops.RemoveStereochemistry(mol)
         return Chem.MolToSmiles(mol)
     except:
-        return float('nan')
+        return None
 
 
-def get_mol(smiles: str) -> Chem.Mol:
+def get_mol(smiles: str, remove_stereo: bool = False) -> Chem.Mol:
     """
     Get a molecule object from a SMILES string.
 
@@ -72,7 +70,8 @@ def get_mol(smiles: str) -> Chem.Mol:
         Chem.Mol: The molecule object.
     """
     mol = Chem.MolFromSmiles(smiles)
-    Chem.rdmolops.RemoveStereochemistry(mol)
+    if mol is not None and remove_stereo:
+        Chem.rdmolops.RemoveStereochemistry(mol)
     return mol
 
 
@@ -263,6 +262,9 @@ def merge_molecules(
 
     # Sanitize the molecule to ensure its chemical validity
     Chem.SanitizeMol(modified_mol)
+
+    # # Reassign stereochemistry
+    # Chem.AssignStereochemistry(modified_mol, force=True, cleanIt=True)
 
     return modified_mol
 

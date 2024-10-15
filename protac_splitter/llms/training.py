@@ -423,15 +423,17 @@ def train_model(
     )
 
     # Setup the compute_metrics function
-    rouge = evaluate.load("rouge")
-    fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
-        radius=11,
-        fpSize=1024,
-    )
+    # rouge = evaluate.load("rouge") # , cache_dir="/mimer/NOBACKUP/groups/naiss2023-6-290/stefano/.cache/huggingface/evaluate/")
+    # fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
+    #     radius=11,
+    #     fpSize=1024,
+    # )
+    rouge = None
+    fpgen = None
     compute_metrics = partial(
         decode_and_get_metrics,
-        rouge=rouge,
         tokenizer=tokenizer,
+        rouge=rouge,
         fpgen=fpgen,
     )
 

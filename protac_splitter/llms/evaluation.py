@@ -1,3 +1,5 @@
+from typing import Optional
+
 from transformers import AutoTokenizer
 import numpy as np
 from rdkit import Chem, DataStructs
@@ -14,9 +16,9 @@ from ..evaluation import (
 
 def decode_and_get_metrics(
     pred,
-    rouge = evaluate.load("rouge"),
     tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
-    fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=11, fpSize=2048),
+    rouge = None, # Optional[evaluate.metrics.rouge.Rouge] = None,
+    fpgen = None, # Optional[Chem.rdFingerprintGenerator] = None,
 ) -> dict[str, float]:
     """ Compute metrics for tokenized PROTAC predictions.
 
@@ -48,11 +50,8 @@ def decode_and_get_metrics(
     input_str = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
     pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
     label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
-    
-    # Get Rouge score
-    rouge_output = rouge.compute(predictions=pred_str, references=label_str)
 
-    # Get other scores
+    # Get scores
     scores = []
     for pred_smiles, protac_smiles, label_smiles in zip(pred_str, input_str, label_str):
         scores.append(score_prediction(
@@ -65,61 +64,24 @@ def decode_and_get_metrics(
             graph_edit_kwargs={"timeout": 0.5},
         ))
     scores = {k: np.array([s[k] for s in scores]).mean() for k in scores[0].keys()}
-    scores.update({k: v for k, v in rouge_output.items()})
+    
+    # Get Rouge score
+    if rouge is not None:
+        rouge_output = rouge.compute(predictions=pred_str, references=label_str)
+        scores.update({k: v for k, v in rouge_output.items()})
+
+    # TODO
+    # # Get tanimoto score
+    # pred_str = np.array(pred_str)[valid_smiles == 1]
+    # label_str = np.array(label_str)[valid_smiles == 1]
+    # if len(pred_str) == 0:
+    #     scores['tanimoto'] = 0.0
+    #     return scores
+    # pred_mols = [Chem.MolFromSmiles(s) for s in pred_str]
+    # label_mols = [Chem.MolFromSmiles(s) for s in label_str]
+    # pred_fps = [fpgen.GetFingerprint(m) for m in pred_mols]
+    # label_fps = [fpgen.GetFingerprint(m) for m in label_mols]
+    # tanimoto = [DataStructs.TanimotoSimilarity(l, p) for l, p in zip(label_fps, pred_fps)]
+    # scores['tanimoto'] = np.array(tanimoto).mean()
 
     return scores
-
-    # scores = {k: v for k, v in rouge_output.items()}
-    # # Get valid SMILES score
-    # valid_smiles = np.array([is_valid_smiles(s) for s in pred_str])
-    # scores['valid_smiles'] = valid_smiles.astype(int).mean()
-    # # Get has_three_substructures score
-    # num_substructures = np.array([has_three_substructures(s) for s in pred_str])
-    # scores['has_three_substructures'] = num_substructures.astype(int).mean()
-    # # Get has_all_attachment_points score
-    # num_attach_points = np.array([has_all_attachment_points(s) for s in pred_str])
-    # scores['has_all_attachment_points'] = num_attach_points.astype(int).mean()
-
-    # # Check if re-combining the substructures results in the original PROTAC
-    # checks = []
-    # for i, (pred_smiles, protac_smiles, label_smiles) in enumerate(zip(pred_str, input_str, label_str)):
-    #     if i < 1:
-    #         print(f'protac: {protac_smiles}')
-    #         print(f'label:  {label_smiles}')
-    #         print(f'pred:   {pred_smiles}')
-    #         print(f'\t- valid: {is_valid_smiles(pred_smiles)}')
-    #         print(f'\t- has_three_substructures: {has_three_substructures(pred_smiles)}')
-    #         print(f'\t- has_all_attachment_points: {has_all_attachment_points(pred_smiles)}')
-    #         for j, s in enumerate(pred_smiles.split('.')):
-    #             print(f'Substruct n.{j}: {s} (valid: {is_valid_smiles(s)})')
-    #         print('-' * 80)
-    #     substructs = split_prediction(pred_smiles)
-    #     if any(v is None for v in substructs.values()):
-    #         checks.append(False)
-    #         continue
-    #     checks.append(check_substructs(
-    #         protac_smiles,
-    #         substructs['poi'],
-    #         substructs['linker'],
-    #         substructs['e3'],
-    #     ))
-    # scores['reassembly'] = np.array(checks).astype(int).mean()
-
-    # # # Count how many times the character '*' appears in the prediction
-    # # num_stars = np.array([s.count('*') for s in pred_str])
-    # # scores['num_stars'] = num_stars.mean()
-
-    # # # Get tanimoto score
-    # # pred_str = np.array(pred_str)[valid_smiles == 1]
-    # # label_str = np.array(label_str)[valid_smiles == 1]
-    # # if len(pred_str) == 0:
-    # #     scores['tanimoto'] = 0.0
-    # #     return scores
-    # # pred_mols = [Chem.MolFromSmiles(s) for s in pred_str]
-    # # label_mols = [Chem.MolFromSmiles(s) for s in label_str]
-    # # pred_fps = [fpgen.GetFingerprint(m) for m in pred_mols]
-    # # label_fps = [fpgen.GetFingerprint(m) for m in label_mols]
-    # # tanimoto = [DataStructs.TanimotoSimilarity(l, p) for l, p in zip(label_fps, pred_fps)]
-    # # scores['tanimoto'] = np.array(tanimoto).mean()
-    # return scores
-

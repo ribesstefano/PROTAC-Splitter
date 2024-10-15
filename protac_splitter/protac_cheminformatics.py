@@ -1,8 +1,10 @@
 import logging
+import random
 from typing import List, Tuple, Callable, Any, Union, Dict, Optional, Literal
 from functools import lru_cache
 
 from rdkit import Chem
+from rdkit.Chem import AllChem
 from rdkit.Chem import rdchem
 from rdkit import RDLogger
 from rdkit.Chem import CanonSmiles
@@ -10,7 +12,6 @@ from rdkit.Chem import CanonSmiles
 from .chemoinformatics import (
     remove_dummy_atoms,
     merge_molecules,
-    standardize_smiles,
 )
 
 RDLogger.DisableLog("rdApp.*")
@@ -21,33 +22,43 @@ def get_mol(smiles: str) -> rdchem.Mol:
     return Chem.MolFromSmiles(smiles)
 
 
-def find_atom_idx_of_map_atoms(mol: rdchem.Mol, find_first: True, find_second: True) -> int | Tuple[int, int]:
-    """ Find the indices of the attachment points in the molecule.
+def find_atom_idx_of_map_atoms(
+        mol: rdchem.Mol,
+        find_poi: True,
+        find_e3: True,
+        poi_attachment_id: int = 1,
+        e3_attachment_id: int = 2,
+) -> int | Tuple[int, int]:
+    """ Find the indices of the attachment points in the given molecule.
 
     Args:
         mol (rdkit.Chem.rdchem.Mol): The molecule.
+        find_poi (bool): Whether to find the POI attachment point.
+        find_e3 (bool): Whether to find the E3 attachment point.
+        poi_attachment_id (int): The label of the attachment point for the POI ligand, i.e., "[*:{poi_attachment_id}]".
+        e3_attachment_id (int): The label of the attachment point for the E3 binder, i.e., "[*:{e3_attachment_id}]".
 
     Returns:
-        tuple: The indices of the attachment points.
+        int | Tuple[int, int]: The index of the attachment point for the POI ligand if find_poi is True, the index of the attachment point for the E3 binder if find_e3 is True, or a tuple containing POI and E3 indices (in this order) if both find_poi and find_e3 are True.
     """
-    if find_first and find_second:
+    if find_poi and find_e3:
         poi_idx = None
         e3_idx = None
         for atom in mol.GetAtoms():
-            if atom.GetAtomMapNum() == 1:
+            if atom.GetAtomMapNum() == poi_attachment_id:
                 poi_idx = atom.GetIdx()
-            elif atom.GetAtomMapNum() == 2:
+            elif atom.GetAtomMapNum() == e3_attachment_id:
                 e3_idx = atom.GetIdx()
             if poi_idx is not None and e3_idx is not None:
                 break
         return poi_idx, e3_idx
-    elif find_first:
+    elif find_poi:
         for atom in mol.GetAtoms():
-            if atom.GetAtomMapNum() == 1:
+            if atom.GetAtomMapNum() == poi_attachment_id:
                 return atom.GetIdx()
-    elif find_second:
+    elif find_e3:
         for atom in mol.GetAtoms():
-            if atom.GetAtomMapNum() == 2:
+            if atom.GetAtomMapNum() == e3_attachment_id:
                 return atom.GetIdx()
 
 
@@ -99,9 +110,27 @@ def reassemble_protac(
         raise ValueError("Invalid substructures SMILES")
 
     # Find the indices of the attachment points
-    poi_idx = find_atom_idx_of_map_atoms(poi_mol, find_first=True, find_second=False)
-    linker_poi_idx, linker_e3_idx = find_atom_idx_of_map_atoms(linker_mol, find_first=True, find_second=True)
-    e3_idx = find_atom_idx_of_map_atoms(e3_mol, find_first=False, find_second=True)
+    poi_idx = find_atom_idx_of_map_atoms(
+        poi_mol,
+        find_poi=True,
+        find_e3=False,
+        poi_attachment_id=poi_attachment_id,
+        e3_attachment_id=e3_attachment_id,
+    )
+    linker_poi_idx, linker_e3_idx = find_atom_idx_of_map_atoms(
+        linker_mol,
+        find_poi=True,
+        find_e3=True,
+        poi_attachment_id=poi_attachment_id,
+        e3_attachment_id=e3_attachment_id,
+    )
+    e3_idx = find_atom_idx_of_map_atoms(
+        e3_mol,
+        find_poi=False,
+        find_e3=True,
+        poi_attachment_id=poi_attachment_id,
+        e3_attachment_id=e3_attachment_id,
+    )
 
     # Ensure that each molecule has the correct number of attachment points
     if poi_idx is None or linker_poi_idx is None or linker_e3_idx is None or e3_idx is None:
@@ -109,11 +138,110 @@ def reassemble_protac(
 
     # Merge E3 with Linker
     e3_linker_mol = merge_molecules(e3_mol, linker_mol, e3_idx, linker_e3_idx, bond_type=e3_bond_type, rand_generator=rand_generator)
-    linker_e3_mol_idx = find_atom_idx_of_map_atoms(e3_linker_mol, find_first=True, find_second=False)
+    linker_e3_mol_idx = find_atom_idx_of_map_atoms(
+        e3_linker_mol,
+        find_poi=True,
+        find_e3=False,
+        poi_attachment_id=poi_attachment_id,
+        e3_attachment_id=e3_attachment_id,
+    )
 
     protac_mol = merge_molecules(e3_linker_mol, poi_mol, linker_e3_mol_idx, poi_idx, bond_type=poi_bond_type, rand_generator=rand_generator)
     Chem.SanitizeMol(protac_mol)
+    
+    # # Reassign stereochemistry
+    # Chem.AssignStereochemistry(protac_mol, force=True, cleanIt=True)
+
     protac_smiles = Chem.MolToSmiles(protac_mol, canonical=True)
+
+    return protac_smiles, protac_mol
+
+
+def reassemble_protac_with_reactions(
+        poi_smiles: str,
+        linker_smiles: str,
+        e3_smiles: str,
+        e3_bond_type: Literal['single', 'double', 'triple', 'rand_uniform'] = 'single',
+        poi_bond_type: Literal['single', 'double', 'triple', 'rand_uniform'] = 'single',
+        poi_attachment_id: int = 1,
+        e3_attachment_id: int = 2,
+        rand_generator=None,
+) -> Tuple[str, Chem.rdchem.Mol]:
+    """
+    Reassemble a PROTAC molecule from its substructures. The SMILES must contain attachment points.
+
+    Args:
+        poi_smiles (str): The SMILES notation for the POI ligand.
+        linker_smiles (str): The SMILES notation for the linker.
+        e3_smiles (str): The SMILES notation for the E3 binder.
+        e3_bond_type (str): The type of bond to be added between the E3 binder and the linker. Can be 'single', 'double', 'triple', or 'rand_uniform'.
+        poi_bond_type (str): The type of bond to be added between the POI ligand and the linker. Can be 'single', 'double', 'triple', or 'rand_uniform'.
+        poi_attachment_id (int): The label of the attachment point for the POI ligand, i.e., "[*:{poi_attachment_id}]".
+        e3_attachment_id (int): The label of the attachment point for the E3 binder, i.e., "[*:{e3_attachment_id}]".
+        rand_generator: A random number generator for 'rand_uniform' bond types. Defaults to None, i.e., standard library random.
+
+    Returns:
+        Tuple[str, Chem.rdchem.Mol]: The SMILES notation and RDKit molecule object for the reassembled PROTAC molecule.
+    """
+    # Map bond type strings to bond symbols
+    bond_symbols = {
+        'single': '-',
+        'double': '=',
+        'triple': '#'
+    }
+    possible_bonds = ['single', 'double', 'triple']
+
+    if rand_generator is None:
+        rand_generator = random
+
+    # Determine bond symbols for E3-linker and linker-POI bonds
+    if e3_bond_type == 'rand_uniform':
+        e3_bond_type = rand_generator.choice(possible_bonds)
+    if poi_bond_type == 'rand_uniform':
+        poi_bond_type = rand_generator.choice(possible_bonds)
+
+    # Get bond symbols
+    e3_bond_symbol = bond_symbols.get(e3_bond_type)
+    poi_bond_symbol = bond_symbols.get(poi_bond_type)
+
+    if e3_bond_symbol is None or poi_bond_symbol is None:
+        raise ValueError("Invalid bond type. Must be 'single', 'double', 'triple', or 'rand_uniform'.")
+
+    # Create reaction SMARTS for E3-linker connection
+    rxn_smarts_e3 = f'[*:{e3_attachment_id}].[*:{e3_attachment_id}]>>[*:{e3_attachment_id}]{e3_bond_symbol}[*:{e3_attachment_id}]'
+    rxn_smarts_e3 = f'[*:{e3_attachment_id}].[*:{e3_attachment_id}]>>[*:{e3_attachment_id}]{e3_bond_symbol}[*:{e3_attachment_id}]'
+    rxn_e3 = AllChem.ReactionFromSmarts(rxn_smarts_e3)
+
+    # Create reaction SMARTS for linker-POI connection
+    rxn_smarts_poi = f'[*:{poi_attachment_id}].[*:{poi_attachment_id}]>>[*:{poi_attachment_id}]{poi_bond_symbol}[*:{poi_attachment_id}]'
+    rxn_smarts_poi = f'[*:{poi_attachment_id}].[*:{poi_attachment_id}]>>[*:{poi_attachment_id}]{poi_bond_symbol}[*:{poi_attachment_id}]'
+    rxn_poi = AllChem.ReactionFromSmarts(rxn_smarts_poi)
+
+    # Convert SMILES to RDKit molecules
+    poi_mol = Chem.MolFromSmiles(poi_smiles)
+    linker_mol = Chem.MolFromSmiles(linker_smiles)
+    e3_mol = Chem.MolFromSmiles(e3_smiles)
+
+    if not all([poi_mol, linker_mol, e3_mol]):
+        raise ValueError("Invalid substructures SMILES")
+
+    # First, connect the E3 to the linker via [*:{e3_attachment_id}]
+    products = rxn_e3.RunReactants((e3_mol, linker_mol))
+    if not products:
+        raise ValueError("Reaction to connect E3 and linker failed")
+    e3_linker_mol = products[0][0]
+
+    # Then, connect the POI to the e3_linker_mol via [*:{poi_attachment_id}]
+    products = rxn_poi.RunReactants((e3_linker_mol, poi_mol))
+    if not products:
+        raise ValueError("Reaction to connect POI and E3-Linker failed")
+    protac_mol = products[0][0]
+
+    # Sanitize and assign stereochemistry
+    Chem.SanitizeMol(protac_mol)
+    Chem.AssignStereochemistry(protac_mol, force=True, cleanIt=True)
+
+    protac_smiles = Chem.MolToSmiles(protac_mol, canonical=True, isomericSmiles=True)
 
     return protac_smiles, protac_mol
 
