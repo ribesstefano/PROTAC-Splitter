@@ -27,14 +27,32 @@ def get_smiles2graph_edit_distance(smi1: str, smi2: str, **kwargs) -> float:
 def get_mol2graph_edit_distance(mol1: str, mol2: str, **kwargs) -> float:
     return nx.graph_edit_distance(mol2graph(mol1), mol2graph(mol2), **kwargs)
 
-def get_smiles2graph_edit_distance_norm(smi1: str, smi2: str, ged_G1_G2: None, **kwargs) -> float:
+def get_smiles2graph_edit_distance_norm(
+        smi1: str,
+        smi2: str,
+        ged_G1_G2: None,
+        eps: float = 1e-9,
+        **kwargs,
+) -> float:
+    """ Compute the normalized graph edit distance between two SMILES strings.
+    
+    Args:
+        smi1 (str): The first SMILES string.
+        smi2 (str): The second SMILES string.
+        ged_G1_G2 (float): The graph edit distance between the two graphs. If None, it will be computed using `nx.graph_edit_distance`.
+        eps (float): A small value to avoid division by zero.
+        **kwargs: Additional keyword arguments for `nx.graph_edit_distance`.
+
+    Returns:
+        float: The normalized graph edit distance between the two SMILES strings.
+    """
     G1 = smiles2graph(smi1)
     G2 = smiles2graph(smi2)
     G0 = nx.empty_graph()
     ged_G1_G2 = ged_G1_G2 if ged_G1_G2 is not None else nx.graph_edit_distance(G1, G2, **kwargs)
     ged_G1_G0 = nx.graph_edit_distance(G1, G0, **kwargs)
     ged_G2_G0 = nx.graph_edit_distance(G2, G0, **kwargs)
-    return ged_G1_G2 / (ged_G1_G0 + ged_G2_G0)
+    return ged_G1_G2 / (ged_G1_G0 + ged_G2_G0 + eps)
 
 def smiles2adjacency_matrix(smiles: str) -> np.ndarray:
     return nx.adjacency_matrix(smiles2graph(smiles)).todense()
