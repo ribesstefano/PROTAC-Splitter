@@ -269,9 +269,9 @@ def shuffle_substructs(s: str, shuffle_prob: float = 0.0) -> str:
         return s
 
 
-def check_dataframe(df: pd.DataFrame) -> bool:
+def check_dataframes(dfs: pd.DataFrame) -> bool:
     tqdm.pandas(desc='Checking train dataset')
-    train_check = all(df['train'].progress_apply(lambda x: check_substructs(
+    train_check = all(dfs['train'].progress_apply(lambda x: check_substructs(
             x['PROTAC SMILES'],
             x['POI Ligand SMILES with direction'],
             x['Linker SMILES with direction'],
@@ -279,7 +279,7 @@ def check_dataframe(df: pd.DataFrame) -> bool:
         ), axis=1)
     )
     tqdm.pandas(desc='Checking test dataset')
-    test_check = all(df['test'].progress_apply(lambda x: check_substructs(
+    test_check = all(dfs['test'].progress_apply(lambda x: check_substructs(
             x['PROTAC SMILES'],
             x['POI Ligand SMILES with direction'],
             x['Linker SMILES with direction'],
@@ -312,6 +312,8 @@ def check_dataset(
     # If there are any incorrect samples, return False
     if len(incorrect_samples) > 0:
         print(f'Found {len(incorrect_samples)} incorrect samples.')
+        print(pd.DataFrame(incorrect_samples))
+        pd.DataFrame(incorrect_samples).to_csv('incorrect_samples.csv', index=False)
         return False
     else:
         return True
@@ -373,6 +375,15 @@ def main(
 
     print('Checking dataframes...')
     for config_name, dataframes in ds.items():
+        
+        # TODO: The hardest split is not done yet.
+        if config_name != 'standard':
+            continue
+
+        if not check_dataframes(dataframes):
+            print(f'Error in {config_name} dataset: incorrect samples.')
+            sys.exit(1)
+
         print(f'Checking {config_name} dataset...')
         train_df = convert_df_to_text(dataframes['train'])
         test_df = convert_df_to_text(dataframes['test'])
