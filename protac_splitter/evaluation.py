@@ -1,7 +1,7 @@
 """ Evaluation functions for the protac_splitter package. They need to be generic to accomodate predictions coming from different models. """
 
-import itertools
-from typing import List, Tuple, Callable, Any, Union, Dict, Optional, Literal
+import logging
+from typing import Tuple, Any, Dict, Optional
 
 import numpy as np
 from rdkit import Chem
@@ -103,25 +103,37 @@ def check_substructs(
     Returns:
         bool | Tuple[bool, dict[str, str]]: True if the reassembled PROTAC is correct, False otherwise. If return_bond_types is True, also return the bond types used for the reassembly.
     """
+    def get_failed_return():
+        if return_bond_types:
+            return False, {}
+        return False
+
+    # Make some checks before starting and fail if necessary
+    all_subs_none = all(v is None for v in [poi_smiles, linker_smiles, e3_smiles])
     any_subs_none = any(v is None for v in [poi_smiles, linker_smiles, e3_smiles])
-    if pred is None and any_subs_none:
-        raise ValueError("Arguments 'pred' and 'poi_smiles', 'linker_smiles', 'e3_smiles' cannot be all None.")
-    elif any_subs_none:
+
+    if pred is not None and all_subs_none:
+        # Split the prediction into the substructures
         pred_substructs = split_prediction(pred, poi_attachment_id, e3_attachment_id)
         if any(v is None for v in pred_substructs.values()):
-            return False
+            return get_failed_return()
         poi_smiles = pred_substructs['poi']
         linker_smiles = pred_substructs['linker']
         e3_smiles = pred_substructs['e3']
-    
+    elif pred is None and any_subs_none: 
+        return get_failed_return()
+    elif pred is None and all_subs_none:
+        logging.warning("Arguments 'pred' and 'poi_smiles', 'linker_smiles', 'e3_smiles' cannot be all None.")
+        return get_failed_return()
+
     if f"[*:{poi_attachment_id}]" in e3_smiles:
-        return False
+        return get_failed_return()
     if f"[*:{e3_attachment_id}]" in poi_smiles:
-        return False
+        return get_failed_return()
     if f"[*:{poi_attachment_id}]" not in linker_smiles:
-        return False
+        return get_failed_return()
     if f"[*:{e3_attachment_id}]" not in linker_smiles:
-        return False
+        return get_failed_return()
     
     correct_substructs = False
     protac_mol = Chem.MolFromSmiles(protac_smiles)
@@ -133,7 +145,7 @@ def check_substructs(
     for e3_bond_type in bonds:
         for poi_bond_type in bonds:
             try:
-                _, assmbl_mol = reassemble_protac(
+                assmbl_smiles, assmbl_mol = reassemble_protac(
                     poi_smiles,
                     linker_smiles,
                     e3_smiles,
@@ -151,7 +163,7 @@ def check_substructs(
                         bond_types['e3_bond_type'] = e3_bond_type
                         bond_types['poi_bond_type'] = poi_bond_type
                         break
-                    if protac_smiles_canon == canonize_smiles(Chem.MolToSmiles(assmbl_mol)):
+                    if protac_smiles_canon == canonize_smiles(assmbl_smiles):
                         correct_substructs = True
                         bond_types['e3_bond_type'] = e3_bond_type
                         bond_types['poi_bond_type'] = poi_bond_type

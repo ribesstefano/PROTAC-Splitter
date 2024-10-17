@@ -38,22 +38,6 @@ RDLogger.DisableLog("rdApp.*")
 blocker = rdBase.BlockLogs()
 
 
-def smiles2graph(smiles: str) -> nx.Graph:
-    # NOTE: https://github.com/maxhodak/keras-molecules/pull/32/files
-    mol = Chem.MolFromSmiles(smiles)
-    G = nx.Graph()
-    for atom in mol.GetAtoms():
-        # Skip non-heavy atoms
-        if atom.GetAtomicNum() != 0:
-            G.add_node(atom.GetIdx(), label=atom.GetSymbol())
-    for bond in mol.GetBonds():
-        # Skip bonds to non-heavy atoms
-        if bond.GetBeginAtom().GetAtomicNum() == 0 or bond.GetEndAtom().GetAtomicNum() == 0:
-            continue
-        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), label=bond.GetBondType())
-    return G
-
-
 def dummy2query(mol: Chem.Mol) -> Chem.Mol:
     """ Converts dummy atoms to query atoms, so that a molecule with attachment points can be used in HasSubstructMatch.
     
@@ -183,6 +167,24 @@ def fix_prediction(
 
     return {k: v['smiles'] for k, v in substructs.items()}
 
+# REF: https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/generation/configuration_utils.py#L71
+GENERATION_STRATEGY_PARAMS = {
+    "greedy": {"num_beams": 1, "do_sample": False},
+    "contrastive_search": {"penalty_alpha": 0.1, "top_k": 10},
+    "multinomial_sampling": {"num_beams": 1, "do_sample": True},
+    "beam_search_decoding": {"num_beams": 5, "do_sample": False},
+    "beam_search_multinomial_sampling": {"num_beams": 5, "do_sample": True},
+    "diverse_beam_search_decoding": {"num_beams": 5, "num_beam_groups": 5, "diversity_penalty": 1.0},
+}
+
+def get_generation_config(generation_strategy: str) -> GenerationConfig:
+
+    return GenerationConfig(
+        max_length=512,
+        max_new_tokens=512,
+        **GENERATION_STRATEGY_PARAMS[generation_strategy],
+    )
+
 
 def main(
         hub_token: Optional[str] = None,
@@ -206,21 +208,6 @@ def main(
     ds = load_dataset('ailab-bio/PROTAC-Splitter-Dataset', 'standard', token=hub_token)
     test_ds = ds['test']
 
-    # Create a different test dataset with removed stereochemistry
-    print('Removing stereochemistry from test dataset...')
-    test_ds_nostereo = test_ds.map(
-        lambda x: {
-            'text': get_smiles_nostereo(x['text']),
-            'labels': get_smiles_nostereo(x['labels']),
-        },
-        num_proc=num_proc,
-    )
-
-    # Remove duplicates from test_ds_nostereo
-    test_df_nostereo = test_ds_nostereo.to_pandas()
-    test_df_nostereo = test_df_nostereo.drop_duplicates(subset=['text', 'labels'])
-    test_ds_nostereo = Dataset.from_pandas(test_df_nostereo, preserve_index=False)
-
     # Create logs directory if not exists and setup filenames
     os.makedirs(log_dir, exist_ok=True)
     log_name = model_name.split('/')[-1].replace('PROTAC-Splitter', 'logs')
@@ -230,86 +217,38 @@ def main(
     pred_filename = os.path.join(log_dir, f'{pred_name}.csv')
     metrics_filename = os.path.join(log_dir, f'{metrics_name}.csv')
 
-    # Load predictions if already generated
-    if os.path.exists(pred_filename) and os.path.exists(pred_filename.replace('preds', 'preds-nostereo')) and not force_recompute:
-        print('Loading predictions from file...')
-        with open(pred_filename, 'r') as f:
-            input_preds = f.readlines()
-        preds = [line.split(',')[1].strip() for line in input_preds[1:]]
+    preds = defaultdict(list)
 
-        print('Loading predictions from file...')
-        with open(pred_filename.replace('preds', 'preds-nostereo'), 'r') as f:
-            input_preds = f.readlines()
-        preds_nostereo = [line.split(',')[1].strip() for line in input_preds[1:]]
-    else:
-        # Load model and tokenizer
-        print(f'Loading tokenizer and pipeline...')
-        tokenizer = AutoTokenizer.from_pretrained(model_name, token=hub_token)
-        if geration_config_kwargs is None:
-            pipe = pipeline(
-                "text2text-generation",
-                model=model_name,
-                tokenizer=tokenizer,
-                device='cuda' if torch.cuda.is_available() else 'cpu',
-                token=hub_token,
-            )
-        else:
-            generation_config = GenerationConfig(
-                max_length=512,
-                max_new_tokens=512,
-                **geration_config_kwargs,
-            )
-            pipe = pipeline(
-                "text2text-generation",
-                model=model_name,
-                tokenizer=tokenizer,
-                device='cuda' if torch.cuda.is_available() else 'cpu',
-                token=hub_token,
-                generation_config=generation_config,
-            )
+    print(f'Loading tokenizer...')
+    tokenizer = AutoTokenizer.from_pretrained(model_name, token=hub_token)
 
-        # Generate predictions
-        print('Generating predictions...')
-        preds = []
+    print('Loading pipeline for "default" predictions...')
+    pipe = pipeline(
+        "text2text-generation",
+        model=model_name,
+        tokenizer=tokenizer,
+        device='cuda' if torch.cuda.is_available() else 'cpu',
+        token=hub_token,
+    )
+    print('Generating "default" predictions (training config)...')
+    for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
+        preds['default'].append(pred[0]['generated_text'])
+
+    for generation_strategy in GENERATION_STRATEGY_PARAMS.keys():
+        print(f'Loading pipeline for {generation_strategy}...')
+        pipe = pipeline(
+            "text2text-generation",
+            model=model_name,
+            tokenizer=tokenizer,
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            token=hub_token,
+            generation_config=get_generation_config(generation_strategy),
+        )
+        print(f'Generating predictions with generation strategy: {generation_strategy}')
         for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
-            preds.append(pred[0]['generated_text'])
+            preds[generation_strategy].append(pred[0]['generated_text'])
 
-        inputs = []
-        for text in KeyDataset(test_ds, 'text'):
-            inputs.append(text)
-
-        # Save text predictions to file
-        print('Saving predictions to file...')
-        with open(pred_filename, 'w') as f:
-            f.write('input,prediction\n')
-            for text, pred in zip(inputs, preds):
-                f.write(f'{text},{pred}\n')
-        
-        # Generate predictions with removed stereochemistry
-        print('Generating predictions with removed stereochemistry...')
-        preds_nostereo = []
-        for pred in tqdm(pipe(KeyDataset(test_ds_nostereo, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
-            preds_nostereo.append(pred[0]['generated_text'])
-
-        inputs_nostereo = []
-        for text in KeyDataset(test_ds_nostereo, 'text'):
-            inputs_nostereo.append(text)
-
-        # Save text predictions to file
-        print('Saving predictions with removed stereochemistry to file...')
-        with open(pred_filename.replace('preds', 'preds-nostereo'), 'w') as f:
-            f.write('input,prediction\n')
-            for text, pred in zip(inputs_nostereo, preds_nostereo):
-                f.write(f'{text},{pred}\n')
-
-    print('Predictions collected. Evaluating predictions...')
-
-    # Add `preds` to the test dataset
-    test_ds = test_ds.add_column('preds', preds)
-    test_ds_nostereo = test_ds_nostereo.add_column('preds', preds_nostereo)
-
-    rouge = evaluate.load("rouge")
-
+    # Define a function to get scores to be mapped to the predictions dataset
     def get_scores(sample):
         protac_smiles = sample['text']
         label_smiles = sample['labels']
@@ -319,7 +258,6 @@ def main(
             protac_smiles,
             label_smiles,
             pred_smiles,
-            rouge=rouge,
             poi_attachment_id=1, # Default ones...
             e3_attachment_id=2, # Default ones...
             compute_graph_metrics=True,
@@ -360,34 +298,197 @@ def main(
         scores['pred_smiles'] = sample['preds']
 
         return scores
-    
-    # Evaluate predictions
-    print('Evaluating predictions...')
-    metrics = test_ds.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
-    metrics = metrics.to_pandas()
 
-    print('Evaluating predictions with removed stereochemistry...')
-    metrics_nostereo = test_ds_nostereo.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
-    metrics_nostereo = metrics_nostereo.to_pandas()
+    metrics = {}
+
+    for generation_strategy, predictions in preds.items():
+        # Add `preds` to the test dataset, so that we can map the scores to the
+        # predictions in parallel
+        ds = test_ds.add_column('preds', predictions)
+        print(f'Evaluating predictions for {generation_strategy}...')
+        scores_ds = ds.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
+        metrics[generation_strategy] = scores_ds.to_pandas()
+
+    # Join all metrics on ['text', 'labels'] columns
+    all_metrics = metrics['default']
+    # Add "_default" suffix to columns that do not contain "smiles"
+    all_metrics.columns = [f'{c}_default' if 'smiles' not in c else c for c in all_metrics.columns]
+
+    for generation_strategy, df in metrics.items():
+        if generation_strategy == 'default':
+            continue
+        all_metrics = all_metrics.merge(df, on=['protac_smiles', 'label_smiles'], suffixes=('', f'_{generation_strategy}'))
 
     # Save metrics to CSV
-    metrics.to_csv(metrics_filename, index=False)
-    metrics_nostereo.to_csv(metrics_filename.replace('metrics', 'metrics-nostereo'), index=False)
+    all_metrics.to_csv(metrics_filename, index=False)
 
-    # Select non-smiles metrics
-    non_smiles_metrics = metrics.drop(columns=['protac_smiles', 'label_smiles', 'pred_smiles'])
-    non_smiles_metrics_nostereo = metrics_nostereo.drop(columns=['protac_smiles', 'label_smiles', 'pred_smiles'])
+    # Print out average metrics for each generation strategy
+    for generation_strategy, metric in metrics.items():
+        metric = metric.drop(columns=[c for c in metric.columns if 'smiles' in c])
+        print('-' * 80)
+        print(f'Generation strategy: {generation_strategy}')
+        print('-' * 80)
+        print(metric.mean().round(5).T.to_markdown())
 
-    # Print out average metrics
-    print('-' * 80)
-    for k, v in non_smiles_metrics.mean().items():
-        print(f'{k}: {v}')
-    print('-' * 80)
-    print('No stereochemistry:')
-    print('-' * 80)
-    for k, v in non_smiles_metrics_nostereo.mean().items():
-        print(f'{k}: {v}')
-    print('-' * 80)
+
+    # # Load predictions if already generated
+    # if os.path.exists(pred_filename) and os.path.exists(pred_filename.replace('preds', 'preds-nostereo')) and not force_recompute:
+    #     print('Loading predictions from file...')
+    #     with open(pred_filename, 'r') as f:
+    #         input_preds = f.readlines()
+    #     preds = [line.split(',')[1].strip() for line in input_preds[1:]]
+
+    #     print('Loading predictions from file...')
+    #     with open(pred_filename.replace('preds', 'preds-nostereo'), 'r') as f:
+    #         input_preds = f.readlines()
+    #     preds_nostereo = [line.split(',')[1].strip() for line in input_preds[1:]]
+    # else:
+    #     # Load model and tokenizer
+    #     print(f'Loading tokenizer and pipeline...')
+    #     tokenizer = AutoTokenizer.from_pretrained(model_name, token=hub_token)
+    #     if geration_config_kwargs is None:
+    #         pipe = pipeline(
+    #             "text2text-generation",
+    #             model=model_name,
+    #             tokenizer=tokenizer,
+    #             device='cuda' if torch.cuda.is_available() else 'cpu',
+    #             token=hub_token,
+    #         )
+    #     else:
+    #         generation_config = GenerationConfig(
+    #             max_length=512,
+    #             max_new_tokens=512,
+    #             **geration_config_kwargs,
+    #         )
+    #         pipe = pipeline(
+    #             "text2text-generation",
+    #             model=model_name,
+    #             tokenizer=tokenizer,
+    #             device='cuda' if torch.cuda.is_available() else 'cpu',
+    #             token=hub_token,
+    #             generation_config=generation_config,
+    #         )
+
+    #     # Generate predictions
+    #     print('Generating predictions...')
+    #     preds = []
+    #     for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
+    #         preds.append(pred[0]['generated_text'])
+
+    #     inputs = []
+    #     for text in KeyDataset(test_ds, 'text'):
+    #         inputs.append(text)
+
+    #     # Save text predictions to file
+    #     print('Saving predictions to file...')
+    #     with open(pred_filename, 'w') as f:
+    #         f.write('input,prediction\n')
+    #         for text, pred in zip(inputs, preds):
+    #             f.write(f'{text},{pred}\n')
+        
+    #     # Generate predictions with removed stereochemistry
+    #     print('Generating predictions with removed stereochemistry...')
+    #     preds_nostereo = []
+    #     for pred in tqdm(pipe(KeyDataset(test_ds_nostereo, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
+    #         preds_nostereo.append(pred[0]['generated_text'])
+
+    #     inputs_nostereo = []
+    #     for text in KeyDataset(test_ds_nostereo, 'text'):
+    #         inputs_nostereo.append(text)
+
+    #     # Save text predictions to file
+    #     print('Saving predictions with removed stereochemistry to file...')
+    #     with open(pred_filename.replace('preds', 'preds-nostereo'), 'w') as f:
+    #         f.write('input,prediction\n')
+    #         for text, pred in zip(inputs_nostereo, preds_nostereo):
+    #             f.write(f'{text},{pred}\n')
+
+    # print('Predictions collected. Evaluating predictions...')
+
+    # # Add `preds` to the test dataset
+    # test_ds = test_ds.add_column('preds', preds)
+    # test_ds_nostereo = test_ds_nostereo.add_column('preds', preds_nostereo)
+
+    # rouge = evaluate.load("rouge")
+
+    # def get_scores(sample):
+    #     protac_smiles = sample['text']
+    #     label_smiles = sample['labels']
+    #     pred_smiles = sample['preds']
+
+    #     scores = score_prediction(
+    #         protac_smiles,
+    #         label_smiles,
+    #         pred_smiles,
+    #         rouge=rouge,
+    #         poi_attachment_id=1, # Default ones...
+    #         e3_attachment_id=2, # Default ones...
+    #         compute_graph_metrics=True,
+    #         graph_edit_kwargs={'timeout': 1},
+    #     )
+
+    #     if scores['reassembly']:
+    #         scores['fix_reassembly'] = True
+    #         scores['fix_reassembly_nostereo'] = True
+    #     else:
+    #         substructs = fix_prediction(protac_smiles, pred_smiles)
+    #         if substructs is None:
+    #             fix_reassembly = False
+    #         else:
+    #             fix_reassembly = check_substructs(
+    #                 protac_smiles,
+    #                 substructs['poi'],
+    #                 substructs['linker'],
+    #                 substructs['e3'],
+    #             )
+    #         scores['fix_reassembly'] = fix_reassembly
+
+    #         # Try to fix prediction by removing stereochemistry
+    #         substructs = fix_prediction(protac_smiles, pred_smiles, remove_stereochemistry=True)
+    #         if substructs is None:
+    #             fix_reassembly = False
+    #         else:
+    #             fix_reassembly = check_substructs(
+    #                 protac_smiles,
+    #                 substructs['poi'],
+    #                 substructs['linker'],
+    #                 substructs['e3'],
+    #             )
+    #         scores['fix_reassembly_nostereo'] = fix_reassembly
+
+    #     scores['protac_smiles'] = sample['text']
+    #     scores['label_smiles'] = sample['labels']
+    #     scores['pred_smiles'] = sample['preds']
+
+    #     return scores
+    
+    # # Evaluate predictions
+    # print('Evaluating predictions...')
+    # metrics = test_ds.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
+    # metrics = metrics.to_pandas()
+
+    # print('Evaluating predictions with removed stereochemistry...')
+    # metrics_nostereo = test_ds_nostereo.map(get_scores, num_proc=num_proc, remove_columns=['text', 'labels', 'preds'])
+    # metrics_nostereo = metrics_nostereo.to_pandas()
+
+    # # Save metrics to CSV
+    # metrics.to_csv(metrics_filename, index=False)
+    # metrics_nostereo.to_csv(metrics_filename.replace('metrics', 'metrics-nostereo'), index=False)
+
+    # # Select non-smiles metrics
+    # non_smiles_metrics = metrics.drop(columns=['protac_smiles', 'label_smiles', 'pred_smiles'])
+    # non_smiles_metrics_nostereo = metrics_nostereo.drop(columns=['protac_smiles', 'label_smiles', 'pred_smiles'])
+
+    # # Print out average metrics
+    # print('-' * 80)
+    # for k, v in non_smiles_metrics.mean().items():
+    #     print(f'{k}: {v}')
+    # print('-' * 80)
+    # print('No stereochemistry:')
+    # print('-' * 80)
+    # for k, v in non_smiles_metrics_nostereo.mean().items():
+    #     print(f'{k}: {v}')
+    # print('-' * 80)
 
 
 if __name__ == '__main__':
