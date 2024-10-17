@@ -527,18 +527,34 @@ def train_model(
 
             f.write("Training arguments:\n")
             for hparam, value in hp_training_args.items():
-                if hparam == "token":
+                if "token" in hparam:
                     continue
+                elif isinstance(value, str):
+                    if 'hf_' in value:
+                        continue
                 f.write(f"- {hparam}: {value}\n")
-
-        api = hf.HfApi()
-        api.upload_file(
-            path_or_fileobj=f"{output_dir}/best_hyperparameters.md",
-            path_in_repo="best_hyperparameters.md",
-            repo_id=hub_model_id,
-            token=hub_token,
-        )
+        
+        # Open the file and remove any line that might contain the token
+        with open(f"{output_dir}/best_hyperparameters.md", "r") as f:
+            lines = f.readlines()
+            with open(f"{output_dir}/best_hyperparameters.md", "w") as f:
+                for line in lines:
+                    if "hf_" in line:
+                        continue
+                    f.write(line)
         print(f"Best hyperparameters saved to '{output_dir}/best_hyperparameters.md'.")
+
+        try:
+            api = hf.HfApi()
+            api.upload_file(
+                path_or_fileobj=f"{output_dir}/best_hyperparameters.md",
+                path_in_repo="best_hyperparameters.md",
+                repo_id=hub_model_id,
+                token=hub_token,
+            )
+        except Exception as e:
+            print(e)
+            print("WARNING. Best parameters NOT pushed to the hub.")
     else:
         # Setup the Trainer and start training (no Optuna hyperparameter search)
         trainer = Seq2SeqTrainer(
