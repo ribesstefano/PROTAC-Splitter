@@ -62,7 +62,7 @@ def split_prediction(
         e3_attachment_id (int): The attachment point ID for the E3 substructure.
 
     Returns:
-        dict[str, str] | None: A dictionary containing the SMILES notations for the POI, linker, and E3 substructures, or None if the prediction is invalid
+        dict[str, str] | None: A dictionary (with keys: 'e3', 'linker', 'poi') containing the SMILES notations for the POI, linker, and E3 substructures, or None if the prediction is invalid
     """
     ret = {k: None for k in ['poi', 'linker', 'e3']}
     substructs = pred.split('.')

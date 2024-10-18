@@ -431,6 +431,10 @@ def main(
         print('-' * 80)
         print(f'Number of iterations: {num_aug_samples // len(train_df)}')
         
+        # NOTE: The map function does NOT require a one-to-one mapping, we can
+        # even return a dictionary of lists for one-to-many mappings! Very
+        # useful for data augmentation! Check an example here: https://huggingface.co/learn/nlp-course/en/chapter7/6
+
         # Concatenate the training dataset until we reach the desired number of
         # samples
         ds_list = [

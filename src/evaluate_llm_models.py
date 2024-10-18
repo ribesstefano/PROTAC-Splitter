@@ -15,6 +15,7 @@ from protac_splitter.evaluation import (
     check_substructs,
     score_prediction,
 )
+from protac_splitter import fix_prediction
 
 import evaluate
 from rdkit import Chem
@@ -38,20 +39,6 @@ RDLogger.DisableLog("rdApp.*")
 blocker = rdBase.BlockLogs()
 
 
-def dummy2query(mol: Chem.Mol) -> Chem.Mol:
-    """ Converts dummy atoms to query atoms, so that a molecule with attachment points can be used in HasSubstructMatch.
-    
-    Args:
-        mol: The molecule to convert.
-
-    Returns:
-        The molecule with dummy atoms converted to query atoms
-    """
-    p = Chem.AdjustQueryParameters.NoAdjustments()
-    p.makeDummiesQueries = True
-    return Chem.AdjustQueryProperties(mol, p)
-
-
 def get_smiles_nostereo(smiles: str) -> str:
     """ Removes stereochemistry from a SMILES string.
     
@@ -65,107 +52,6 @@ def get_smiles_nostereo(smiles: str) -> str:
     Chem.RemoveStereochemistry(mol)
     return Chem.MolToSmiles(mol, canonical=True)
 
-
-def fix_prediction(
-        protac_smiles: str,
-        pred_smiles: str,
-        poi_attachment_id: int = 1,
-        e3_attachment_id: int = 2,
-        remove_stereochemistry: bool = False,
-) -> Optional[Dict[str, str]]:
-    """ Fixes a prediction by replacing the substructure that does not match the PROTAC with the rest of the PROTAC.
-    
-    Args:
-        protac_smiles: The SMILES of the PROTAC.
-        pred_smiles: The SMILES of the prediction.
-        poi_attachment_id: The attachment point id of the POI. Default is 1.
-        e3_attachment_id: The attachment point id of the E3 ligase. Default is 2.
-
-    Returns:
-        A dictionary containing the fixed substructures, or None if the prediction is invalid.
-    """
-    
-    substructs = split_prediction(pred_smiles)
-
-    # If there are at least two None values, there's nothing we can do to fix it
-    if sum(v is None for v in substructs.values()) >= 2:
-        logging.warning(f'Invalid prediction for "{pred_smiles}"')
-        return None
-    
-    protac_mol = Chem.MolFromSmiles(protac_smiles)
-    substructs = {k: {'smiles': v, 'mol': Chem.MolFromSmiles(v)} for k, v in substructs.items()}
-
-    # TODO: Check if removing stereochemistry results in a valid prediction
-    if remove_stereochemistry:
-        Chem.RemoveStereochemistry(protac_mol)
-        protac_smiles = Chem.MolToSmiles(protac_mol, canonical=True)
-        for k, v in substructs.items():
-            if v['mol'] is not None:
-                Chem.RemoveStereochemistry(v['mol'])
-                substructs[k]['smiles'] = Chem.MolToSmiles(v['mol'], canonical=True)
-    
-    if all(v['mol'] is not None for v in substructs.values()):
-        if check_substructs(
-            protac_smiles,
-            poi_smiles=substructs['poi']['smiles'],
-            linker_smiles=substructs['linker']['smiles'],
-            e3_smiles=substructs['e3']['smiles'],
-        ):
-            return {k: v['smiles'] for k, v in substructs.items()}
-
-    # Check if any of the substructures is NOT a substructure of the PROTAC
-    num_matches = 0
-    wrong_substruct = None
-    for sub in ['poi', 'linker', 'e3']:
-        if substructs[sub]['mol'] is None:
-            substructs[sub]['match'] = False
-            wrong_substruct = sub
-        elif protac_mol.HasSubstructMatch(dummy2query(substructs[sub]['mol'])):
-            substructs[sub]['match'] = True
-            num_matches += 1
-        else:
-            substructs[sub]['match'] = False
-            wrong_substruct = sub
-
-    if num_matches < 2:
-        logging.warning(f'Prediction does not contain at least two substructures of the PROTAC. Num matches: {num_matches}. Prediction SMILES: "{pred_smiles}"')
-        return None
-
-    if num_matches == 3:
-        logging.warning(f'Prediction already contains all matching substructures of the PROTAC. Prediction SMILES: "{pred_smiles}"')
-        return {k: v['smiles'] for k, v in substructs.items()}
-
-    fixed_mol = protac_mol
-    for sub in ['poi', 'e3', 'linker']:
-        if substructs[sub]['match']:
-            fixed_mol = Chem.ReplaceCore(
-                fixed_mol,
-                dummy2query(substructs[sub]['mol']),
-                labelByIndex=False,
-                replaceDummies=False,
-            )
-            if fixed_mol is None:
-                logging.warning(f'Failed to replace substructure "{sub}" in prediction SMILES: "{pred_smiles}"')
-                return None
-            
-            # TODO: Try again with another order if when replacing the core we
-            # obtain TWO molecules instead of one. This might happen when a
-            # substructure is still matching but it is "smaller" than the right
-            # one, resulting in "dangling" atoms.
-
-            # Rename the attachment points
-            attachment_id = poi_attachment_id if sub == 'poi' else e3_attachment_id
-            fixed_smiles = Chem.MolToSmiles(fixed_mol, canonical=True)
-            fixed_smiles = fixed_smiles.replace('[1*]', f'[*:{attachment_id}]')
-            fixed_mol = Chem.MolFromSmiles(fixed_smiles)
-
-    if len(fixed_smiles.split('.')) > 1:
-        # Get the longest sub-string in fixed_smiles
-        fixed_smiles = max(fixed_smiles.split('.'), key=len)
-
-    substructs[wrong_substruct]['smiles'] = fixed_smiles
-
-    return {k: v['smiles'] for k, v in substructs.items()}
 
 # REF: https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/generation/configuration_utils.py#L71
 GENERATION_STRATEGY_PARAMS = {
