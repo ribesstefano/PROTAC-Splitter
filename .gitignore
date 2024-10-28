@@ -141,6 +141,7 @@ data/*.pt
 data/**/*.jpg
 data/figures
 data/figures/*.png
+data/pdf_images/*.pdf
 data/figures/*.pdf
 data/figures/*.gif
 data/figures/*.html
@@ -155,3 +156,4 @@ logs/
 **/**/SSL_*
 **/**/slurm-*
 **/**/sbatch-*
+**/**/*.pdf
