@@ -46,3 +46,10 @@ python main.py --help
 The train and test datasets are assembled in the notbook: [notebooks/data_curation.ipynb](notebooks/data_curation.ipynb).
 
 Raw CSV data are expected to be placed in the `data/raw` directory.
+
+
+## Code Cleaning
+
+- Started organizing Anders' curation code into a set of files in the `protac_splitter/gnn` directory.
+- Clustering code needs some polishing and refactoring, i.e., handling plotting and visualizations
+- There is a huge function for generating the train/val/test splits, but I still don't understand how it differs from other functions in the clustering file...
