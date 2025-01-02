@@ -1,16 +1,18 @@
-import os
+import random
+import logging
+from typing import Optional
+
 import torch
-import pandas as pd
 from datasets import load_dataset, concatenate_datasets, Dataset
 from transformers import AutoTokenizer
-from typing import Optional
+from rdkit import Chem
 
 
 def process_data_to_model_inputs(
-    batch,
-    tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
-    encoder_max_length: int = 512,
-    decoder_max_length: int = 512,
+        batch,
+        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        encoder_max_length: int = 512,
+        decoder_max_length: int = 512,
 ):
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
@@ -23,36 +25,113 @@ def process_data_to_model_inputs(
     # Because BERT automatically shifts the labels, the labels correspond exactly to `decoder_input_ids`.
     # We have to make sure that the PAD token is ignored when calculating the loss.
     # NOTE: Check the `ignore_index` argument in nn.CrossEntropyLoss.
-    # NOTE: The following is done in the DataCollatorForSeq2Seq
+    # NOTE: The following is already done in the DataCollatorForSeq2Seq
     # batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
     return batch
 
 
+def randomize_smiles_dataset(
+    batch: dict,
+    repeat: int = 1,
+    prob: float = 0.5,
+    apply_to_text: bool = True,
+    apply_to_labels: bool = False,
+) -> dict:
+    """ Randomize SMILES in a batch of data.
+    
+    Args:
+        batch (dict): Batch of data with "text" and "labels" keys.
+        repeat (int, optional): Number of times to repeat the randomization. Defaults to 1.
+        prob (float, optional): Probability of randomizing SMILES. Defaults to 0.5.
+        apply_to_text (bool, optional): Whether to apply randomization to text. Defaults to True.
+        apply_to_labels (bool, optional): Whether to apply randomization to labels. Defaults to False.
+
+    Returns:
+        dict: Randomized batch of data.
+    """
+    new_texts, new_labels = [], []
+    for text, label in zip(batch["text"], batch["labels"]):
+        try:
+            mol_text = Chem.MolFromSmiles(text)
+            mol_label = Chem.MolFromSmiles(label)
+        except Exception:
+            logging.error("Failed to convert SMILES to Mol!")
+            new_texts.append(text)
+            new_labels.append(label)
+            continue
+
+        if random.random() < prob:
+            if apply_to_text:
+                rand_texts = [Chem.MolToSmiles(mol_text, canonical=False, doRandom=True) for _ in range(repeat)]
+            else:
+                rand_texts = [text] * repeat
+
+            if apply_to_labels:
+                rand_labels = [Chem.MolToSmiles(mol_label, canonical=False, doRandom=True) for _ in range(repeat)]
+            else:
+                rand_labels = [label] * repeat
+
+            new_texts.extend(rand_texts)
+            new_labels.extend(rand_labels)
+        else:
+            new_texts.append(text)
+            new_labels.append(label)
+
+    return {"text": new_texts, "labels": new_labels}
+
+
 def load_tokenized_dataset(
-    daset_dir: str,
-    dataset_config: str = 'default',
-    tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
-    batch_size: int = 512,
-    encoder_max_length:int = 512,
-    decoder_max_length:int = 512,
-    token: Optional[str] = None,
-    num_proc_map: int = 1,
+        daset_dir: str,
+        dataset_config: str = 'default',
+        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        batch_size: int = 512,
+        encoder_max_length:int = 512,
+        decoder_max_length:int = 512,
+        token: Optional[str] = None,
+        num_proc_map: int = 1,
+        randomize_smiles: bool = False,
+        randomize_smiles_prob: float = 0.5,
+        randomize_smiles_repeat: int = 1,
+        randomize_text: bool = True,
+        randomize_labels: bool = False,
 ) -> Dataset:
     """ Load dataset and tokenize it.
     
     Args:
-        daset_dir: Dataset directory.
-        dataset_config: Dataset configuration.
-        tokenizer: Tokenizer.
-        batch_size: Batch size.
-        encoder_max_length: Encoder max length.
-        decoder_max_length: Decoder max length.
-        token: Token.
+        daset_dir (str): The directory of the dataset or the name of the data on the Hugging Face Hub.
+        dataset_config (str, optional): The configuration of the dataset. Defaults to 'default'.
+        tokenizer (AutoTokenizer | str, optional): The tokenizer to use for tokenization. If a string, the tokenizer will be loaded using `AutoTokenizer.from_pretrained(tokenizer)`. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
+        batch_size (int, optional): The batch size for tokenization. Defaults to 512.
+        encoder_max_length (int, optional): The maximum length of the encoder input sequence. Defaults to 512.
+        decoder_max_length (int, optional): The maximum length of the decoder input sequence. Defaults to 512.
+        token (Optional[str], optional): The Hugging Face API token. Defaults to None.
+        num_proc_map (int, optional): The number of processes to use for mapping. Defaults to 1.
+        randomize_smiles (bool, optional): Whether to randomize SMILES. Defaults to False.
+        randomize_smiles_prob (float, optional): The probability of randomizing SMILES. Defaults to 0.5.
+        randomize_smiles_repeat (int, optional): The number of times to repeat the randomization. Defaults to 1.
+        randomize_text (bool, optional): Whether to randomize text. Defaults to True.
+        randomize_labels (bool, optional): Whether to randomize labels. Defaults to False.
+
+    Returns:
+        Dataset: The tokenized dataset.
     """
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     dataset = load_dataset(daset_dir, dataset_config, token=token)
-    dataset_tokenized = dataset.map(
+    if randomize_smiles:
+        dataset = dataset.map(
+            randomize_smiles_dataset,
+            batched=True,
+            batch_size=batch_size,
+            fn_kwargs={
+                "repeat": randomize_smiles_repeat,
+                "prob": randomize_smiles_prob,
+                "apply_to_text": randomize_text,
+                "apply_to_labels": randomize_labels,
+            },
+            num_proc=num_proc_map,
+        )
+    dataset = dataset.map(
         process_data_to_model_inputs,
         batched=True,
         batch_size=batch_size,
@@ -64,11 +143,7 @@ def load_tokenized_dataset(
         },
         num_proc=num_proc_map,
     )
-    # dataset_tokenized.set_format(
-    #     type="torch",
-    #     columns=["input_ids", "attention_mask", "labels"],
-    # )
-    return dataset_tokenized
+    return dataset
 
 
 def tokenize(sample, tokenizer, max_length=512):

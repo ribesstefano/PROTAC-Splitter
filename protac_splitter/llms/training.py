@@ -5,9 +5,7 @@ import subprocess
 import copy
 
 import numpy as np
-import evaluate
 import huggingface_hub as hf
-from rdkit import Chem
 from transformers import (
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
@@ -15,7 +13,7 @@ from transformers import (
     AutoTokenizer,
     GenerationConfig,
 )
-from datasets import load_dataset
+import optuna
 from optuna.samplers import QMCSampler
 from optuna.pruners import (
     BasePruner,
@@ -34,12 +32,6 @@ from .hf_utils import (
     repo_exists,
 )
 from .model_utils import get_model
-
-from typing import Optional
-import numpy as np
-import optuna
-from optuna.pruners import BasePruner
-from optuna.study._study_direction import StudyDirection
 
 
 class WrappedEarlyStoppingPruner(BasePruner):
@@ -288,32 +280,32 @@ def get_best_hyperparameters(
 
 
 def train_model(
-    model_id: str,
-    ds_name: str,
-    ds_config: str = 'default',
-    learning_rate: float = 5e-5,
-    max_steps: int = -1,
-    num_train_epochs: int = 40,
-    batch_size: int = 128,
-    batch_size_tokenizer: int = 512,
-    gradient_accumulation_steps: int = 4,
-    hub_token: Optional[str] = None,
-    organization: Optional[str] = None,
-    output_dir: str = "./models/",
-    tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
-    pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
-    pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
-    encoder_max_length: int = 512,
-    decoder_max_length: int = 512,
-    tie_encoder_decoder: bool = False,
-    delete_repo_if_exists: bool = False,
-    delete_local_repo_if_exists: bool = False,
-    training_args: Optional[Dict[str, Any]] = None,
-    resume_from_checkpoint: Optional[str] = None,
-    num_optuna_trials: int = 0,
-    num_proc_map: int = 1,
-    per_device_batch_size: Optional[int] = None,
-    lr_scheduler_type: Optional[str] = None,
+        model_id: str,
+        ds_name: str,
+        ds_config: str = 'default',
+        learning_rate: float = 5e-5,
+        max_steps: int = -1,
+        num_train_epochs: int = 40,
+        batch_size: int = 128,
+        batch_size_tokenizer: int = 512,
+        gradient_accumulation_steps: int = 4,
+        hub_token: Optional[str] = None,
+        organization: Optional[str] = None,
+        output_dir: str = "./models/",
+        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
+        pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
+        encoder_max_length: int = 512,
+        decoder_max_length: int = 512,
+        tie_encoder_decoder: bool = False,
+        delete_repo_if_exists: bool = False,
+        delete_local_repo_if_exists: bool = False,
+        training_args: Optional[Dict[str, Any]] = None,
+        resume_from_checkpoint: Optional[str] = None,
+        num_optuna_trials: int = 0,
+        num_proc_map: int = 1,
+        per_device_batch_size: Optional[int] = None,
+        lr_scheduler_type: Optional[str] = None,
 ):
     """Trains a model on a given dataset.
     
