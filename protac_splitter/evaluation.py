@@ -1,5 +1,6 @@
 """ Evaluation functions for the protac_splitter package. They need to be generic to accomodate predictions coming from different models. """
 
+import re
 import logging
 from typing import Tuple, Any, Dict, Optional
 
@@ -11,7 +12,7 @@ from rdkit.Chem import AllChem, DataStructs
 # Disable RDKit logging: when checking SMILES validity, we suppress warnings
 RDLogger.DisableLog("rdApp.*")
 
-from .chemoinformatics import canonize_smiles, remove_stereo
+from .chemoinformatics import canonize, canonize_smiles, remove_stereo
 from .protac_cheminformatics import reassemble_protac
 from .graphs_utils import (
     get_smiles2graph_edit_distance,
@@ -27,26 +28,13 @@ def is_valid_smiles(smiles: str, return_mol: bool = False) -> bool:
 
 
 def has_three_substructures(smiles: str) -> bool:
+    """ Check if a PROTAC SMILES has three substructures. """
     return smiles.count(".") == 2
 
 
 def has_all_attachment_points(smiles: str) -> bool:
+    """ Check if a PROTAC SMILES has all attachment points, i.e., [*:1] and [*:2], two each. """
     return smiles.count("[*:1]") == 2 and smiles.count("[*:2]") == 2
-
-
-def is_substructure(protac_smiles: str, substruct_smiles: str) -> bool:
-    """ Check if a molecule is a substructure of another molecule.
-
-    Args:
-        protac_smiles (str): The SMILES of the PROTAC molecule.
-        substruct_smiles (str): The SMILES of the substructure molecule.
-
-    Returns:
-        bool: True if the substructure molecule is a substructure of the PROTAC molecule, False otherwise.
-    """
-    protac_mol = Chem.MolFromSmiles(protac_smiles)
-    substruct_mol = Chem.MolFromSmarts(substruct_smiles)
-    return protac_mol.HasSubstructMatch(substruct_mol)
 
 
 def split_prediction(
@@ -78,6 +66,107 @@ def split_prediction(
     return ret
 
 
+def rename_attachment_id(mol: str | Chem.Mol, old_id: int, new_id: int) -> str | Chem.Mol:
+    """ Rename an attachment point ID in a molecule.
+
+    Args:
+        mol: The input molecule.
+        old_id: The old attachment point ID.
+        new_id: The new attachment point ID.
+
+    Returns:
+        The renamed molecule.
+    """
+    return_str = False
+    if isinstance(mol, Chem.Mol):
+        mol = Chem.MolToSmiles(mol, canonical=True)
+        return_str = True
+    # Regex-replace the patterns "[*:old_id]" or "[old_id*]" with "[*:new_id]"
+    mol = re.sub(rf'\[\*:{old_id}\]', f'[*:{new_id}]', mol)
+    mol = re.sub(rf'\[{old_id}\*\]', f'[*:{new_id}]', mol)
+    mol = canonize_smiles(mol)
+    if mol is None:
+        return None
+    mol = Chem.MolFromSmiles(mol)
+    if return_str:
+        return Chem.MolToSmiles(mol, canonical=True)
+    return mol
+
+
+def check_reassembly(
+        protac_smiles: str,
+        ligands_smiles: str,
+        stats: Optional[Dict[str, int]] = None,
+        linker_can_be_null: bool = False,
+        poi_attachment_id: int = 1,
+        e3_attachment_id: int = 2,
+        verbose: int = 0,
+) -> bool:
+    """Check if the reassembled PROTAC matches the original PROTAC SMILES.
+
+    Args:
+        protac_smiles (str): The original PROTAC SMILES.
+        ligands_smiles (str): The SMILES of the joined PROTAC ligands, separated by a "." (dot).
+        stats (Optional[Dict[str, int]]): A dictionary to store statistics about the reassembly process.
+        linker_can_be_null (bool): If True, the linker can be empty and a special check is performed.
+        poi_attachment_id (int): The label of the attachment point for the POI ligand, i.e., "[*:{poi_attachment_id}]". Default is 1.
+        e3_attachment_id (int): The label of the attachment point for the E3 binder, i.e., "[*:{e3_attachment_id}]". Default is 2.
+        verbose (int): The verbosity
+
+    Returns:
+        bool: True if the reassembled PROTAC matches the original PROTAC SMILES, False otherwise.
+    """
+    ligands_smiles = canonize_smiles(ligands_smiles)
+    if ligands_smiles is None:
+        if verbose:
+            logging.error('ERROR: Ligand could be canonicalized.')
+        return False
+
+    null_linker_e3 = f'[*:{e3_attachment_id}][*:{poi_attachment_id}]'
+    null_linker_poi = f'[*:{poi_attachment_id}][*:{e3_attachment_id}]'
+    linker_is_null = False
+    if null_linker_e3 in ligands_smiles or null_linker_poi in ligands_smiles:
+        # If the linker is empty, remove the linker atoms
+        ligands_smiles = ligands_smiles.replace(null_linker_poi, '')
+        ligands_smiles = ligands_smiles.replace(null_linker_e3, '')
+        ligands_smiles = ligands_smiles.replace('..', '.')
+        ligands_smiles = ligands_smiles.rstrip('.')
+        ligands_smiles = ligands_smiles.lstrip('.')
+        ligands_smiles = canonize_smiles(ligands_smiles)
+        linker_is_null = True
+
+    if linker_can_be_null or linker_is_null:
+        if len(ligands_smiles.split('.')) == 2:
+            # Replace the attachment points with a third one (they will be joined later)
+            ligands_smiles = rename_attachment_id(ligands_smiles, e3_attachment_id, max([poi_attachment_id, e3_attachment_id]) + 1)
+            ligands_smiles = rename_attachment_id(ligands_smiles, poi_attachment_id, max([poi_attachment_id, e3_attachment_id]) + 1)
+
+    ligands_mol = Chem.MolFromSmiles(ligands_smiles)
+    if ligands_mol is None:
+        if verbose:
+            logging.error('ERROR: ligands_mol is None')
+        return False
+    try:
+        reassembled_mol = Chem.molzip(ligands_mol)
+    except:
+        if stats is not None:
+            stats['molzip failed'] += 1
+        if verbose:
+            logging.error('ERROR: molzip failed')
+        return False
+
+    try:
+        reassembled_smiles = canonize(Chem.MolToSmiles(reassembled_mol))
+    except:
+        if stats is not None:
+            stats['MolToSmiles of reassembled failed'] += 1
+        if verbose:
+            logging.error('ERROR: MolToSmiles of reassembled failed')
+        return False
+    
+    return canonize(protac_smiles) == reassembled_smiles
+
+
 def check_substructs(
         protac_smiles: str,
         poi_smiles: str = None,
@@ -88,7 +177,7 @@ def check_substructs(
         e3_attachment_id: int = 2,
         pred: str = None,
 ) -> bool | Tuple[bool, dict[str, str]]:
-    """ Check if the reassembled PROTAC is correct.
+    """ Check if the reassembled PROTAC is correct. DEPRECATED.
     
     Args:
         protac_smiles (str): The SMILES of the PROTAC molecule.
@@ -210,23 +299,16 @@ def score_prediction(
     scores['reassembly_nostereo'] = False
 
     pred_substructs = split_prediction(pred_smiles, poi_attachment_id, e3_attachment_id)
+    pred_nostereo = remove_stereo(pred_substructs['e3'])
+    pred_nostereo += '.' + remove_stereo(pred_substructs['linker'])
+    pred_nostereo += '.' + remove_stereo(pred_substructs['poi'])
 
     # Compute metrics for the "entire" predicted PROTAC molecule
     if all(v is not None for v in pred_substructs.values()):
         scores['valid'] = is_valid_smiles(pred_smiles)
-        scores['reassembly'] = check_substructs(
-            protac_smiles=protac_smiles,
-            poi_smiles=pred_substructs['poi'],
-            linker_smiles=pred_substructs['linker'],
-            e3_smiles=pred_substructs['e3'],
-        )
+        scores['reassembly'] = check_reassembly(protac_smiles, pred_smiles)
         if scores['valid']:
-            scores['reassembly_nostereo'] = check_substructs(
-                protac_smiles=remove_stereo(protac_smiles),
-                poi_smiles=remove_stereo(pred_substructs['poi']),
-                linker_smiles=remove_stereo(pred_substructs['linker']),
-                e3_smiles=remove_stereo(pred_substructs['e3']),
-            )
+            scores['reassembly_nostereo'] = check_reassembly(remove_stereo(protac_smiles), pred_nostereo)
         if scores['valid'] and compute_rdkit_metrics and fpgen is not None:
             # Get Tanimoto similarity between the predicted PROTAC and the ground truth PROTAC
             pred_mol = Chem.MolFromSmiles(pred_smiles)
@@ -306,49 +388,3 @@ def score_prediction(
             scores.update({f'{sub}_{k}': v for k, v in rouge_output.items()})
 
     return scores
-
-
-def same_atom_counts_and_types(smiles1, smiles2, get_atoms_diff=False):
-    """
-    Check if two molecules have the same number and types of atoms.
-
-    Args:
-    smiles1 (str): SMILES of the first molecule.
-    smiles2 (str): SMILES of the second molecule.
-
-    Returns:
-    bool: True if the molecules have the same atom counts and types, False otherwise.
-    """
-    if isinstance(smiles1, str):
-        mol1 = Chem.MolFromSmiles(smiles1)
-    else:
-        mol1 = smiles1
-    if isinstance(smiles2, str):
-        mol2 = Chem.MolFromSmiles(smiles2)
-    else:
-        mol2 = smiles2
-    if mol1 is None or mol2 is None:
-        if get_atoms_diff:
-            return False
-            # raise ValueError("Invalid SMILES notation provided for one or both molecules.")
-        else:
-            return False
-    num_atoms1 = Chem.rdMolDescriptors.CalcNumHeavyAtoms(mol1)
-    num_atoms2 = Chem.rdMolDescriptors.CalcNumHeavyAtoms(mol2)
-    if get_atoms_diff:
-        return abs(num_atoms1 - num_atoms2)
-        # tmp = {}
-        # for atom in atom_counts1.keys():
-        #     tmp[atom] = int(abs(atom_counts1.get(atom, 0) - atom_counts2.get(atom, 0)))
-        # for atom in atom_counts2.keys():
-        #     tmp[atom] = int(abs(atom_counts1.get(atom, 0) - atom_counts2.get(atom, 0)))
-        # return tmp # abs(atom_counts1.get('O', 0) - atom_counts2.get('O', 0))
-    else:
-        atom_counts1, atom_counts2 = {}, {}
-        for atom in mol1.GetAtoms():
-            if '*' not in atom.GetSmarts():
-                atom_counts1[atom.GetSymbol()] = atom_counts1.get(atom.GetSymbol(), 0) + 1
-        for atom in mol2.GetAtoms():
-            if '*' not in atom.GetSmarts():
-                atom_counts2[atom.GetSymbol()] = atom_counts2.get(atom.GetSymbol(), 0) + 1
-        return (atom_counts1 == atom_counts2) & (num_atoms1 == num_atoms2)

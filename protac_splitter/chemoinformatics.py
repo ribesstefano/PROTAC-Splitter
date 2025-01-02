@@ -48,34 +48,6 @@ def GetSubstructMatchesWithTimeout(
         return q.get()
 
 
-def canonize_smiles(smiles: str, fail_on_error: bool = False) -> str:
-    """
-    Canonize a given SMILES string.
-
-    Args:
-        smiles (str): The input SMILES string to be standardized.
-
-    Returns:
-        str: The standardized SMILES string.
-    """
-    try:
-        mol = Chem.MolFromSmiles(smiles)
-        if mol is not None:
-            return Chem.MolToSmiles(mol, canonical=True)
-        else:
-            if fail_on_error:
-                raise ValueError(f'Smile returned error: {smiles}')
-            else:
-                logging.warning(f'Smile returned error: {smiles}')
-                return None
-    except Exception as e:
-        if fail_on_error:
-            raise e
-        else:
-            logging.warning(f'Smile returned error: {smiles}')
-        return None
-
-
 def remove_stereo(smiles: str) -> str:
     """
     Remove stereochemistry from a SMILES string.
@@ -110,6 +82,90 @@ def get_mol(smiles: str, remove_stereo: bool = False) -> Chem.Mol:
     return mol
 
 
+def canonize_smarts(smarts: str) -> str:
+    """
+    Cleans a SMARTS string by converting it to canonical SMARTS representation.
+
+    NOTE: It might not work for complex patterns: https://github.com/rdkit/rdkit/discussions/6929
+
+    Args:
+        smarts (str): The input SMARTS string.
+
+    Returns:
+        str: The cleaned SMARTS string.
+    """
+    mol = Chem.MolFromSmarts(smarts)
+
+    if mol is None:
+        return None
+    canonical_smarts = Chem.MolToSmarts(Chem.MolFromSmiles(Chem.MolToSmiles(mol), sanitize=False))
+    return canonical_smarts
+
+
+def smiles2mol(smiles: str) -> Chem.Mol:
+    """Converts a SMILES string to an RDKit molecule object.
+
+    Args:
+        smiles (str): The input SMILES string.
+
+    Returns:
+        Chem.Mol: The RDKit molecule object.
+    """
+    return Chem.MolFromSmiles(smiles)
+
+
+def mol2smiles(mol: Chem.Mol) -> str:
+    """Converts an RDKit molecule object to a SMILES string.
+
+    Args:
+        mol (Chem.Mol): The RDKit molecule object.
+
+    Returns:
+        str: The SMILES string.
+    """
+    return Chem.MolToSmiles(mol)
+
+
+def canonize_smiles(smiles: str) -> str:
+    """ Canonizes a SMILES string by converting it to canonical SMILES representation.
+    
+    Args:
+        smiles (str): The input SMILES string.
+
+    Returns:
+        str: The canonized SMILES string.
+    """
+    if smiles is None:
+        return None
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
+    if mol is None:
+        return None
+    try:
+        return Chem.MolToSmiles(mol, canonical=True)
+    except:
+        return None
+
+
+def canonize(x: str | Chem.Mol) -> str | Chem.Mol:
+    """ Canonizes a SMILES string or RDKit molecule object.
+
+    Args:
+        x: The input SMILES string or RDKit molecule object.
+
+    Returns:
+        str | Chem.Mol: The canonized SMILES string or RDKit molecule object, according to the input type.
+    """
+    if x is None:
+        return None
+    if isinstance(x, str):
+        return canonize_smiles(x)
+    return Chem.MolFromSmiles(Chem.MolToSmiles(x, canonical=True))
+
+
 def compute_RDKitFP(
         smiles: Union[str, List[str], List[Chem.Mol]],
         maxPath: int = 7,
@@ -135,81 +191,6 @@ def compute_RDKitFP(
         maxPath=maxPath, fpSize=fpSize)
     fps = [rdgen.GetCountFingerprint(mol) for mol in mols]
     return fps
-
-
-def compute_countMorgFP(
-        smiles: List[str],
-        radius: int = 2,
-) -> List[DataStructs.cDataStructs.ExplicitBitVect]:
-    """
-    Compute the count-based Morgan fingerprint for a list of SMILES strings.
-
-    Args:
-        smiles (List[str]): A list of SMILES strings.
-        radius (int, optional): The radius parameter for the Morgan fingerprint. Defaults to 2.
-
-    Returns:
-        List[rdkit.DataStructs.cDataStructs.ExplicitBitVect]: A list of count-based Morgan fingerprints.
-    """
-    if smiles is None:
-        return None
-    if isinstance(smiles[0], str):
-        mols = [get_mol(smi) for smi in smiles]
-    else:
-        mols = smiles  # assume mols were fed instead
-    fpgen = AllChem.GetMorganGenerator(radius=radius)
-    fps = [fpgen.GetCountFingerprint(mol) for mol in mols]
-    return fps
-
-
-def tanimoto_similarity_matrix(fps, return_distance=False):
-    """
-    Calculate a symmetric Tanimoto similarity matrix for a list of fingerprints using bulk operations.
-
-    Parameters:
-    - fps: list, RDKit fingerprint objects for which to calculate similarity.
-
-    Returns:
-    - np.array, Symmetric square matrix of Tanimoto similarity.
-    """
-    num_fps = len(fps)
-    # Initialize a square matrix of zeros
-    sim_matrix = np.zeros((num_fps, num_fps))
-
-    for i in tqdm(range(num_fps)):
-        similarities = DataStructs.BulkTanimotoSimilarity(fps[i], fps)
-        sim = np.array(similarities)
-        sim_matrix[i, :] = sim
-        # Set diagonal to 1 as the similarity to self is 1
-        sim_matrix[i, i] = 1
-
-    if return_distance:
-        return 1 - sim_matrix
-    return sim_matrix
-
-
-def add_attachments(
-        list_without_attachments: List[str],
-        dict_map_without_to_with: Dict[str, List[str]],
-) -> Tuple[List[str], List[Chem.Mol]]:
-    """
-    Adds attachments to a list of molecules.
-
-    Args:
-        list_without_attachments (List[str]): A list of SMILES strings representing molecules without attachments.
-        dict_map_without_to_with (Dict[str, List[str]]): A dictionary mapping SMILES strings without attachments to a list of SMILES strings with attachments.
-
-    Returns:
-        Tuple[List[str], List[Chem.Mol]]: A tuple containing two lists:
-            - smiles_with_attachment (List[str]): A list of SMILES strings representing molecules with attachments.
-            - mols (List[Chem.Mol]): A list of RDKit molecule objects corresponding to the molecules with attachments.
-    """
-    smiles_with_attachment = []
-    for smi in list_without_attachments:
-        smiles_with_attachment.extend(dict_map_without_to_with[smi])
-    smiles_with_attachment = list(set(smiles_with_attachment))
-    mols = [Chem.MolFromSmiles(smi) for smi in smiles_with_attachment]
-    return smiles_with_attachment, mols
 
 
 def merge_molecules(
