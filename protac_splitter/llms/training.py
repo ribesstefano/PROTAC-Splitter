@@ -4,6 +4,7 @@ from functools import partial
 import subprocess
 import copy
 
+import torch
 import numpy as np
 import huggingface_hub as hf
 from transformers import (
@@ -33,6 +34,7 @@ from .hf_utils import (
 )
 from .model_utils import get_model
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Use GPU with index 0
 
 class WrappedEarlyStoppingPruner(BasePruner):
     """
@@ -224,7 +226,7 @@ def get_best_hyperparameters(
     # Override the training steps
     hp_training_args = copy.deepcopy(training_args)
     hp_training_args["num_train_epochs"] = -1
-    hp_training_args["max_steps"] = 100_000
+    hp_training_args["max_steps"] = 10_000
     hp_training_args["eval_steps"] = 1000
     hp_training_args["logging_steps"] = 500
     hp_training_args["save_steps"] = 5000
@@ -244,7 +246,7 @@ def get_best_hyperparameters(
         args=Seq2SeqTrainingArguments(**hp_training_args),
         compute_metrics=compute_metrics,
         train_dataset=dataset_tokenized["train"],
-        eval_dataset=dataset_tokenized["test"],
+        eval_dataset=dataset_tokenized["validation"].select(range(2048)),
     )
     
     # Setup the Optuna pruner and sampler
@@ -304,8 +306,10 @@ def train_model(
         resume_from_checkpoint: Optional[str] = None,
         num_optuna_trials: int = 0,
         num_proc_map: int = 1,
-        per_device_batch_size: Optional[int] = None,
+        per_device_train_batch_size: Optional[int] = None,
+        per_device_eval_batch_size: Optional[int] = None,
         lr_scheduler_type: Optional[str] = None,
+        cache_dir: Optional[str] = None,
 ):
     """Trains a model on a given dataset.
     
@@ -387,6 +391,7 @@ def train_model(
         decoder_max_length,
         token=hub_token,
         num_proc_map=num_proc_map,
+        cache_dir=cache_dir,
     )
     # Precompute a "length" column for the dataset using the map function
     def add_length(x):
@@ -427,11 +432,16 @@ def train_model(
         tokenizer=tokenizer,
         rouge=rouge,
         fpgen=fpgen,
+        compute_rdkit_metrics=False,
+        compute_graph_metrics=True,
+        num_proc=max(1, num_proc_map - 2), # NOTE: Use 2 less process for the metrics, since there will be a timeout logic
     )
 
     # Setup the training arguments
-    if per_device_batch_size is None:
-        per_device_batch_size = batch_size // gradient_accumulation_steps
+    if per_device_train_batch_size is None:
+        per_device_train_batch_size = batch_size // gradient_accumulation_steps
+    if per_device_eval_batch_size is None:
+        per_device_eval_batch_size = batch_size // gradient_accumulation_steps
     if training_args is None:
         generation_config = GenerationConfig(
             max_length=512,
@@ -458,11 +468,13 @@ def train_model(
             # Batch size, device, and performance optimizations configs
             # "torch_compile": True,
             "group_by_length": True,
-            "per_device_train_batch_size": per_device_batch_size,
-            "per_device_eval_batch_size": per_device_batch_size,
+            "per_device_train_batch_size": per_device_train_batch_size,
+            "per_device_eval_batch_size": per_device_eval_batch_size,
             "gradient_accumulation_steps": gradient_accumulation_steps,
             "auto_find_batch_size": True,
-            "fp16": True,
+            "fp16": True if torch.cuda.is_available() else False,
+            "use_cpu": False, # Default: False
+            "dataloader_num_workers": 16, # Default: 0 (main process only)
             # Evaluation and checkpointing configs
             "max_steps": max_steps,
             "num_train_epochs": num_train_epochs,
@@ -474,6 +486,7 @@ def train_model(
             "load_best_model_at_end": True,
             "metric_for_best_model": "reassembly",
             "include_inputs_for_metrics": True,
+            "eval_on_start": True, # Default: False
             # Logging configs
             "log_level": "warning",
             "logging_steps": 500,
@@ -495,12 +508,23 @@ def train_model(
 
     # Modify the training arguments with Optuna hyperparameter search
     if num_optuna_trials > 0:
+        # Setup the compute_metrics function for the hyperparameter search
+        hp_compute_metrics = partial(
+            decode_and_get_metrics,
+            tokenizer=tokenizer,
+            rouge=rouge,
+            fpgen=fpgen,
+            compute_rdkit_metrics=False,
+            compute_graph_metrics=False,
+            num_proc=num_proc_map,
+        )
+        
         # Run the HP search (and update the training_args accordingly)
         best_objective, best_hparams, hp_training_args = get_best_hyperparameters(
             model_init=bert2bert,
             tokenizer=tokenizer,
             data_collator=data_collator,
-            compute_metrics=compute_metrics,
+            compute_metrics=hp_compute_metrics,
             dataset_tokenized=dataset_tokenized,
             training_args=copy.deepcopy(training_args),
             lr_scheduler_type=lr_scheduler_type,
@@ -556,7 +580,7 @@ def train_model(
             args=Seq2SeqTrainingArguments(**training_args),
             compute_metrics=compute_metrics,
             train_dataset=dataset_tokenized["train"],
-            eval_dataset=dataset_tokenized["test"],
+            eval_dataset=dataset_tokenized["validation"].select(range(2048)),
         )
         if resume_from_checkpoint is not None:
             trainer.train(

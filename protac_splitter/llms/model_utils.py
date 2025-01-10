@@ -1,23 +1,28 @@
-from transformers import AutoTokenizer, EncoderDecoderModel
 from typing import Optional
+from transformers import AutoTokenizer, EncoderDecoderModel
+import torch
 
 def get_model(
-    pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
-    pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
-    max_length: Optional[int] = 512,
-    tie_encoder_decoder: bool = False,
-):
+        pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
+        pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
+        max_length: Optional[int] = 512,
+        tie_encoder_decoder: bool = False,
+) -> EncoderDecoderModel:
+    """ Get the EncoderDecoderModel model for the PROTAC splitter.
+
+    Args:
+        pretrained_encoder (str): The pretrained model to use for the encoder. Default: "seyonec/ChemBERTa-zinc-base-v1"
+        pretrained_decoder (str): The pretrained model to use for the decoder. Default: "seyonec/ChemBERTa-zinc-base-v1"
+        max_length (int): The maximum length of the input sequence. Default: 512
+        tie_encoder_decoder (bool): Whether to tie the encoder and decoder weights. Default: False
+
+    Returns:
+        EncoderDecoderModel: The EncoderDecoderModel model for the PROTAC splitter
+    """
     bert2bert = EncoderDecoderModel.from_encoder_decoder_pretrained(
         pretrained_encoder,
         pretrained_decoder,
         tie_encoder_decoder=tie_encoder_decoder,
-
-        # decoder_is_decoder = True,
-        # decoder_do_sample = False,
-        # decoder_num_beams = 5,
-        # decoder_top_k = 20,
-        # decoder_max_length=512,
-        # decoder_max_new_tokens = 512,
     )
     print(f"Number of parameters: {bert2bert.num_parameters():,}")
     tokenizer = AutoTokenizer.from_pretrained(pretrained_encoder)
@@ -30,15 +35,12 @@ def get_model(
     # NOTE: See full list of configurations can be found here: https://huggingface.co/docs/transformers/v4.33.3/en/main_classes/text_generation#transformers.GenerationConfig
     bert2bert.encoder.config.max_length = max_length
     bert2bert.decoder.config.max_length = max_length
-    # bert2bert.config.min_length = 20
 
-    # # NOTE: Never sample, i.e., always return the token w/ highest probability
-    # bert2bert.config.do_sample = False
     def setup_gen(config):
         config.do_sample = True
         config.num_beams = 5
         config.top_k = 20
-        config.max_length=512
+        config.max_length = 512
         # config.max_new_tokens = 512
         return config
     
@@ -56,11 +58,13 @@ def get_model(
 
     # bert2bert.generation_config.max_new_tokens = 512
     # bert2bert.generation_config.min_new_tokens = 512
-
     
     # bert2bert.config.max_new_tokens = 514
     # bert2bert.config.early_stopping = True
     # bert2bert.config.length_penalty = 2.0
     # # bert2bert.config.no_repeat_ngram_size = 3 # Default: 0
-    
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    bert2bert.to(device)
+
     return bert2bert

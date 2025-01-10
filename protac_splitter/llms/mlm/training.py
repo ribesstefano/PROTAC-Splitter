@@ -197,6 +197,7 @@ def train_mlm_model(
             finetuned_from=pretrained_model_name,
             tasks=["Fill-Mask"],
             tags=["PROTAC", "cheminformatics"],
+            token=hub_token,
             dataset=ds_name,
             dataset_args=ds_config,
         )

@@ -76,16 +76,36 @@ def train_mlm_model(
     Trains a masked language model (MLM) using an encoder-decoder architecture.
   
     Args:
-        encoder_model_name (str): The name or path of the pretrained encoder model.
-        decoder_model_name (str): The name or path of the pretrained decoder model.
-        train_dataset (Dataset): The dataset to be used for training.
-        output_dir (str): The directory where the trained model and checkpoints will be saved.
-        num_train_epochs (int, optional): The number of training epochs. Defaults to 3.
-        batch_size (int, optional): The batch size for training. Defaults to 8.
-        learning_rate (float, optional): The learning rate for the optimizer. Defaults to 5e-5.
-        warmup_steps (int, optional): The number of warmup steps for the learning rate scheduler. Defaults to 500.
-    Returns:
-        EncoderDecoderModel: The trained encoder-decoder model.
+        model_id (str): The name of the model to be trained.
+        ds_name (str): The name of the dataset to use for training.
+        ds_config (str): The configuration of the dataset to use. Default: 'default'.
+        learning_rate (float): The learning rate for training. Default: 5e-5.
+        max_steps (int): The maximum number of training steps. Default: -1.
+        num_train_epochs (int): The number of training epochs. Default: 40.
+        batch_size (int): The total batch size. Default: 128.
+        batch_size_tokenizer (int): The batch size for the tokenizer. Default: 512.
+        gradient_accumulation_steps (int): The number of gradient accumulation steps. Default: 4.
+        hub_token (str): The Hugging Face token for authentication. Default: None.
+        organization (str): The organization to push the model to. Default: None.
+        output_dir (str): The output directory for the model. Default: "./models/".
+        tokenizer (AutoTokenizer | str): The tokenizer to use for training. Default: "seyonec/ChemBERTa-zinc-base-v1".
+        pretrained_encoder (str): The pretrained encoder model to use. Default: "seyonec/ChemBERTa-zinc-base-v1".
+        pretrained_decoder (str): The pretrained decoder model to use. Default: "seyonec/ChemBERTa-zinc-base-v1".
+        encoder_max_length (int): The maximum length of the encoder input. Default: 512.
+        decoder_max_length (int): The maximum length of the decoder input. Default: 512.
+        tie_encoder_decoder (bool): Whether to tie the encoder and decoder weights. Default: False.
+        delete_repo_if_exists (bool): Whether to delete the repository if it already exists. Default: False.
+        delete_local_repo_if_exists (bool): Whether to delete the local repository if it already exists. Default: False.
+        training_args (Dict[str, Any]): The training arguments for the Trainer. Default: None.
+        resume_from_checkpoint (str): The checkpoint to resume training from. Default: None.
+        num_optuna_trials (int): The number of Optuna hyperparameter search trials. Default: 0.
+        num_proc_map (int): The number of processes to use for mapping. Default: 1.
+        per_device_batch_size (int): The batch size per device. If defined, it will overwrite batch_size. Default: None.
+        lr_scheduler_type (str): The learning rate scheduler type. Default: None.
+        mlm_probability (float): The probability of masking tokens in the input. Default: 0.15.
+        randomize_smiles (bool): Whether to randomize SMILES strings. Default: False.
+        randomize_smiles_prob (float): The probability of randomizing SMILES strings. Default: 0.5.
+        randomize_smiles_repeat (int): The number of times to repeat randomizing SMILES strings. Default: 1.
     """
         # Check if resume_from_checkpoint exists and it's a file
     if resume_from_checkpoint is not None:

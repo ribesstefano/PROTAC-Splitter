@@ -12,7 +12,12 @@ from rdkit.Chem import AllChem, DataStructs
 # Disable RDKit logging: when checking SMILES validity, we suppress warnings
 RDLogger.DisableLog("rdApp.*")
 
-from .chemoinformatics import canonize, canonize_smiles, remove_stereo
+from .chemoinformatics import (
+    canonize,
+    canonize_smiles,
+    remove_stereo,
+    get_substr_match,
+)
 from .protac_cheminformatics import reassemble_protac
 from .graphs_utils import (
     get_smiles2graph_edit_distance,
@@ -92,6 +97,17 @@ def rename_attachment_id(mol: str | Chem.Mol, old_id: int, new_id: int) -> str |
         return Chem.MolToSmiles(mol, canonical=True)
     return mol
 
+def at_least_two_ligands_correct(
+        protac_smiles: str,
+        ligands_smiles: str,
+) -> bool:
+    """ Check if at least two ligands are correct. """
+    # Check if there is at least one "." in the ligands SMILES
+    if "." not in ligands_smiles:
+        return False
+    ligands = ligands_smiles.split(".")
+    return True
+
 
 def check_reassembly(
         protac_smiles: str,
@@ -101,6 +117,7 @@ def check_reassembly(
         poi_attachment_id: int = 1,
         e3_attachment_id: int = 2,
         verbose: int = 0,
+        return_reassembled_smiles: bool = False,
 ) -> bool:
     """Check if the reassembled PROTAC matches the original PROTAC SMILES.
 
@@ -120,7 +137,7 @@ def check_reassembly(
     if ligands_smiles is None:
         if verbose:
             logging.error('ERROR: Ligand could be canonicalized.')
-        return False
+        return False if not return_reassembled_smiles else False, None
 
     null_linker_e3 = f'[*:{e3_attachment_id}][*:{poi_attachment_id}]'
     null_linker_poi = f'[*:{poi_attachment_id}][*:{e3_attachment_id}]'
@@ -145,7 +162,7 @@ def check_reassembly(
     if ligands_mol is None:
         if verbose:
             logging.error('ERROR: ligands_mol is None')
-        return False
+        return False if not return_reassembled_smiles else False, None
     try:
         reassembled_mol = Chem.molzip(ligands_mol)
     except:
@@ -153,7 +170,7 @@ def check_reassembly(
             stats['molzip failed'] += 1
         if verbose:
             logging.error('ERROR: molzip failed')
-        return False
+        return False if not return_reassembled_smiles else False, None
 
     try:
         reassembled_smiles = canonize(Chem.MolToSmiles(reassembled_mol))
@@ -162,9 +179,12 @@ def check_reassembly(
             stats['MolToSmiles of reassembled failed'] += 1
         if verbose:
             logging.error('ERROR: MolToSmiles of reassembled failed')
-        return False
+        return False if not return_reassembled_smiles else False, None
     
-    return canonize(protac_smiles) == reassembled_smiles
+    is_equal = canonize(protac_smiles) == reassembled_smiles
+    if return_reassembled_smiles:
+        return is_equal, reassembled_smiles
+    return is_equal
 
 
 def check_substructs(
@@ -297,18 +317,33 @@ def score_prediction(
     scores['valid'] = False
     scores['reassembly'] = False
     scores['reassembly_nostereo'] = False
+    protac_mol = Chem.MolFromSmiles(protac_smiles)
+    protac_num_atoms = protac_mol.GetNumHeavyAtoms()
+    scores['heavy_atoms_difference'] = protac_num_atoms
+    scores['heavy_atoms_difference_norm'] = 1.0
 
     pred_substructs = split_prediction(pred_smiles, poi_attachment_id, e3_attachment_id)
-    pred_nostereo = remove_stereo(pred_substructs['e3'])
-    pred_nostereo += '.' + remove_stereo(pred_substructs['linker'])
-    pred_nostereo += '.' + remove_stereo(pred_substructs['poi'])
 
     # Compute metrics for the "entire" predicted PROTAC molecule
     if all(v is not None for v in pred_substructs.values()):
-        scores['valid'] = is_valid_smiles(pred_smiles)
-        scores['reassembly'] = check_reassembly(protac_smiles, pred_smiles)
-        if scores['valid']:
+        e3_nostereo = remove_stereo(pred_substructs['e3'])
+        linker_nostereo = remove_stereo(pred_substructs['linker'])
+        poi_nostereo = remove_stereo(pred_substructs['poi'])
+        if None not in [e3_nostereo, linker_nostereo, poi_nostereo]:
+            pred_nostereo = f"{e3_nostereo}.{linker_nostereo}.{poi_nostereo}"
             scores['reassembly_nostereo'] = check_reassembly(remove_stereo(protac_smiles), pred_nostereo)
+
+        scores['valid'] = is_valid_smiles(pred_smiles)
+        is_equal, reassembled_smiles = check_reassembly(protac_smiles, pred_smiles, return_reassembled_smiles=True)
+        scores['reassembly'] = is_equal
+
+        # Get the number of heavy atoms difference between the reassembled PROTAC and the ground truth PROTAC
+        if reassembled_smiles is not None:
+            reassembled_mol = Chem.MolFromSmiles(reassembled_smiles)
+            if reassembled_mol is not None:
+                scores['heavy_atoms_difference'] -= reassembled_mol.GetNumHeavyAtoms()
+                scores['heavy_atoms_difference_norm'] = scores['heavy_atoms_difference'] / protac_num_atoms
+
         if scores['valid'] and compute_rdkit_metrics and fpgen is not None:
             # Get Tanimoto similarity between the predicted PROTAC and the ground truth PROTAC
             pred_mol = Chem.MolFromSmiles(pred_smiles)
@@ -336,15 +371,27 @@ def score_prediction(
         # need to sum the eval metrics.
         scores[f'{sub}_graph_edit_distance'] = 1e64
         scores[f'{sub}_graph_edit_distance_norm'] = 1.0
+        try:
+            scores[f'{sub}_heavy_atoms_difference'] = Chem.MolFromSmiles(label_substructs[sub]).GetNumHeavyAtoms()
+        except:
+            scores[f'{sub}_heavy_atoms_difference'] = 0
+            print(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
+        scores[f'{sub}_heavy_atoms_difference_norm'] = 1.0
 
         # Skip if the predicted substructure is None from `split_prediction`
         pred_sub = pred_substructs[sub]
         label_sub = label_substructs[sub]
         if pred_sub is None:
             continue
+        if label_sub is None:
+            print(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
+            continue
 
         # Check if the predicted substructure is a valid RDKit molecule
         scores[f'{sub}_valid'], sub_mol = is_valid_smiles(pred_sub, return_mol=True)
+
+        if sub_mol is None:
+            continue
 
         # Check if the predicted substructure has the correct attachment point(s)
         if sub == 'e3':
@@ -373,6 +420,12 @@ def score_prediction(
                 ged_G1_G2=scores[f'{sub}_graph_edit_distance'],
                 **graph_edit_kwargs,
             )
+        
+        # Get the number of heavy atoms difference between the predicted substructure and the ground truth substructure
+        if scores[f'{sub}_valid']:
+            pred_mol = Chem.MolFromSmiles(pred_sub)
+            scores[f'{sub}_heavy_atoms_difference'] -= pred_mol.GetNumHeavyAtoms()
+            scores[f'{sub}_heavy_atoms_difference_norm'] = scores[f'{sub}_heavy_atoms_difference'] / Chem.MolFromSmiles(label_sub).GetNumHeavyAtoms()
 
         # Get Tanimoto similarity b/w the predicted substructure and the ground truth
         if scores[f'{sub}_valid'] and compute_rdkit_metrics:

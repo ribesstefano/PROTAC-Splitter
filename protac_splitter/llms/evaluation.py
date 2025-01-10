@@ -4,6 +4,7 @@ from transformers import AutoTokenizer
 import numpy as np
 from rdkit import Chem, DataStructs
 import evaluate
+import multiprocessing as mp
 
 from ..evaluation import (
     # is_valid_smiles,
@@ -13,12 +14,39 @@ from ..evaluation import (
     score_prediction,
 )
 
+def process_predictions(args) -> list:
+    """ Process one iteration of the prediction scoring.
+    
+    Args:
+        args (tuple): Tuple of arguments for the scoring function.
+
+    Returns:
+        dict: The scores for the prediction.
+    """
+    pred_smiles, protac_smiles, label_smiles, fpgen, compute_rdkit_metrics, compute_graph_metrics = args
+    scores = []
+    for protac, pred, label in zip(protac_smiles, pred_smiles, label_smiles):
+        scores.append(score_prediction(
+            protac_smiles=protac,
+            label_smiles=label,
+            pred_smiles=pred,
+            fpgen=fpgen,
+            compute_rdkit_metrics=compute_rdkit_metrics,
+            compute_graph_metrics=compute_graph_metrics,
+            graph_edit_kwargs={"timeout": 0.05},
+        ))
+    return scores
+
 
 def decode_and_get_metrics(
-    pred,
-    tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
-    rouge = None, # Optional[evaluate.metrics.rouge.Rouge] = None,
-    fpgen = None, # Optional[Chem.rdFingerprintGenerator] = None,
+        pred,
+        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        rouge = None, # Optional[evaluate.metrics.rouge.Rouge] = None,
+        fpgen = None, # Optional[Chem.rdFingerprintGenerator] = None,
+        compute_rdkit_metrics: bool = False,
+        compute_graph_metrics: bool = True,
+        num_proc: int = 1,
+        batch_size: int = 128,
 ) -> dict[str, float]:
     """ Compute metrics for tokenized PROTAC predictions.
 
@@ -31,6 +59,8 @@ def decode_and_get_metrics(
     Returns:
         dict[str, float]: A dictionary containing the scores for the predictions
     """
+    print("Starting decode_and_get_metrics (protac_splitter/llms/evaluation.py)")
+
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
     
@@ -52,17 +82,20 @@ def decode_and_get_metrics(
     label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
 
     # Get scores
-    scores = []
-    for pred_smiles, protac_smiles, label_smiles in zip(pred_str, input_str, label_str):
-        scores.append(score_prediction(
-            protac_smiles=protac_smiles,
-            label_smiles=label_smiles,
-            pred_smiles=pred_smiles,
-            fpgen=fpgen,
-            compute_rdkit_metrics=False,
-            compute_graph_metrics=True,
-            graph_edit_kwargs={"timeout": 0.5},
+    if num_proc == 1:
+        scores = process_predictions((
+            pred_str, input_str, label_str, fpgen, compute_rdkit_metrics, compute_graph_metrics
         ))
+    else:
+        # Use pools to process batches of predictions
+        with mp.Pool(processes=num_proc) as pool:
+            scores = []
+            for i in range(0, len(pred_str), batch_size):
+                scores += pool.map(process_predictions, [
+                    (pred_str[i:i+batch_size], input_str[i:i+batch_size], label_str[i:i+batch_size], fpgen, compute_rdkit_metrics, compute_graph_metrics)
+                ])
+            # Flatten the list of scores
+            scores = [s for ls in scores for s in ls]
     scores = {k: np.array([s[k] for s in scores]).mean() for k in scores[0].keys()}
     
     # Get Rouge score

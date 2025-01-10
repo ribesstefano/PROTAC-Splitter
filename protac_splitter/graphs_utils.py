@@ -6,6 +6,8 @@ from rdkit import Chem
 
 def mol2graph(mol: Chem.Mol) -> nx.Graph:
     # NOTE: https://github.com/maxhodak/keras-molecules/pull/32/files
+    if mol is None:
+        return nx.empty_graph()
     G = nx.Graph()
     for atom in mol.GetAtoms():
         # Skip non-heavy atoms
@@ -22,10 +24,14 @@ def smiles2graph(smiles: str) -> nx.Graph:
     return mol2graph(Chem.MolFromSmiles(smiles))
 
 def get_smiles2graph_edit_distance(smi1: str, smi2: str, **kwargs) -> float:
-    return nx.graph_edit_distance(smiles2graph(smi1), smiles2graph(smi2), **kwargs)
+    ged = nx.graph_edit_distance(smiles2graph(smi1), smiles2graph(smi2), **kwargs)
+    if ged is None:
+        return np.inf
 
 def get_mol2graph_edit_distance(mol1: str, mol2: str, **kwargs) -> float:
-    return nx.graph_edit_distance(mol2graph(mol1), mol2graph(mol2), **kwargs)
+    ged = nx.graph_edit_distance(mol2graph(mol1), mol2graph(mol2), **kwargs)
+    if ged is None:
+        return np.inf
 
 def get_smiles2graph_edit_distance_norm(
         smi1: str,
@@ -52,6 +58,8 @@ def get_smiles2graph_edit_distance_norm(
     ged_G1_G2 = ged_G1_G2 if ged_G1_G2 is not None else nx.graph_edit_distance(G1, G2, **kwargs)
     ged_G1_G0 = nx.graph_edit_distance(G1, G0, **kwargs)
     ged_G2_G0 = nx.graph_edit_distance(G2, G0, **kwargs)
+    if None in [ged_G1_G2, ged_G1_G0, ged_G2_G0]:
+        return np.inf
     return ged_G1_G2 / (ged_G1_G0 + ged_G2_G0 + eps)
 
 def smiles2adjacency_matrix(smiles: str) -> np.ndarray:

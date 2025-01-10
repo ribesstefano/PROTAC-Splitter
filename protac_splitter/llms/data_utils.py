@@ -3,31 +3,9 @@ import logging
 from typing import Optional
 
 import torch
-from datasets import load_dataset, concatenate_datasets, Dataset
+from datasets import load_dataset, concatenate_datasets, Dataset, DatasetDict
 from transformers import AutoTokenizer
 from rdkit import Chem
-
-
-def process_data_to_model_inputs(
-        batch,
-        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
-        encoder_max_length: int = 512,
-        decoder_max_length: int = 512,
-):
-    if isinstance(tokenizer, str):
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    # tokenize the inputs and labels
-    inputs = tokenizer(batch["text"], truncation=True, max_length=encoder_max_length)
-    outputs = tokenizer(batch["labels"], truncation=True, max_length=decoder_max_length)
-    batch["input_ids"] = inputs.input_ids
-    batch["attention_mask"] = inputs.attention_mask
-    batch["labels"] = outputs.input_ids.copy()
-    # Because BERT automatically shifts the labels, the labels correspond exactly to `decoder_input_ids`.
-    # We have to make sure that the PAD token is ignored when calculating the loss.
-    # NOTE: Check the `ignore_index` argument in nn.CrossEntropyLoss.
-    # NOTE: The following is already done in the DataCollatorForSeq2Seq
-    # batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
-    return batch
 
 
 def randomize_smiles_dataset(
@@ -80,6 +58,34 @@ def randomize_smiles_dataset(
     return {"text": new_texts, "labels": new_labels}
 
 
+def process_data_to_model_inputs(
+        batch,
+        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        encoder_max_length: int = 512,
+        decoder_max_length: int = 512,
+):
+    if isinstance(tokenizer, str):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer)
+    # tokenize the inputs and labels
+    inputs = tokenizer(batch["text"], truncation=True, max_length=encoder_max_length)
+    outputs = tokenizer(batch["labels"], truncation=True, max_length=decoder_max_length)
+    batch["input_ids"] = inputs.input_ids
+    batch["attention_mask"] = inputs.attention_mask
+    batch["labels"] = outputs.input_ids.copy()
+
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # batch["input_ids"] = batch["input_ids"].to(device)
+    # batch["attention_mask"] = batch["attention_mask"].to(device)
+    # batch["labels"] = batch["labels"].to(device)
+
+    # Because BERT automatically shifts the labels, the labels correspond exactly to `decoder_input_ids`.
+    # We have to make sure that the PAD token is ignored when calculating the loss.
+    # NOTE: Check the `ignore_index` argument in nn.CrossEntropyLoss.
+    # NOTE: The following is already done in the DataCollatorForSeq2Seq
+    # batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
+    return batch
+
+
 def load_tokenized_dataset(
         daset_dir: str,
         dataset_config: str = 'default',
@@ -94,6 +100,7 @@ def load_tokenized_dataset(
         randomize_smiles_repeat: int = 1,
         randomize_text: bool = True,
         randomize_labels: bool = False,
+        cache_dir: Optional[str] = None,
 ) -> Dataset:
     """ Load dataset and tokenize it.
     
@@ -117,7 +124,13 @@ def load_tokenized_dataset(
     """
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    dataset = load_dataset(daset_dir, dataset_config, token=token)
+    dataset = load_dataset(
+        daset_dir,
+        dataset_config,
+        token=token,
+        cache_dir=cache_dir,
+    )
+    print(f"Loaded dataset. Length: {dataset.num_rows}")
     if randomize_smiles:
         dataset = dataset.map(
             randomize_smiles_dataset,
@@ -130,7 +143,10 @@ def load_tokenized_dataset(
                 "apply_to_labels": randomize_labels,
             },
             num_proc=num_proc_map,
+            load_from_cache_file=True,
+            desc="Randomizing SMILES",
         )
+        print(f"Randomized SMILES in dataset. Length: {dataset.num_rows}")
     dataset = dataset.map(
         process_data_to_model_inputs,
         batched=True,
@@ -142,13 +158,24 @@ def load_tokenized_dataset(
             "decoder_max_length": decoder_max_length,
         },
         num_proc=num_proc_map,
+        load_from_cache_file=True,
+        desc="Tokenizing dataset",
     )
+    print(f"Tokenized dataset. Length: {dataset.num_rows}")
+
+    # Move dataset to torch format and move to device
+    # dataset.set_format(type="torch")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # dataset = dataset.map(
+    #     lambda batch: {key: x.to(device) for key in batch for x in batch[key]},
+    #     batched=True,
+    #     num_proc=num_proc_map,
+    #     load_from_cache_file=True,
+    #     desc="Moving dataset to device",
+    # )
+    # print(f"Moved dataset to device: {device}")
+
     return dataset
-
-
-def tokenize(sample, tokenizer, max_length=512):
-    input_ids = tokenizer.encode(sample["query"], padding="max_length", max_length=max_length)
-    return {"input_ids": input_ids, "query": sample["query"]}
 
 
 def load_trl_dataset(
@@ -185,6 +212,11 @@ def load_trl_dataset(
         dataset = concatenate_datasets([train_dataset, unlabeled_dataset])
     else:
         dataset = train_dataset
+
+    def tokenize(sample, tokenizer, max_length=512):
+        input_ids = tokenizer.encode(sample["query"], padding="max_length", max_length=max_length)
+        return {"input_ids": input_ids, "query": sample["query"]}
+
     return dataset.map(lambda x: tokenize(x, tokenizer, max_length), batched=False)
 
 

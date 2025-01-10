@@ -324,6 +324,48 @@ def get_boundary_bondtype(mol: Chem.Mol, bondtype_count: Optional[Dict[str, int]
 
     return bondtype_count
 
+def dummy2query(mol: Chem.Mol) -> Chem.Mol:
+    """ Converts dummy atoms to query atoms, so that a molecule with attachment points can be used in HasSubstructMatch.
+
+    Args:
+        mol: The molecule to convert.
+
+    Returns:
+        The molecule with dummy atoms converted to query atoms
+    """
+    if mol is None:
+        return None
+    p = Chem.AdjustQueryParameters.NoAdjustments()
+    p.makeDummiesQueries = True
+    return Chem.AdjustQueryProperties(mol, p)
+
+def get_substr_match(
+        protac_mol: Chem.Mol,
+        substr: Chem.Mol,
+        max_allowed_fragments: int = 1,
+) -> bool:
+    """ Check if a molecule contains a substructure match with a given molecule.
+    Compared to RDKit HasSubstructMatch, this function also checks the number of fragments when replacing the substr in the PROTAC.
+    
+    Args:
+        protac_mol (Chem.Mol): The PROTAC molecule.
+        substr (Chem.Mol): The substructure molecule.
+        max_allowed_fragments (int, optional): The maximum number of fragments allowed when replacing the substr in the PROTAC. Defaults to 1. Example when equal to 1: if removing the warhead, a single fragment should remain.
+
+    Returns:
+        bool: True if the PROTAC contains a substructure match with the given molecule and the fragments count is equal, False otherwise.
+    """
+    # Count the number of fragments when replacing the substr in the PROTAC
+    fragments = Chem.ReplaceCore(protac_mol, dummy2query(substr), useChirality=True)
+    if fragments is None:
+        return False
+    try:
+        fragments = Chem.GetMolFrags(fragments)
+    except Exception as e:
+        print(e)
+        return False
+    return len(fragments) == max_allowed_fragments
+
 
 # TODO: The following was originally called remove_dummy_atom, without the final 's'.
 def remove_dummy_atoms(
@@ -331,8 +373,7 @@ def remove_dummy_atoms(
         output: str = "smiles",
         how: Literal['all', 'attachments'] = 'all',
 ) -> Union[str, Chem.Mol]:
-    """
-    Removes dummy atoms from a molecule and returns the modified molecule.
+    """ DEPRECATED. Removes dummy atoms from a molecule and returns the modified molecule.
 
     Args:
         mol (Chem.Mol): The input molecule containing dummy atoms.
