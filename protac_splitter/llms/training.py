@@ -3,6 +3,7 @@ from typing import Optional, Dict, Any, Callable, Tuple
 from functools import partial
 import subprocess
 import copy
+import logging
 
 import torch
 import numpy as np
@@ -14,6 +15,9 @@ from transformers import (
     AutoTokenizer,
     GenerationConfig,
 )
+from accelerate.utils import write_basic_config
+from accelerate import Accelerator
+
 import optuna
 from optuna.samplers import QMCSampler
 from optuna.pruners import (
@@ -35,6 +39,34 @@ from .hf_utils import (
 from .model_utils import get_model
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Use GPU with index 0
+# logging.basicConfig(level=logging.DEBUG)
+
+class ScoreMetric:
+
+    def __init__(self):
+        self.batch_scores = []
+    
+    def update(self, scores):
+        self.batch_scores.append(scores)
+    
+    def compute(self):
+        all_labels = set()
+        for scores in self.batch_scores:
+            all_labels.update(scores.keys())
+        
+        aggregate_scores = {}
+        for k in all_labels:
+            scores = [s.get(k, np.nan) for s in self.batch_scores]
+            print(f"{k}: {np.nanmean(scores):.4f}")
+            aggregate_scores[k] = np.nanmean(scores)
+        
+        self.batch_scores = []
+        return aggregate_scores
+
+
+score_metric = ScoreMetric()
+hp_score_metric = ScoreMetric()
+
 
 class WrappedEarlyStoppingPruner(BasePruner):
     """
@@ -132,7 +164,7 @@ def get_lr_scheduler_kwargs(lr_scheduler_type: str) -> Dict[str, Any]:
     if lr_scheduler_type == "cosine":
         return {}
     elif lr_scheduler_type == "cosine_with_restarts":
-        return {"num_cycles": 5}
+        return {"num_cycles": 3}
     elif lr_scheduler_type == "cosine_with_min_lr":
         return {}
     elif lr_scheduler_type == "polynomial":
@@ -210,7 +242,7 @@ def get_best_hyperparameters(
     def compute_objective(metrics: Dict[str, float]):
         # NOTE: Having a higher eval_reassembly score should also correspond
         # to a low eval loss, so we just focus on the reassembly score.
-        return metrics["eval_reassembly"]
+        return metrics["all_ligands_equal"]
     
     def hp_name(trial: Any) -> str:
         trial_name = f"trial-number={trial.number}"
@@ -228,6 +260,7 @@ def get_best_hyperparameters(
     hp_training_args["num_train_epochs"] = -1
     hp_training_args["max_steps"] = 10_000
     hp_training_args["eval_steps"] = 1000
+    hp_training_args["eval_delay"] = None # TODO: Double check if this is needed
     hp_training_args["logging_steps"] = 500
     hp_training_args["save_steps"] = 5000
     # Use greedy decoding for the hyperparameter search
@@ -238,6 +271,12 @@ def get_best_hyperparameters(
         num_beams=1,
     )
 
+    print("Hyperparameter search training arguments:")
+    for k, v in hp_training_args.items():
+        if 'token' in k:
+            continue
+        print(f"  - {k}: {v}")
+
     # Setup a "fake" Trainer for the hyperparameter search
     trainer = Seq2SeqTrainer(
         model_init=model_init,
@@ -246,7 +285,7 @@ def get_best_hyperparameters(
         args=Seq2SeqTrainingArguments(**hp_training_args),
         compute_metrics=compute_metrics,
         train_dataset=dataset_tokenized["train"],
-        eval_dataset=dataset_tokenized["validation"].select(range(2048)),
+        eval_dataset=dataset_tokenized["validation"],
     )
     
     # Setup the Optuna pruner and sampler
@@ -276,9 +315,9 @@ def get_best_hyperparameters(
 
     # Set the best hyperparameters in the original Trainer arguments
     print("-" * 80)
-    print(f"Best trial objective: {best_trial.objective:.4f} (sum of metrics)")
+    print(f"Best trial objective: {best_trial.objective:.4f} (best trial number: {best_trial.number})")
 
-    return best_trial.objective, best_trial.hyperparameters, hp_training_args
+    return best_trial, hp_training_args
 
 
 def train_model(
@@ -310,6 +349,10 @@ def train_model(
         per_device_eval_batch_size: Optional[int] = None,
         lr_scheduler_type: Optional[str] = None,
         cache_dir: Optional[str] = None,
+        randomize_smiles: bool = False,
+        randomize_smiles_prob: float = 0.0,
+        all_fragments_as_labels: bool = True,
+        linkers_only_as_labels: bool = False,
 ):
     """Trains a model on a given dataset.
     
@@ -336,6 +379,11 @@ def train_model(
         resume_from_checkpoint (Optional[str], optional): The checkpoint to resume training from. Defaults to None.
         num_optuna_trials (int, optional): The number of Optuna trials. Defaults to 0, i.e., no Optuna hyperparameter search.
     """
+    # if torch.cuda.is_available():
+    #     write_basic_config(mixed_precision='fp16')
+    accelerator = Accelerator()
+    accelerator.print(f"Accelerator state from the current environment:\n{accelerator.state}")
+
     # Check if resume_from_checkpoint exists and it's a file
     if resume_from_checkpoint is not None:
         # Check if the checkpoint exists: it can be either a file or a directory
@@ -392,6 +440,10 @@ def train_model(
         token=hub_token,
         num_proc_map=num_proc_map,
         cache_dir=cache_dir,
+        randomize_smiles=randomize_smiles,
+        randomize_smiles_prob=randomize_smiles_prob,
+        all_fragments_as_labels=all_fragments_as_labels,
+        linkers_only_as_labels=linkers_only_as_labels,
     )
     # Precompute a "length" column for the dataset using the map function
     def add_length(x):
@@ -415,27 +467,25 @@ def train_model(
     data_collator = DataCollatorForSeq2Seq(
         tokenizer,
         model=bert2bert(),
-        # max_length=encoder_max_length,
-        pad_to_multiple_of=8,
+        pad_to_multiple_of=32, # Default: None, Original: 8
     )
 
-    # Setup the compute_metrics function
-    # rouge = evaluate.load("rouge") # , cache_dir="/mimer/NOBACKUP/groups/naiss2023-6-290/stefano/.cache/huggingface/evaluate/")
-    # fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
-    #     radius=11,
-    #     fpSize=1024,
+    # # rouge = evaluate.load("rouge") # , cache_dir="/mimer/NOBACKUP/groups/naiss2023-6-290/stefano/.cache/huggingface/evaluate/")
+    # # fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
+    # #     radius=11,
+    # #     fpSize=1024,
+    # # )
+    # rouge = None
+    # fpgen = None
+    # compute_metrics = partial(
+    #     decode_and_get_metrics,
+    #     tokenizer=tokenizer,
+    #     rouge=rouge,
+    #     fpgen=fpgen,
+    #     compute_rdkit_metrics=False,
+    #     compute_graph_metrics=True,
+    #     num_proc=max(1, num_proc_map - 2), # NOTE: Use 2 less process for the metrics, since there will be a timeout logic
     # )
-    rouge = None
-    fpgen = None
-    compute_metrics = partial(
-        decode_and_get_metrics,
-        tokenizer=tokenizer,
-        rouge=rouge,
-        fpgen=fpgen,
-        compute_rdkit_metrics=False,
-        compute_graph_metrics=True,
-        num_proc=max(1, num_proc_map - 2), # NOTE: Use 2 less process for the metrics, since there will be a timeout logic
-    )
 
     # Setup the training arguments
     if per_device_train_batch_size is None:
@@ -456,8 +506,9 @@ def train_model(
             "learning_rate": learning_rate,
             "optim": "adamw_torch",
             "lr_scheduler_type": "cosine" if lr_scheduler_type is None else lr_scheduler_type,
-            # "warmup_steps": 8000, # NOTE: ChemFormer: 8000
-            "warmup_ratio": 0,
+            "lr_scheduler_kwargs": get_lr_scheduler_kwargs(lr_scheduler_type),
+            # "warmup_steps": int(0.08 * 10_000), # NOTE: ChemFormer: 8000
+            "warmup_ratio": 0.08,
             "adam_beta1": 0.9, # NOTE: ChemFormer: 0.9
             "adam_beta2": 0.999, # NOTE: ChemFormer: 0.999
             "adam_epsilon": 1e-8, # Default: 1e-8
@@ -466,7 +517,7 @@ def train_model(
             "generation_config": generation_config,
             "generation_max_length": 512,
             # Batch size, device, and performance optimizations configs
-            # "torch_compile": True,
+            "batch_eval_metrics": True,
             "group_by_length": True,
             "per_device_train_batch_size": per_device_train_batch_size,
             "per_device_eval_batch_size": per_device_eval_batch_size,
@@ -475,16 +526,18 @@ def train_model(
             "fp16": True if torch.cuda.is_available() else False,
             "use_cpu": False, # Default: False
             "dataloader_num_workers": 16, # Default: 0 (main process only)
+            "dataloader_prefetch_factor": None, # Default: None
             # Evaluation and checkpointing configs
             "max_steps": max_steps,
             "num_train_epochs": num_train_epochs,
             "save_steps": 1000, # NOTE: 200
             "save_strategy": "steps",
             "eval_steps": 1000, # NOTE: 500
+            "eval_delay": 5000, # Default: None
             "evaluation_strategy": "steps",
             "save_total_limit": 1,
             "load_best_model_at_end": True,
-            "metric_for_best_model": "reassembly",
+            "metric_for_best_model": "all_ligands_equal",
             "include_inputs_for_metrics": True,
             "eval_on_start": True, # Default: False
             # Logging configs
@@ -507,20 +560,42 @@ def train_model(
         }
 
     # Modify the training arguments with Optuna hyperparameter search
+    best_trial = None
     if num_optuna_trials > 0:
         # Setup the compute_metrics function for the hyperparameter search
-        hp_compute_metrics = partial(
-            decode_and_get_metrics,
-            tokenizer=tokenizer,
-            rouge=rouge,
-            fpgen=fpgen,
-            compute_rdkit_metrics=False,
-            compute_graph_metrics=False,
-            num_proc=num_proc_map,
-        )
+        def hp_compute_metrics(eval_pred, compute_result: bool = True) -> Optional[Dict[str, float]]:
+            # NOTE: For some reasons the eval_pred is now of type: transformers.tokenization_utils_base.BatchEncoding,
+            # which is similar to a dictionary containing the input_ids, attention_mask, etc.,
+            # so we just need to extract the input_ids.
+            eval_pred.inputs = eval_pred.inputs["input_ids"]
+
+            rouge = None
+            fpgen = None
+            hp_score_metric.update(decode_and_get_metrics(
+                eval_pred,
+                tokenizer=tokenizer,
+                rouge=rouge,
+                fpgen=fpgen,
+                compute_rdkit_metrics=False,
+                compute_graph_metrics=False,
+                num_proc=num_proc_map,
+            ))
+
+            if compute_result:
+                return hp_score_metric.compute()
+
+        # hp_compute_metrics = partial(
+        #     decode_and_get_metrics,
+        #     tokenizer=tokenizer,
+        #     rouge=rouge,
+        #     fpgen=fpgen,
+        #     compute_rdkit_metrics=False,
+        #     compute_graph_metrics=False,
+        #     num_proc=num_proc_map,
+        # )
         
         # Run the HP search (and update the training_args accordingly)
-        best_objective, best_hparams, hp_training_args = get_best_hyperparameters(
+        best_trial, hp_training_args = get_best_hyperparameters(
             model_init=bert2bert,
             tokenizer=tokenizer,
             data_collator=data_collator,
@@ -530,11 +605,14 @@ def train_model(
             lr_scheduler_type=lr_scheduler_type,
             num_optuna_trials=num_optuna_trials,
         )
+        best_objective = best_trial.objective
+        best_trial_number = best_trial.number
+        best_hparams = best_trial.hyperparameters
 
         # Save to output directory the best hyperparameters
         with open(f"{output_dir}/best_hyperparameters.md", "w") as f:
             f.write(f"Number of Optuna trials: {num_optuna_trials}\n\n")
-            f.write(f"Best trial objective: {best_objective:.4f} (sum of metrics)\n\n")
+            f.write(f"Best trial objective: {best_objective:.4f} (best trial number: {best_trial_number})\n\n")
 
             f.write("Best hyperparameters:\n")
             for hparam, value in best_hparams.items():
@@ -571,26 +649,50 @@ def train_model(
         except Exception as e:
             print(e)
             print("WARNING. Best parameters NOT pushed to the hub.")
-    else:
-        # Setup the Trainer and start training (no Optuna hyperparameter search)
-        trainer = Seq2SeqTrainer(
-            model_init=bert2bert,
+        
+        # Update the training arguments with the best hyperparameters
+        training_args.update(hp_training_args)
+
+    def compute_metrics(eval_pred, compute_result: bool = True) -> Optional[Dict[str, float]]:
+        # NOTE: For some reasons the eval_pred is now of type: transformers.tokenization_utils_base.BatchEncoding,
+        # which is similar to a dictionary containing the input_ids, attention_mask, etc.,
+        # so we just need to extract the input_ids.
+        eval_pred.inputs = eval_pred.inputs["input_ids"]
+        rouge = None
+        fpgen = None
+        hp_score_metric.update(decode_and_get_metrics(
+            eval_pred,
             tokenizer=tokenizer,
-            data_collator=data_collator,
-            args=Seq2SeqTrainingArguments(**training_args),
-            compute_metrics=compute_metrics,
-            train_dataset=dataset_tokenized["train"],
-            eval_dataset=dataset_tokenized["validation"].select(range(2048)),
+            rouge=rouge,
+            fpgen=fpgen,
+            compute_rdkit_metrics=False,
+            compute_graph_metrics=True,
+            num_proc=max(1, num_proc_map - 2), # NOTE: Use 2 less process for the metrics, since there will be a timeout logic
+        ))
+
+        if compute_result:
+            return hp_score_metric.compute()
+
+    # Setup the Trainer and start training (no Optuna hyperparameter search)
+    trainer = Seq2SeqTrainer(
+        model_init=bert2bert,
+        tokenizer=tokenizer,
+        data_collator=data_collator,
+        args=Seq2SeqTrainingArguments(**training_args),
+        compute_metrics=compute_metrics,
+        train_dataset=dataset_tokenized["train"],
+        eval_dataset=dataset_tokenized["test"],
+    )
+    if resume_from_checkpoint is not None:
+        trainer.train(
+            resume_from_checkpoint=resume_from_checkpoint,
+            trial=best_trial,
         )
-        if resume_from_checkpoint is not None:
-            trainer.train(
-                resume_from_checkpoint=resume_from_checkpoint,
-            )
-        else:
-            trainer.train()
-        print("-" * 80)
-        print("Training completed.")
-        print("-" * 80)
+    else:
+        trainer.train(trial=best_trial)
+    print("-" * 80)
+    print("Training completed.")
+    print("-" * 80)
 
     if hub_model_id is not None:
         print("Pushing model to Hugging Face Hub.")

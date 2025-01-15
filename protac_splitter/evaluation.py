@@ -5,9 +5,8 @@ import logging
 from typing import Tuple, Any, Dict, Optional
 
 import numpy as np
-from rdkit import Chem
 from rdkit import Chem, RDLogger
-from rdkit.Chem import AllChem, DataStructs
+from rdkit.Chem import DataStructs
 
 # Disable RDKit logging: when checking SMILES validity, we suppress warnings
 RDLogger.DisableLog("rdApp.*")
@@ -58,16 +57,16 @@ def split_prediction(
         dict[str, str] | None: A dictionary (with keys: 'e3', 'linker', 'poi') containing the SMILES notations for the POI, linker, and E3 substructures, or None if the prediction is invalid
     """
     ret = {k: None for k in ['poi', 'linker', 'e3']}
-    substructs = pred.split('.')
-    if len(substructs) != 3:
+    ligands = pred.split('.')
+    if len(ligands) != 3:
         return ret
-    for substr in substructs:
-        if f'[*:{poi_attachment_id}]' in substr and f'[*:{e3_attachment_id}]' not in substr:
-            ret['poi'] = substr
-        elif f'[*:{e3_attachment_id}]' in substr and f'[*:{poi_attachment_id}]' not in substr:
-            ret['e3'] = substr
-        elif f'[*:{poi_attachment_id}]' in substr and f'[*:{e3_attachment_id}]' in substr:
-            ret['linker'] = substr
+    for ligand in ligands:
+        if f'[*:{poi_attachment_id}]' in ligand and f'[*:{e3_attachment_id}]' not in ligand:
+            ret['poi'] = ligand
+        elif f'[*:{e3_attachment_id}]' in ligand and f'[*:{poi_attachment_id}]' not in ligand:
+            ret['e3'] = ligand
+        elif f'[*:{poi_attachment_id}]' in ligand and f'[*:{e3_attachment_id}]' in ligand:
+            ret['linker'] = ligand
     return ret
 
 
@@ -136,8 +135,8 @@ def check_reassembly(
     ligands_smiles = canonize_smiles(ligands_smiles)
     if ligands_smiles is None:
         if verbose:
-            logging.error('ERROR: Ligand could be canonicalized.')
-        return False if not return_reassembled_smiles else False, None
+            logging.error('Ligand could be canonicalized.')
+        return (False, None) if return_reassembled_smiles else False
 
     null_linker_e3 = f'[*:{e3_attachment_id}][*:{poi_attachment_id}]'
     null_linker_poi = f'[*:{poi_attachment_id}][*:{e3_attachment_id}]'
@@ -161,30 +160,42 @@ def check_reassembly(
     ligands_mol = Chem.MolFromSmiles(ligands_smiles)
     if ligands_mol is None:
         if verbose:
-            logging.error('ERROR: ligands_mol is None')
-        return False if not return_reassembled_smiles else False, None
+            logging.error('ligands_mol is None')
+        return (False, None) if return_reassembled_smiles else False
+
     try:
         reassembled_mol = Chem.molzip(ligands_mol)
+        if reassembled_mol is None:
+            if stats is not None:
+                stats['molzip failed'] += 1
+            if verbose:
+                logging.error(f'molzip failed')
+            return (False, None) if return_reassembled_smiles else False
     except:
         if stats is not None:
-            stats['molzip failed'] += 1
+            stats['molzip failed (exception)'] += 1
         if verbose:
-            logging.error('ERROR: molzip failed')
-        return False if not return_reassembled_smiles else False, None
+            logging.error(f'molzip failed (exception)')
+        return (False, None) if return_reassembled_smiles else False
 
     try:
         reassembled_smiles = canonize(Chem.MolToSmiles(reassembled_mol))
+        if reassembled_smiles is None:
+            if stats is not None:
+                stats['MolToSmiles of reassembled failed'] += 1
+            if verbose:
+                logging.error('MolToSmiles of reassembled failed')
+            return (False, None) if return_reassembled_smiles else False
     except:
         if stats is not None:
             stats['MolToSmiles of reassembled failed'] += 1
         if verbose:
-            logging.error('ERROR: MolToSmiles of reassembled failed')
-        return False if not return_reassembled_smiles else False, None
-    
+            logging.error('MolToSmiles of reassembled failed')
+        return (False, None) if return_reassembled_smiles else False
+
     is_equal = canonize(protac_smiles) == reassembled_smiles
-    if return_reassembled_smiles:
-        return is_equal, reassembled_smiles
-    return is_equal
+
+    return (is_equal, reassembled_smiles) if return_reassembled_smiles else is_equal
 
 
 def check_substructs(
@@ -309,23 +320,26 @@ def score_prediction(
     Returns:
         dict[str, float]: A dictionary containing the scores for the prediction
     """
-    scores = {}
-
-    scores['has_three_substructures'] = has_three_substructures(pred_smiles)
-    scores['has_all_attachment_points'] = has_all_attachment_points(pred_smiles)
-    scores['tanimoto_similarity'] = 0.0 # Default value
-    scores['valid'] = False
-    scores['reassembly'] = False
-    scores['reassembly_nostereo'] = False
     protac_mol = Chem.MolFromSmiles(protac_smiles)
     protac_num_atoms = protac_mol.GetNumHeavyAtoms()
-    scores['heavy_atoms_difference'] = protac_num_atoms
-    scores['heavy_atoms_difference_norm'] = 1.0
+
+    scores = {
+        'has_three_substructures': has_three_substructures(pred_smiles),
+        'has_all_attachment_points': has_all_attachment_points(pred_smiles),
+        'num_fragments': pred_smiles.count('.') + 1,
+        'tanimoto_similarity': 0.0, # Default value
+        'valid': False,
+        'reassembly': False,
+        'reassembly_nostereo': False,
+        'heavy_atoms_difference': protac_num_atoms,
+        'heavy_atoms_difference_norm': 1.0,
+        'all_ligands_equal': False,
+    }
 
     pred_substructs = split_prediction(pred_smiles, poi_attachment_id, e3_attachment_id)
 
     # Compute metrics for the "entire" predicted PROTAC molecule
-    if all(v is not None for v in pred_substructs.values()):
+    if None not in list(pred_substructs.values()):
         e3_nostereo = remove_stereo(pred_substructs['e3'])
         linker_nostereo = remove_stereo(pred_substructs['linker'])
         poi_nostereo = remove_stereo(pred_substructs['poi'])
@@ -359,25 +373,28 @@ def score_prediction(
     # Compute metrics for each substructure
     label_substructs = split_prediction(label_smiles, poi_attachment_id, e3_attachment_id)
 
+    # Set default values
     for sub in ['e3', 'poi', 'linker']:
-        # Set default values
         scores[f'{sub}_valid'] = False
         scores[f'{sub}_equal'] = False
         scores[f'{sub}_has_attachment_point(s)'] = False
         scores[f'{sub}_tanimoto_similarity'] = 0.0
+
         # NOTE: The graph edit distance can be very high and dependant on the
         # graphs, but when the molecule is not valid, then we cannot compute it.
         # Because of that, we instead set it to something very large, in case we
         # need to sum the eval metrics.
         scores[f'{sub}_graph_edit_distance'] = 1e64
         scores[f'{sub}_graph_edit_distance_norm'] = 1.0
+        scores[f'{sub}_heavy_atoms_difference'] = 0
         try:
             scores[f'{sub}_heavy_atoms_difference'] = Chem.MolFromSmiles(label_substructs[sub]).GetNumHeavyAtoms()
         except:
-            scores[f'{sub}_heavy_atoms_difference'] = 0
             print(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
         scores[f'{sub}_heavy_atoms_difference_norm'] = 1.0
 
+    # Calculate metrics for each substructure
+    for sub in ['e3', 'poi', 'linker']:
         # Skip if the predicted substructure is None from `split_prediction`
         pred_sub = pred_substructs[sub]
         label_sub = label_substructs[sub]
@@ -388,7 +405,8 @@ def score_prediction(
             continue
 
         # Check if the predicted substructure is a valid RDKit molecule
-        scores[f'{sub}_valid'], sub_mol = is_valid_smiles(pred_sub, return_mol=True)
+        sub_valid, sub_mol = is_valid_smiles(pred_sub, return_mol=True)
+        scores[f'{sub}_valid'] = sub_valid
 
         if sub_mol is None:
             continue
@@ -439,5 +457,7 @@ def score_prediction(
         if rouge is not None:
             rouge_output = rouge.compute(predictions=[pred_sub], references=[label_sub])
             scores.update({f'{sub}_{k}': v for k, v in rouge_output.items()})
+
+    scores['all_ligands_equal'] = all([scores[f'{sub}_equal'] for sub in ['e3', 'poi', 'linker']])
 
     return scores

@@ -6,7 +6,7 @@ from rdkit import Chem, DataStructs
 import evaluate
 import multiprocessing as mp
 
-from ..evaluation import (
+from protac_splitter.evaluation import (
     # is_valid_smiles,
     # has_three_substructures,
     # has_all_attachment_points,
@@ -47,6 +47,7 @@ def decode_and_get_metrics(
         compute_graph_metrics: bool = True,
         num_proc: int = 1,
         batch_size: int = 128,
+        use_nan_for_missing: bool = True,
 ) -> dict[str, float]:
     """ Compute metrics for tokenized PROTAC predictions.
 
@@ -96,12 +97,34 @@ def decode_and_get_metrics(
                 ])
             # Flatten the list of scores
             scores = [s for ls in scores for s in ls]
-    scores = {k: np.array([s[k] for s in scores]).mean() for k in scores[0].keys()}
+
+    # Aggregate scores
+    scores_labels = set()
+    for s in scores:
+        scores_labels.update(s.keys())
+
+    # scores = {k: np.array([s[k] for s in scores]).mean() for k in scores_labels}
+
+    aggregated_scores = {}
+    for k in scores_labels:
+        values = np.array([s.get(k, np.nan) for s in scores], dtype=float)
+
+        # If values is all NaN, set the aggregated score to NaN and continue
+        if np.all(np.isnan(values)):
+            aggregated_scores[k] = None
+            continue
+
+        # Compute average, excluding `NaN` values if necessary
+        if use_nan_for_missing:
+            aggregated_scores[k] = np.nanmean(values)
+        else:
+            valid_values = values[~np.isnan(values)]
+            aggregated_scores[k] = np.mean(valid_values) if valid_values.size > 0 else float('nan')
     
     # Get Rouge score
     if rouge is not None:
         rouge_output = rouge.compute(predictions=pred_str, references=label_str)
-        scores.update({k: v for k, v in rouge_output.items()})
+        aggregated_scores.update({k: v for k, v in rouge_output.items()})
 
     # TODO
     # # Get tanimoto score
@@ -117,4 +140,4 @@ def decode_and_get_metrics(
     # tanimoto = [DataStructs.TanimotoSimilarity(l, p) for l, p in zip(label_fps, pred_fps)]
     # scores['tanimoto'] = np.array(tanimoto).mean()
 
-    return scores
+    return aggregated_scores

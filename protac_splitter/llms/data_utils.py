@@ -3,9 +3,11 @@ import logging
 from typing import Optional
 
 import torch
-from datasets import load_dataset, concatenate_datasets, Dataset, DatasetDict
+from datasets import load_dataset, concatenate_datasets, Dataset
 from transformers import AutoTokenizer
 from rdkit import Chem
+
+from protac_splitter.evaluation import split_prediction
 
 
 def randomize_smiles_dataset(
@@ -85,14 +87,31 @@ def process_data_to_model_inputs(
     # batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
     return batch
 
+def get_fragments_in_labels(labels: str, linkers_only_as_labels: bool = True) -> list[str]:
+    """ Get the fragments in the labels.
+    
+    Args:
+        labels (str): The labels.
+        linkers_only_as_labels (bool, optional): Whether to get only the linkers in the labels. Defaults to True.
+
+    Returns:
+        list[str]: The fragments in the labels.
+    """
+    ligands = split_prediction(labels)
+    if linkers_only_as_labels:
+        return ligands.get("linker", None)
+    if None in ligands.values():
+        return None
+    return f"{ligands['e3']}.{ligands['poi']}"
+
 
 def load_tokenized_dataset(
         daset_dir: str,
         dataset_config: str = 'default',
         tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
         batch_size: int = 512,
-        encoder_max_length:int = 512,
-        decoder_max_length:int = 512,
+        encoder_max_length: int = 512,
+        decoder_max_length: int = 512,
         token: Optional[str] = None,
         num_proc_map: int = 1,
         randomize_smiles: bool = False,
@@ -101,6 +120,8 @@ def load_tokenized_dataset(
         randomize_text: bool = True,
         randomize_labels: bool = False,
         cache_dir: Optional[str] = None,
+        all_fragments_as_labels: bool = True,
+        linkers_only_as_labels: bool = False,
 ) -> Dataset:
     """ Load dataset and tokenize it.
     
@@ -131,6 +152,26 @@ def load_tokenized_dataset(
         cache_dir=cache_dir,
     )
     print(f"Loaded dataset. Length: {dataset.num_rows}")
+
+    if not all_fragments_as_labels:
+        dataset = dataset.map(
+            lambda x: {
+                "text": x["text"],
+                "labels": get_fragments_in_labels(x["labels"], linkers_only_as_labels),
+            },
+            batched=False,
+            num_proc=num_proc_map,
+            load_from_cache_file=True,
+            desc="Getting fragments in labels",
+        )
+        # Filter out the samples with None labels
+        dataset = dataset.filter(lambda x: x["labels"] is not None)
+
+        if linkers_only_as_labels:
+            print(f"Set labels to linkers only. Length: {dataset.num_rows}")
+        else:
+            print(f"Set labels to E3 and WH only. Length: {dataset.num_rows}")
+
     if randomize_smiles:
         dataset = dataset.map(
             randomize_smiles_dataset,
@@ -147,6 +188,7 @@ def load_tokenized_dataset(
             desc="Randomizing SMILES",
         )
         print(f"Randomized SMILES in dataset. Length: {dataset.num_rows}")
+
     dataset = dataset.map(
         process_data_to_model_inputs,
         batched=True,
@@ -162,18 +204,6 @@ def load_tokenized_dataset(
         desc="Tokenizing dataset",
     )
     print(f"Tokenized dataset. Length: {dataset.num_rows}")
-
-    # Move dataset to torch format and move to device
-    # dataset.set_format(type="torch")
-    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # dataset = dataset.map(
-    #     lambda batch: {key: x.to(device) for key in batch for x in batch[key]},
-    #     batched=True,
-    #     num_proc=num_proc_map,
-    #     load_from_cache_file=True,
-    #     desc="Moving dataset to device",
-    # )
-    # print(f"Moved dataset to device: {device}")
 
     return dataset
 

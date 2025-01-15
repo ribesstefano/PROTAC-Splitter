@@ -5,7 +5,16 @@ from rdkit import Chem
 
 
 def mol2graph(mol: Chem.Mol) -> nx.Graph:
+    """ Convert an RDKit molecule to a NetworkX graph.
+    
+    Args:
+        mol (Chem.Mol): The RDKit molecule to convert.
+
+    Returns:
+        nx.Graph: The NetworkX graph representation of the molecule.
+    """
     # NOTE: https://github.com/maxhodak/keras-molecules/pull/32/files
+    # TODO: Double check this implementation too: https://gist.github.com/jhjensen2/6450138cda3ab796a30850610843cfff
     if mol is None:
         return nx.empty_graph()
     G = nx.Graph()
@@ -21,17 +30,43 @@ def mol2graph(mol: Chem.Mol) -> nx.Graph:
     return G
 
 def smiles2graph(smiles: str) -> nx.Graph:
+    """ Convert a SMILES string to a NetworkX graph.
+    
+    Args:
+        smiles (str): The SMILES string to convert.
+
+    Returns:
+        nx.Graph: The NetworkX graph representation of the molecule.
+    """
     return mol2graph(Chem.MolFromSmiles(smiles))
 
 def get_smiles2graph_edit_distance(smi1: str, smi2: str, **kwargs) -> float:
+    """ Compute the graph edit distance between two SMILES strings.
+    
+    Args:
+        smi1 (str): The first SMILES string.
+        smi2 (str): The second SMILES string.
+        **kwargs: Additional keyword arguments for `nx.graph_edit_distance`.
+
+    Returns:
+        float: The graph edit distance between the two SMILES strings.
+    """
     ged = nx.graph_edit_distance(smiles2graph(smi1), smiles2graph(smi2), **kwargs)
-    if ged is None:
-        return np.inf
+    return ged if ged is not None else np.inf
 
 def get_mol2graph_edit_distance(mol1: str, mol2: str, **kwargs) -> float:
+    """ Compute the graph edit distance between two RDKit molecules.
+
+    Args:
+        mol1 (Chem.Mol): The first RDKit molecule.
+        mol2 (Chem.Mol): The second RDKit molecule.
+        **kwargs: Additional keyword arguments for `nx.graph_edit_distance`.
+ 
+    Returns:
+        float: The graph edit distance between the two RDKit molecules.
+    """
     ged = nx.graph_edit_distance(mol2graph(mol1), mol2graph(mol2), **kwargs)
-    if ged is None:
-        return np.inf
+    return ged if ged is not None else np.inf
 
 def get_smiles2graph_edit_distance_norm(
         smi1: str,
