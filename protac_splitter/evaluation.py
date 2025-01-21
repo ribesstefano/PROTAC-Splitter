@@ -208,7 +208,9 @@ def check_substructs(
         e3_attachment_id: int = 2,
         pred: str = None,
 ) -> bool | Tuple[bool, dict[str, str]]:
-    """ Check if the reassembled PROTAC is correct. DEPRECATED.
+    """ DEPRECATED.
+    
+    Check if the reassembled PROTAC is correct.
     
     Args:
         protac_smiles (str): The SMILES of the PROTAC molecule.

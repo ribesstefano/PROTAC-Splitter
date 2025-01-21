@@ -80,6 +80,8 @@ def main(
         num_proc: int = 8,
         evaluate_different_generation_strategies: bool = False,
         force_recompute: bool = False,
+        report_model_name: Optional[str] = None,
+        cache_dir: str = '~/.cache/huggingface',
 ):
     # Set log level to ERROR
     logging.basicConfig(level=logging.ERROR)
@@ -91,13 +93,21 @@ def main(
             raise ValueError('Hugging Face API token not provided. Please provide a token using the --hub_token argument or set the HF_TOKEN environment variable')
     
     print('Loading dataset...')
-    ds = load_dataset('ailab-bio/PROTAC-Splitter-Dataset', 'standard', token=hub_token)
-    test_ds = ds['test']
+    ds = load_dataset(
+        'ailab-bio/PROTAC-Splitter-Dataset',
+        'large',
+        token=hub_token,
+        cache_dir=cache_dir,
+    )
+    test_ds = ds['held_out']
 
     # Create logs directory if not exists and setup filenames
     os.makedirs(log_dir, exist_ok=True)
-    
-    report_model_name = [n for n in model_name.split('/') if 'PROTAC-Splitter' in n][0]
+
+    if report_model_name is None:
+        report_model_name = [n for n in model_name.split('/') if 'PROTAC-Splitter' in n][0]
+    print(f'Collecting predictions for model: {model_name}')
+    print(f'Model name for reporting: {report_model_name}')
 
     log_name = f'{report_model_name}-logs'
     pred_name = f'{report_model_name}-preds'
@@ -408,7 +418,6 @@ def main(
 
 
 if __name__ == '__main__':
-    # Setup arg parser
     parser = argparse.ArgumentParser(description='Evaluate PROTAC-Splitter models.')
     parser.add_argument('--hub_token', type=str, required=True, help='Hugging Face API token')
     parser.add_argument('--model_name', type=str, default="ailab-bio/PROTAC-Splitter-standard_recombined-ChemBERTa-zinc-base-v1", help='Model name')
@@ -416,6 +425,8 @@ if __name__ == '__main__':
     parser.add_argument('--log_dir', type=str, default='logs', help='Directory to save logs and predictions')
     parser.add_argument('--num_proc', type=int, default=8, help='Number of processes to use for evaluation')
     parser.add_argument('--force_recompute', action='store_true', help='Force recompute predictions')
+    parser.add_argument('--report_model_name', type=str, help='Model name to use for reporting')
+    parser.add_argument('--cache_dir', type=str, default='~/.cache/huggingface', help='Hugging Face cache directory')
     args = parser.parse_args()
     main(
         hub_token=args.hub_token,
@@ -424,4 +435,6 @@ if __name__ == '__main__':
         log_dir=args.log_dir,
         num_proc=args.num_proc,
         force_recompute=args.force_recompute,
+        report_model_name=args.report_model_name,
+        cache_dir=args.cache_dir,
     )

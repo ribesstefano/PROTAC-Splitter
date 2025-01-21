@@ -7,7 +7,7 @@ from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError, R
 
 def repo_exists(repo_id: str, token: Optional[str] = None) -> bool:
     try:
-        repo_info(repo_id, token=token)
+        print(repo_info(repo_id, token=token))
         return True
     except RepositoryNotFoundError:
         return False

@@ -173,7 +173,7 @@ def load_tokenized_dataset(
             print(f"Set labels to E3 and WH only. Length: {dataset.num_rows}")
 
     if randomize_smiles:
-        dataset = dataset.map(
+        dataset["train"] = dataset["train"].map(
             randomize_smiles_dataset,
             batched=True,
             batch_size=batch_size,

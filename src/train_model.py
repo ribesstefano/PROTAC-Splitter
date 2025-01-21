@@ -2,8 +2,10 @@ import os
 
 from jsonargparse import CLI
 # import wandb
+import torch
 
 from protac_splitter.llms.training import train_model
+from protac_splitter.llms.training_mlm_model import train_mlm_model
 from protac_splitter.llms.training_rl_models import (
     train_ppo_model,
     train_dpo_model,
@@ -15,4 +17,6 @@ from protac_splitter.llms.training_rl_models import (
 # print('Logged in to wandb')
 
 if __name__ == '__main__':
-    CLI([train_model, train_ppo_model])
+    os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Use GPU with index 0
+    print(f"GPU available: {torch.cuda.is_available()}")
+    CLI([train_model, train_mlm_model, train_ppo_model])

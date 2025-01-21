@@ -5,6 +5,7 @@ import numpy as np
 from rdkit import Chem, DataStructs
 import evaluate
 import multiprocessing as mp
+import datetime
 
 from protac_splitter.evaluation import (
     # is_valid_smiles,
@@ -60,7 +61,7 @@ def decode_and_get_metrics(
     Returns:
         dict[str, float]: A dictionary containing the scores for the predictions
     """
-    print("Starting decode_and_get_metrics (protac_splitter/llms/evaluation.py)")
+    print(f"[{datetime.datetime.now()}] Starting decode_and_get_metrics (protac_splitter/llms/evaluation.py)")
 
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
@@ -103,8 +104,6 @@ def decode_and_get_metrics(
     for s in scores:
         scores_labels.update(s.keys())
 
-    # scores = {k: np.array([s[k] for s in scores]).mean() for k in scores_labels}
-
     aggregated_scores = {}
     for k in scores_labels:
         values = np.array([s.get(k, np.nan) for s in scores], dtype=float)
@@ -139,5 +138,7 @@ def decode_and_get_metrics(
     # label_fps = [fpgen.GetFingerprint(m) for m in label_mols]
     # tanimoto = [DataStructs.TanimotoSimilarity(l, p) for l, p in zip(label_fps, pred_fps)]
     # scores['tanimoto'] = np.array(tanimoto).mean()
+
+    print(f"[{datetime.datetime.now()}] Done with decode_and_get_metrics (protac_splitter/llms/evaluation.py)")
 
     return aggregated_scores
