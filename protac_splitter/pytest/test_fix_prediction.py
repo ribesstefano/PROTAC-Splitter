@@ -1,12 +1,13 @@
+import os
+import time
 from typing import List, Tuple
 
 import pytest
-from unittest.mock import patch
-from transformers import AutoTokenizer
-from datasets import Dataset
-from protac_splitter.llms.data_utils import load_tokenized_dataset
+from rdkit import Chem
+from transformers import AutoTokenizer, EvalPrediction
+import numpy as np
 
-# FILE: protac_splitter/llms/test_data_utils.py
+from protac_splitter.protac_splitter import fix_prediction
 
 @pytest.fixture
 def protac_examples() -> List[Tuple[str, str]]:
@@ -86,128 +87,28 @@ def protac_examples() -> List[Tuple[str, str]]:
         ],
     ]
 
-texts = ["CCO", "CCN", "CCC", "CCF", "CCCl", "CCBr", "CCI", "CCOCC", "CCNCC", "CCCC"]
 
-@pytest.fixture
-def sample_dataset(protac_examples) -> Dataset:
+def test_fix_prediction(protac_examples):
 
-    return Dataset.from_dict({
-        "text": [x[0] for x in protac_examples],
-        "labels": [x[1] for x in protac_examples],
-    })
+    print('-'*80)
+    print('Checking that the fixing works with correct predictions.')
+    print('-'*80)
+    for protac_smiles, pred_smiles in protac_examples:
+        fixed = fix_prediction(protac_smiles, pred_smiles)
+        assert fixed is not None, f'Failed to fix prediction for "{pred_smiles}"'
+        assert all(isinstance(v, str) for v in fixed.values()), f'Invalid fixed prediction: {fixed}'
+        assert all(Chem.MolFromSmiles(v) is not None for v in fixed.values()), f'Invalid fixed prediction: {fixed}'
 
-    # return Dataset.from_dict({
-    #     "text": texts,
-    #     "labels": ["OCC", "NCC", "CCC", "FCC", "ClCC", "BrCC", "ICC", "CCOCC", "CCNCC", "CCCC"],
-    # })
-
-@pytest.fixture
-def tokenizer():
-    return AutoTokenizer.from_pretrained("seyonec/ChemBERTa-zinc-base-v1")
-
-@patch("protac_splitter.llms.data_utils.load_dataset")
-def test_load_tokenized_dataset(mock_load_dataset, sample_dataset, tokenizer):
-    mock_load_dataset.return_value = sample_dataset
-
-    dataset = load_tokenized_dataset(
-        daset_dir="dummy_dir",
-        dataset_config="default",
-        tokenizer=tokenizer,
-        batch_size=2,
-        encoder_max_length=10,
-        decoder_max_length=10,
-        token=None,
-        num_proc_map=1,
-        randomize_smiles=True,
-        randomize_smiles_prob=1,
-        randomize_smiles_repeat=10,
-    )
-
-    assert "input_ids" in dataset.column_names
-    assert "attention_mask" in dataset.column_names
-    assert "labels" in dataset.column_names
-    assert len(dataset) == len(texts) * 10
-
-
-    dataset = load_tokenized_dataset(
-        daset_dir="dummy_dir",
-        dataset_config="default",
-        tokenizer=tokenizer,
-        batch_size=2,
-        encoder_max_length=10,
-        decoder_max_length=10,
-        token=None,
-        num_proc_map=1,
-        randomize_smiles=True,
-        randomize_smiles_prob=0.5,
-        randomize_smiles_repeat=10,
-    )
-
-    assert "input_ids" in dataset.column_names
-    assert "attention_mask" in dataset.column_names
-    assert "labels" in dataset.column_names
-    # Check that the lenght of labels is the same as the length of input_ids
-    assert len(dataset["input_ids"]) == len(dataset["labels"])
-
-
-@patch("protac_splitter.llms.data_utils.load_dataset")
-def test_load_tokenized_dataset_with_fragments_and_linkers(mock_load_dataset, sample_dataset, tokenizer):
-    mock_load_dataset.return_value = sample_dataset
-
-    dataset = load_tokenized_dataset(
-        daset_dir="dummy_dir",
-        dataset_config="default",
-        tokenizer=tokenizer,
-        batch_size=2,
-        encoder_max_length=512,
-        decoder_max_length=512,
-        token=None,
-        num_proc_map=1,
-        randomize_smiles=False,
-        all_fragments_as_labels=False,
-        linkers_only_as_labels=True,
-    )
-
-    assert "input_ids" in dataset.column_names
-    assert "attention_mask" in dataset.column_names
-    assert "labels" in dataset.column_names
-
-    # Use the tokenizer to decode the labels
-    labels = tokenizer.batch_decode(dataset["labels"], skip_special_tokens=True)
-    # Print the labels
-    for label in labels:
-        print(label)
-
-    assert all(label.count(".") == 0 for label in labels)
-    assert all(label.count("[*:1]") == 1 for label in labels)
-    assert all(label.count("[*:2]") == 1 for label in labels)
-
-
-    dataset = load_tokenized_dataset(
-        daset_dir="dummy_dir",
-        dataset_config="default",
-        tokenizer=tokenizer,
-        batch_size=2,
-        encoder_max_length=512,
-        decoder_max_length=512,
-        token=None,
-        num_proc_map=1,
-        randomize_smiles=False,
-        all_fragments_as_labels=False,
-        linkers_only_as_labels=False,
-    )
-
-    assert "input_ids" in dataset.column_names
-    assert "attention_mask" in dataset.column_names
-    assert "labels" in dataset.column_names
-
-    # Use the tokenizer to decode the labels
-    labels = tokenizer.batch_decode(dataset["labels"], skip_special_tokens=True)
-
-    # Print the labels
-    for label in labels:
-        print(label)
-
-    assert all(label.count(".") == 1 for label in labels)
-    assert all(label.count("[*:1]") == 1 for label in labels)
-    assert all(label.count("[*:2]") == 1 for label in labels)
+    # Manually alter one of the substructures to make it invalid
+    print('-'*80)
+    print('Checking that the fixing works when the E3 is wrong.')
+    print('-'*80)
+    for protac_smiles, pred_smiles in protac_examples:
+        substructures = pred_smiles.split('.')
+        
+        # substructures[0] = 
+        fixed = fix_prediction(protac_smiles, pred_smiles)
+        assert fixed is not None, f'Failed to fix prediction for "{pred_smiles}"'
+        assert all(isinstance(v, str) for v in fixed.values()), f'Invalid fixed prediction: {fixed}'
+        assert all(Chem.MolFromSmiles(v) is not None for v in fixed.values()), f'Invalid fixed prediction: {fixed}'
+    
