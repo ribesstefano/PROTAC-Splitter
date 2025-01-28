@@ -529,19 +529,19 @@ def train_model(
             # Evaluation and checkpointing configs
             "max_steps": max_steps,
             "num_train_epochs": num_train_epochs,
-            "save_steps": 10_000, # NOTE: 200
+            "save_steps": 20_000, # NOTE: 200
             "save_strategy": "steps",
-            "eval_steps": 10_000, # NOTE: 500
-            "eval_delay": 70_000, # Default: None
+            "eval_steps": 20_000, # NOTE: 500
+            "eval_delay": max(int(max(max_steps, num_train_epochs) * 0.7), 0), # Default: None
             "eval_strategy": "steps", # NOTE: "evaluation_strategy" is deprecated.
-            "save_total_limit": 1,
+            "save_total_limit": 2, # This will save both the best and the last trainer checkpoint
             "load_best_model_at_end": True,
             "metric_for_best_model": "all_ligands_equal",
             "include_inputs_for_metrics": True,
             "eval_on_start": False, # Default: False
             # Logging configs
             "log_level": "debug",
-            "logging_steps": 1000,
+            "logging_steps": 5000,
             "disable_tqdm": True,
             "report_to": ["tensorboard"],
             "save_only_model": False, # Default: False

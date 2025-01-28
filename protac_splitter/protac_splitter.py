@@ -1,31 +1,28 @@
-from typing import Tuple, Optional, Dict
 import logging
+from typing import Tuple, Optional, Dict, Any, List
 
 import torch
 from transformers import (
     pipeline,
     AutoTokenizer,
 )
+from transformers.pipelines.pt_utils import KeyDataset
+from datasets import Dataset
 from rdkit import Chem
+from rdkit.Chem import Draw
+import pandas as pd
+from tqdm import tqdm
 
 from .evaluation import (
     split_prediction,
-    check_substructs,
+    check_reassembly,
+    score_prediction,
 )
-
-
-def dummy2query(mol: Chem.Mol) -> Chem.Mol:
-    """ Converts dummy atoms to query atoms, so that a molecule with attachment points can be used in HasSubstructMatch.
-    
-    Args:
-        mol: The molecule to convert.
-
-    Returns:
-        The molecule with dummy atoms converted to query atoms
-    """
-    p = Chem.AdjustQueryParameters.NoAdjustments()
-    p.makeDummiesQueries = True
-    return Chem.AdjustQueryProperties(mol, p)
+from .chemoinformatics import (
+    canonize,
+    dummy2query,
+    remove_attach_atom,
+)
 
 
 def fix_prediction(
@@ -34,30 +31,88 @@ def fix_prediction(
         poi_attachment_id: int = 1,
         e3_attachment_id: int = 2,
         remove_stereochemistry: bool = False,
-) -> Optional[Dict[str, str]]:
+        verbose: int = 0,
+) -> Optional[str]:
     """ Fixes a prediction by replacing the substructure that does not match the PROTAC with the rest of the PROTAC.
     
     Args:
-        protac_smiles: The SMILES of the PROTAC.
-        pred_smiles: The SMILES of the prediction.
-        poi_attachment_id: The attachment point id of the POI. Default is 1.
-        e3_attachment_id: The attachment point id of the E3 ligase. Default is 2.
+        protac_smiles (str): The SMILES of the PROTAC.
+        pred_smiles (str): The SMILES of the prediction.
+        poi_attachment_id (int): The attachment point id of the POI. Default is 1.
+        e3_attachment_id (int): The attachment point id of the E3 ligase. Default is 2.
+        verbose (int): The verbosity level. Default is 0.
 
     Returns:
-        A dictionary (with keys: 'e3', 'linker', 'poi') containing the fixed substructures, or None if the prediction is invalid.
+        A string containing the fixed predictions, or None if the fixing process failed.
     """
+    protac_mol = Chem.MolFromSmiles(protac_smiles)
+    if protac_mol is None:
+        logging.warning(f"Invalid PROTAC SMILES: {protac_smiles}")
+        return None
     
     substructs = split_prediction(pred_smiles)
 
     # If there are at least two None values, there's nothing we can do to fix it
     if sum(v is None for v in substructs.values()) >= 2:
-        logging.warning(f'Invalid prediction for "{pred_smiles}"')
+        logging.warning(f'Unable to continue, more than two substructures are not valid for given input: "{pred_smiles}"')
         return None
-    
-    protac_mol = Chem.MolFromSmiles(protac_smiles)
+
+    # Get molecules of PROTAC and substructures
     substructs = {k: {'smiles': v, 'mol': Chem.MolFromSmiles(v) if v is not None else v} for k, v in substructs.items()}
 
-    # TODO: Check if removing stereochemistry results in a valid prediction
+    # Check if renaming the attachment points might already fix the prediction
+    for sub in ['poi', 'e3', 'both']:
+        if sub == 'e3':
+            if substructs['e3']['smiles'] is None:
+                continue
+            e3_attempt = substructs['e3']['smiles'].replace(f'[*:{poi_attachment_id}]', f'[*:{e3_attachment_id}]')
+            poi_attempt = substructs['poi']['smiles']
+        if sub == 'poi':
+            if substructs['poi']['smiles'] is None:
+                continue
+            e3_attempt = substructs['e3']['smiles']
+            poi_attempt = substructs['poi']['smiles'].replace(f'[*:{e3_attachment_id}]', f'[*:{poi_attachment_id}]')
+        else:
+            if substructs['e3']['smiles'] is None or substructs['poi']['smiles'] is None:
+                continue
+            e3_attempt = substructs['e3']['smiles'].replace(f'[*:{e3_attachment_id}]', f'[*:{poi_attachment_id}]')
+            poi_attempt = substructs['poi']['smiles'].replace(f'[*:{poi_attachment_id}]', f'[*:{e3_attachment_id}]')
+
+        protac_attempt = f"{e3_attempt}.{substructs['linker']['smiles']}.{poi_attempt}"
+        if check_reassembly(
+            protac_smiles,
+            protac_attempt,
+        ):
+            logging.info(f'Input works when renaming attachment points in {sub.title()} substruct. SMILES: "{protac_attempt}"')
+            return protac_attempt
+    
+        # Check if swapping the POI and E3 attachments in the linker might already fix the prediction
+        if substructs['linker']['smiles'] is None:
+            continue
+        linker_attempt = substructs['linker']['smiles']
+        linker_attempt = linker_attempt.replace(f'[*:{poi_attachment_id}]', f'[*:DUMMY]')
+        linker_attempt = linker_attempt.replace(f'[*:{e3_attachment_id}]', f'[*:{poi_attachment_id}]')
+        linker_attempt = linker_attempt.replace(f'[*:DUMMY]', f'[*:{e3_attachment_id}]')
+
+        # Try with the original POI and E3 substructures
+        protac_attempt = f"{substructs['e3']['smiles']}.{linker_attempt}.{substructs['poi']['smiles']}"
+        if check_reassembly(
+            protac_smiles,
+            protac_attempt,
+        ):
+            logging.info(f'Input works when swapping POI and E3 attachment points in the linker. Fixed SMILES: "{protac_attempt}"')
+            return protac_attempt
+
+        # Try with the swapped POI and E3 substructures
+        protac_attempt = f"{e3_attempt}.{linker_attempt}.{poi_attempt}"
+        if check_reassembly(
+            protac_smiles,
+            protac_attempt,
+        ):
+            logging.info(f'Input works when swapping POI and E3 attachment points in the linker and in {sub.title()} substruct. Fixed SMILES: "{protac_attempt}"')
+            return protac_attempt
+
+    # Check if removing stereochemistry results in a valid prediction
     if remove_stereochemistry:
         Chem.RemoveStereochemistry(protac_mol)
         protac_smiles = Chem.MolToSmiles(protac_mol, canonical=True)
@@ -65,17 +120,17 @@ def fix_prediction(
             if v['mol'] is not None:
                 Chem.RemoveStereochemistry(v['mol'])
                 substructs[k]['smiles'] = Chem.MolToSmiles(v['mol'], canonical=True)
-    
-    if all(v['mol'] is not None for v in substructs.values()):
-        if check_substructs(
-            protac_smiles,
-            poi_smiles=substructs['poi']['smiles'],
-            linker_smiles=substructs['linker']['smiles'],
-            e3_smiles=substructs['e3']['smiles'],
-        ):
-            return {k: v['smiles'] for k, v in substructs.items()}
 
-    # Check if any of the substructures is NOT a substructure of the PROTAC
+    if all(v['mol'] is not None for v in substructs.values()):
+        if check_reassembly(
+            protac_smiles,
+            '.'.join([v['smiles'] for v in substructs.values()]),
+        ):
+            logging.info(f'Input works when removing stereochemistry. SMILES: "{pred_smiles}"')
+            return f"{substructs['e3']['smiles']}.{substructs['linker']['smiles']}.{substructs['poi']['smiles']}"
+
+    # Check if any of the substructures is NOT a substructure of the PROTAC, if
+    # so, we mark it as the wrong substructure to fix.
     num_matches = 0
     wrong_substruct = None
     for sub in ['poi', 'linker', 'e3']:
@@ -93,93 +148,277 @@ def fix_prediction(
         logging.warning(f'Prediction does not contain at least two matching substructures of the PROTAC. Num matches: {num_matches}. Prediction SMILES: "{pred_smiles}"')
         return None
 
+    # If the wrong substructure is still matching in the PROTAC, we need to a
+    # more complex approach to fix the prediction (see below).
+    def remove_substructure(mol, substructure, attachment_id, replaceDummies=False):
+        if mol is None or substructure is None:
+            return None
+        smaller_mol = Chem.ReplaceCore(
+            mol,
+            substructure,
+            labelByIndex=False,
+            replaceDummies=replaceDummies,
+        )
+        if smaller_mol is None:
+            logging.warning(f'Failed to remove substructure from prediction SMILES: "{pred_smiles}"')
+            return None
+        smaller_smiles = Chem.MolToSmiles(smaller_mol, canonical=True)
+        smaller_smiles = smaller_smiles.replace('[1*]', f'[*:{attachment_id}]')
+        smaller_smiles = smaller_smiles.replace('[2*]', f'[*:{attachment_id}]')
+        smaller_mol = canonize(Chem.MolFromSmiles(smaller_smiles))
+        return smaller_mol
+
+    # If we still have 3 matches: for each substructure, we progressively remove
+    # the other substructures, then we check if the resulting molecule is valid
+    # and has only one fragment.
+    if num_matches == 3:
+        wrong_substruct = None
+        for sub in ['poi', 'linker', 'e3']:
+            removed_mol = Chem.MolFromSmiles(protac_smiles)
+
+            # Put the current substructure at the end of the list [poi, e3, linker]
+            sub_names = ['poi', 'e3', 'linker']
+            sub_names.remove(sub)
+            sub_names.append(sub)
+            # The linker often matches in many parts of the PROTAC, so we remove
+            # it when checking the E3 and POI substructures.
+            if sub != 'linker':
+                sub_names.remove('linker')
+
+            for s in sub_names:
+                attachment_id = poi_attachment_id if s == 'poi' else e3_attachment_id
+                removed_mol = remove_substructure(
+                    removed_mol,
+                    dummy2query(substructs[s]['mol']),
+                    attachment_id=attachment_id,
+                )
+
+            # Check if resulting molecule is None, if so, it is the wrong one
+            if removed_mol is None:
+                substructs[sub]['match'] = False
+                wrong_substruct = sub
+                num_matches -= 1
+                break
+
+            # Count the number of fragments in the removed molecule
+            num_fragments = Chem.GetMolFrags(removed_mol, asMols=True, sanitizeFrags=False)
+            if len(num_fragments) > 1:
+                substructs[sub]['match'] = False
+                wrong_substruct = sub
+                num_matches -= 1
+                break
+
     if num_matches == 3:
         logging.warning(f'Prediction already contains all matching substructures of the PROTAC. Prediction SMILES: "{pred_smiles}"')
-        return {k: v['smiles'] for k, v in substructs.items()}
-
-    # Get the order, i.e., either E3 or POI first, based on their size
-    if substructs['poi']['mol'] is None or substructs['e3']['mol'] is None:
-        logging.warning(f'Invalid prediction for "{pred_smiles}"')
         return None
-    
-    if substructs['poi']['mol'].GetNumAtoms() > substructs['e3']['mol'].GetNumAtoms():
-        order = ['poi', 'e3', 'linker']
+
+    # Get the order in which to remove the substructures and get the final one
+    # as the fixed molecule.
+    if wrong_substruct == 'linker':
+        poi_atoms = substructs['poi']['mol'].GetNumAtoms()
+        e3_atoms = substructs['e3']['mol'].GetNumAtoms()
+        order = ['poi', 'e3'] if poi_atoms > e3_atoms else ['e3', 'poi']
     else:
-        order = ['e3', 'poi', 'linker']
+        if wrong_substruct == 'poi':
+            order = ['e3', 'linker']
+        else:
+            order = ['poi', 'linker']
+
+    logging.debug(f'Wrong substructure: {wrong_substruct.upper()}. Order: {order}')
 
     fixed_mol = protac_mol
     for sub in order:
-        if substructs[sub]['match']:
-            fixed_mol = Chem.ReplaceCore(
-                fixed_mol,
-                dummy2query(substructs[sub]['mol']),
-                labelByIndex=False,
-                replaceDummies=False,
-            )
-            if fixed_mol is None:
-                logging.warning(f'Failed to replace substructure "{sub}" in prediction SMILES: "{pred_smiles}"')
-                return None
-            
-            # TODO: Try again with another order if when replacing the core we
-            # obtain TWO molecules instead of one. This might happen when a
-            # substructure is still matching but it is "smaller" than the right
-            # one, resulting in "dangling" atoms.
+        logging.debug(f'Removing substructure {sub.upper()} from PROTAC.')
 
-            # Rename the attachment points
-            attachment_id = poi_attachment_id if sub == 'poi' else e3_attachment_id
-            fixed_smiles = Chem.MolToSmiles(fixed_mol, canonical=True)
-            fixed_smiles = fixed_smiles.replace('[1*]', f'[*:{attachment_id}]')
-            fixed_smiles = fixed_smiles.replace('[2*]', f'[*:{attachment_id}]')
-            fixed_mol = Chem.MolFromSmiles(fixed_smiles)
+        if 'linker' not in order:
+            fixed_attach_id = poi_attachment_id if sub == 'poi' else e3_attachment_id
+        else:
+            fixed_attach_id = poi_attachment_id if 'e3' in order else e3_attachment_id
 
-    if len(fixed_smiles.split('.')) > 1:
-        # Get the longest sub-string in fixed_smiles
-        fixed_smiles = max(fixed_smiles.split('.'), key=len)
+        if sub == 'linker':
+            attach_id = poi_attachment_id if wrong_substruct == 'poi' else e3_attachment_id
+            fixed_attach_id = poi_attachment_id if wrong_substruct == 'poi' else e3_attachment_id
+            query_mol = remove_attach_atom(substructs[sub]['mol'], attach_id)
+            replaceDummies = True
+        else:
+            query_mol = dummy2query(substructs[sub]['mol'])
+            replaceDummies = False
 
+        if verbose:
+            # display(Draw.MolToImage(fixed_mol, legend=f"Starting molecule", size=(800, 300)))
+            # display(Draw.MolToImage(query_mol, legend=f"Molecule {sub.upper()} to remove", size=(800, 300)))
+            pass
+
+        fixed_mol_tmp = remove_substructure(
+            fixed_mol,
+            query_mol,
+            attachment_id=fixed_attach_id,
+            replaceDummies=replaceDummies,
+        )
+        if fixed_mol_tmp is None:
+            logging.debug(f'Failed to replace substructure "{sub}" in prediction SMILES: "{pred_smiles}"')
+            continue
+
+        fixed_mol = fixed_mol_tmp
+
+        # If there are multiple fragments, keep the biggest one
+        fragments = Chem.GetMolFrags(fixed_mol, asMols=True)
+        if len(fragments) > 1:
+            logging.debug(f'Fixed molecule contains more than one fragment. Keeping the biggest one.')
+            max_frag = max(fragments, key=lambda x: x.GetNumAtoms())
+            fixed_mol = max_frag
+
+    # Get the SMILES of the fixed molecule
+    fixed_smiles = Chem.MolToSmiles(canonize(fixed_mol), canonical=True)
     substructs[wrong_substruct]['smiles'] = fixed_smiles
 
-    if not check_substructs(
+    if verbose:
+        # display(Draw.MolToImage(fixed_mol, legend=f"{wrong_substruct.upper()} fixed molecule: {fixed_smiles}", size=(800, 300)))
+        pass
+
+    # Concatenate the substructures check if the re-assembly is correct
+    fixed_pred_smiles = f"{substructs['e3']['smiles']}.{substructs['linker']['smiles']}.{substructs['poi']['smiles']}"
+
+    if not check_reassembly(
         protac_smiles,
-        poi_smiles=substructs['poi']['smiles'],
-        linker_smiles=substructs['linker']['smiles'],
-        e3_smiles=substructs['e3']['smiles'],
+        fixed_pred_smiles,
     ):
+        logging.warning(f"Failed to fix prediction, re-assembly check failed. Generated fixed prediction (failing): {fixed_pred_smiles}")
         return None
 
-    return {k: v['smiles'] for k, v in substructs.items()}
-
+    return fixed_pred_smiles
 
 def split_protac(
-        protac_smiles: str,
-        llm_pipeline: Optional[str] = None,
-        use_llm_prediction: bool = True,
-) -> Tuple[str, str, str]:
+        protac_smiles: str | List | pd.DataFrame,
+        model_name: str = "ailab-bio/PROTAC-Splitter-Trial-11",
+        hf_token: str = None,
+        tokenizer: Optional[Any] = None,
+        pipe: Optional[Any] = None,
+        batch_size: int = 1,
+        fix_predictions: bool = True,
+        protac_smiles_col: str = "text",
+        return_check_reassembly: bool = False,
+        verbose: int = 0,
+) -> Dict[str, str] | List[Dict[str, str]]:
     """
     Split a PROTAC SMILES into the two ligands and the linker.
 
-    Dummy implementation that simply splits the SMILES string by '.'.
-
     Args:
-        protac_smiles (str): A string containing the SMILES of the PROTAC.
+        protac_smiles (str | List | pd.DataFrame): The PROTAC SMILES to split.
+        model_name (str): The name of the model to use. Default is "ailab-bio/PROTAC-Splitter-Trial-11".
+        hf_token (str): The Hugging Face token. Default is None.
+        tokenizer (Optional[Any]): The tokenizer to use. Default is None.
+        pipe (Optional[Any]): The pipeline to use. Default is None.
+        batch_size (int): The batch size to use. Default is 1. From HF: "By default, pipelines will not batch inference for reasons explained in detail here: https://huggingface.co/docs/transformers/main_classes/pipelines#pipeline-batching"
+        fix_predictions (bool): Whether to fix the predictions. Default is True.
+        protac_smiles_col (str): The column name of the PROTAC SMILES in the DataFrame. Default is "text".
+        return_check_reassembly (bool): Whether to return the boolean for each predicted sentence indicating whether re-assemblying the prediction matches the input PROTAC. Default is False.
+        verbose (int): The verbosity level. Default is 0.
     
     Returns:
-        Tuple[str, str, str]: A tuple containing the SMILES of the first ligand, the linker, and the second ligand.
+        A dictionary containing the predictions in case of a single PROTAC SMILES, or a list of dictionaries containing the predictions in case of multiple PROTAC SMILES.
     """
+    beam_size = 5
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if tokenizer is None:
+        if verbose:
+            print(f"Loading tokenizer...")
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
 
-    if use_llm_prediction:
-        if llm_pipeline is None:
-            tokenizer = AutoTokenizer.from_pretrained("ailab-bio/PROTAC-Splitter-standard_rand_recombined-ChemBERTa-zinc-base")
-            llm_pipeline = llm_pipeline = pipeline(
-                "text2text-generation",
-                model="ailab-bio/PROTAC-Splitter-standard_rand_recombined-ChemBERTa-zinc-base",
-                tokenizer=tokenizer,
-                device=device,
-            )
-        return llm_pipeline(protac_smiles)['generated_text']
+    if pipe is None:
+        if verbose:
+            print("Loading pipeline for \"default\" predictions...")
+        pipe = pipeline(
+            "text2text-generation",
+            model=model_name,
+            tokenizer=tokenizer,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            token=hf_token,
+            num_return_sequences=beam_size,
+        )
 
+    if isinstance(protac_smiles, str):
+        protac_smiles_canon = canonize(protac_smiles)
+        if protac_smiles_canon is None:
+            raise ValueError(f"Invalid PROTAC SMILES: {protac_smiles}")
+        pred = pipe(protac_smiles_canon)
+        pred = {f"default_pred_n{i}": pred[i]["generated_text"] for i in range(len(pred))}
+        if fix_predictions:
+            p_fixed = {k: fix_prediction(protac_smiles_canon, v, verbose=verbose) for k, v in pred.items()}
+            # For each prediction, if the fixed prediction is not None, we
+            # replace the original prediction with the fixed one.
+            for k, v in p_fixed.items():
+                if v is not None:
+                    pred[k] = v
+        preds = [pred]
 
-    # Split the PROTAC SMILES into the two ligands and the linker
-    ligand1, linker, ligand2 = protac_smiles.split('.')
-    return ligand1, linker, ligand2
+    if isinstance(protac_smiles, list):
+        # Canonize and check if all PROTAC SMILES are valid
+        protac_smiles_canon = [canonize(protac) for protac in protac_smiles]
+        if None in protac_smiles_canon:
+            wrong_protacs = [protac for protac, canon in zip(protac_smiles, protac_smiles_canon) if canon is None]
+            raise ValueError(f"Invalid PROTAC SMILES in list: {wrong_protacs}")
+
+        # Get the predictions for all PROTAC SMILES
+        preds = pipe(protac_smiles_canon, batch_size=batch_size)
+        preds = [{f"default_pred_n{i}": p["generated_text"] for i, p in enumerate(pred)} for pred in preds]
+
+        if fix_predictions:
+            for i, (protac, pred) in enumerate(zip(protac_smiles_canon, preds)):
+                p_fixed = {k: fix_prediction(protac, v, verbose=verbose) for k, v in pred.items()}
+                # For each prediction, if the fixed prediction is not None, we
+                # replace the original prediction with the fixed one.
+                for k, v in p_fixed.items():
+                    if v is not None:
+                        preds[i][k] = v
+
+    if isinstance(protac_smiles, pd.DataFrame):
+        # Check if the DataFrame contains a columns named `protac_smiles_col`
+        if protac_smiles_col not in protac_smiles.columns:
+            raise ValueError(f"DataFrame must contain a column named \"{protac_smiles_col}\".")
+        
+        # Canonize and check if all PROTAC SMILES are valid
+        protac_smiles_canon = protac_smiles.apply(lambda x: canonize(x[protac_smiles_col]), axis=1)
+
+        # Check if there are invalid PROTAC SMILES
+        if protac_smiles_canon.isnull().any():
+            wrong_protacs = protac_smiles[protac_smiles_canon.isnull()]
+            raise ValueError(f"Invalid PROTAC SMILES in DataFrame: {wrong_protacs}")
+
+        # Convert the Series to a DataFrame
+        protac_smiles_canon = pd.DataFrame(protac_smiles_canon, columns=[protac_smiles_col])
+        
+        # Convert the DataFrame to a Dataset
+        dataset = Dataset.from_pandas(protac_smiles_canon)
+        preds = []
+        for pred in tqdm(pipe(KeyDataset(dataset, protac_smiles_col), batch_size=batch_size), total=len(dataset) // batch_size, desc="Generating predictions"):
+            p = {f"default_pred_n{i}": pred[i]["generated_text"] for i in range(len(pred))}
+            preds.append(p)
+
+        if fix_predictions:
+            for i, (protac, pred) in tqdm(enumerate(zip(protac_smiles_canon, preds)), desc="Fixing predictions", total=len(preds)):
+                p_fixed = {k: fix_prediction(protac, v, verbose=verbose) for k, v in pred.items()}
+                # For each prediction, if the fixed prediction is not None, we
+                # replace the original prediction with the fixed one.
+                for k, v in p_fixed.items():
+                    if v is not None:
+                        pred[k] = v
+
+    if return_check_reassembly:
+        if isinstance(protac_smiles_canon, str):
+            protac_smiles_list = [protac_smiles_canon]
+        elif isinstance(protac_smiles_canon, list):
+            protac_smiles_list = protac_smiles_canon
+        elif isinstance(protac_smiles_canon, pd.DataFrame):
+            protac_smiles_list = protac_smiles_canon[protac_smiles_col].tolist()
+        
+        print("Checking re-assembly...")
+        for protac, pred in zip(protac_smiles_list, preds):
+            for i in range(beam_size):
+                pred[f"reassembly_correct_n{i}"] = check_reassembly(protac, pred[f"default_pred_n{i}"])
+
+        # Just take the first prediction if the input was a string
+        if isinstance(protac_smiles, str):
+            preds = preds[0]
+
+    return preds

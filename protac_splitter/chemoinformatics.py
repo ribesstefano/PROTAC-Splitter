@@ -367,100 +367,41 @@ def get_substr_match(
     return len(fragments) == max_allowed_fragments
 
 
-# TODO: The following was originally called remove_dummy_atom, without the final 's'.
-def remove_dummy_atoms(
-        mol: str | Chem.Mol,
-        output: str = "smiles",
-        how: Literal['all', 'attachments'] = 'all',
-) -> Union[str, Chem.Mol]:
-    """ DEPRECATED. Removes dummy atoms from a molecule and returns the modified molecule.
+def remove_attach_atom(mol: Chem.Mol, attach_id: int, sanitize: bool = False) -> Chem.Mol:
+    """ Removes the atom with the specified attachment id from the molecule.
+
+    Example:
+    
+    >>> remove_attach_atom(Chem.MolFromSmiles('CC[*:1]'), 1)
+    CC
+
+    There are no checks on the molecule, so it is assumed it is not None.
 
     Args:
-        mol (Chem.Mol): The input molecule containing dummy atoms.
-        output (str, optional): The output format. Defaults to "smiles".
-        how (str, optional): The method to use for removing dummy atoms. Can be 'all' or 'attachments'. Defaults to 'all'.
-            If 'all', removes all dummy atoms with atomic number 0 from the molecule.
-            If 'attachments', removes dummy atoms that are connected to other atoms by a bond, i.e., attachment points with '*'.
+        mol (Chem.Mol): The molecule.
+        attach_id (int): The attachment id of the atom to remove.
+        sanitize (bool, optional): Whether to sanitize the molecule after removing the atom. When used in `fix_prediction` function, it is used to "remove" substructures, so there is no need to have them sanitized. Default: False.
 
     Returns:
-        Union[str, Chem.Mol]: The modified molecule without dummy atoms. If output is "smiles", returns the SMILES string representation of the molecule. Otherwise, returns the modified molecule as a Chem.Mol object.
+        (Chem.Mol) The molecule with the atom removed.
     """
-    if how not in ['all', 'attachments']:
-        raise ValueError("Invalid value for 'how'. Must be 'all' or 'attachments'.")
+    atoms_to_remove = []
+    for atom in mol.GetAtoms():
+        if atom.GetAtomicNum() == 0:  # Dummy atom
+            map_num = atom.GetAtomMapNum()
+            if map_num == attach_id:  # Targeting only [*:attach_id]
+                atoms_to_remove.append(atom.GetIdx())
 
-    if isinstance(mol, str):
-        mol = Chem.MolFromSmiles(mol)
+    # Remove atoms using an EditableMol
+    editable_mol = Chem.EditableMol(mol)
+    for idx in sorted(atoms_to_remove, reverse=True):  # Remove from highest index to avoid shifting
+        editable_mol.RemoveAtom(idx)
 
-    # TODO: Why this?
-    # if Chem.MolToSmiles(mol) == "O=C(CCCCCCCCCC[*:1])[*:2]":
-    #     pass
-
-    if how == 'attachments':
-        atoms_to_remove = [atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomicNum() == 0]
-        editable_mol = Chem.EditableMol(mol)
-        for idx in sorted(atoms_to_remove, reverse=True):
-            editable_mol.RemoveAtom(idx)
-        return editable_mol.GetMol()
-
-    # Find dummy atoms by symbol or index
-    dummy_atoms = [atom.GetIdx() for atom in mol.GetAtoms() if atom.GetSymbol() == '*']
-
-    hydrogen_atom = Chem.rdchem.Atom(1)
-    bond_to_num_Hs_to_add = {
-        Chem.rdchem.BondType.SINGLE: 1,
-        Chem.rdchem.BondType.DOUBLE: 2,
-        Chem.rdchem.BondType.TRIPLE: 3,
-    }
-
-    # For each dummy atom:
-    # 1. Identify the order of the bond
-    # 2. Add that many hydrogens to the other atom the dummy atom is connected to
-    # 3. Remove the dummy atom
-    # 4. Remove hydrogens (RemoveHs)
-
-    emol = Chem.RWMol(mol)
-    # NOTE: Reverse to avoid index shifting issues
-    for dummy_atom_idx in reversed(dummy_atoms):
-
-        # Identify the order of the bond
-        atom = mol.GetAtomWithIdx(dummy_atom_idx)
-        neighbors = atom.GetNeighbors()
-
-        for neighbour_atom in neighbors:
-            neighbour_idx = neighbour_atom.GetIdx()
-            dummy_atom_bond = emol.GetBondBetweenAtoms(
-                dummy_atom_idx, neighbour_idx)
-            dummy_atom_bondtype = dummy_atom_bond.GetBondType()
-            num_Hs_to_add = bond_to_num_Hs_to_add[dummy_atom_bondtype]
-
-            # Add that many hydrogens to the other atom the dummy atom is connected to
-            for _ in range(num_Hs_to_add):
-                hydrogen_atom_idx = emol.AddAtom(hydrogen_atom)
-                emol.AddBond(neighbour_idx, hydrogen_atom_idx,
-                             order=Chem.rdchem.BondType.SINGLE)
-
-        # Finally, remove the dummy atom
-        emol.RemoveAtom(dummy_atom_idx)
-
-    # Remove hydrogens
-    substruct_mol_wo_attach = Chem.RemoveHs(Chem.Mol(emol))
-
-    # Sanitize and check the molecule to ensure its chemical validity
-    Chem.GetSymmSSSR(substruct_mol_wo_attach)
-    Chem.SanitizeMol(substruct_mol_wo_attach)
-
-    substruct_mol_wo_attach = Chem.MolFromSmiles(Chem.MolToSmiles(
-        substruct_mol_wo_attach))  # verify this can be done...
-
-    dummy_atoms = [atom.GetIdx() for atom in substruct_mol_wo_attach.GetAtoms() if atom.GetSymbol() == '*']
-    if dummy_atoms != []:
-        smi = Chem.MolToSmiles(mol)
-        raise ValueError(f"Dummy atoms still present for: {smi}!")
-
-    if output == "smiles":
-        return Chem.MolToSmiles(substruct_mol_wo_attach, canonical=True)
-    else:
-        return substruct_mol_wo_attach
+    # Convert back to a molecule
+    new_mol = editable_mol.GetMol()
+    if sanitize:
+        Chem.SanitizeMol(new_mol)
+    return new_mol
 
 
 def get_anonymous_mol(mol: Chem.Mol) -> str:

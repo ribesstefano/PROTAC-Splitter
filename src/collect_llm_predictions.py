@@ -132,7 +132,7 @@ def main(
     )
     print('Generating "default" predictions (training config)...')
     for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
-        p = {f'pred_{i}': pred[i]['generated_text'] for i in range(len(pred))}
+        p = {f'pred_n{i}': pred[i]['generated_text'] for i in range(len(pred))}
         preds['default'].append(p)
 
     if evaluate_different_generation_strategies:
@@ -148,7 +148,7 @@ def main(
             )
             print(f'Generating predictions with generation strategy: {generation_strategy}')
             for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
-                p = {f'pred_{i}': pred[i]['generated_text'] for i in range(len(pred))}
+                p = {f'pred_n{i}': pred[i]['generated_text'] for i in range(len(pred))}
                 preds[generation_strategy].append(p)
     
     print('Predictions collected. Saving to file...')

@@ -10,8 +10,6 @@ from rdkit import RDLogger
 from rdkit.Chem import CanonSmiles
 
 from .chemoinformatics import (
-    remove_dummy_atoms,
-    merge_molecules,
     canonize,
     smiles2mol,
 )

@@ -9,10 +9,10 @@ setuptools.setup(
     description="A package to split PROTAC SMILES into their substructures.",
     long_description=open("README.md").read(),
     packages=setuptools.find_packages(),
-    install_requires=["torch", "scikit-learn", "datasets", "rdkit", "pandas", "joblib", "optuna", "torchmetrics", "transformers"],
+    install_requires=["torch", "scikit-learn", "datasets", "rdkit", "pandas", "joblib", "optuna", "torchmetrics", "transformers", "gradio"],
     classifiers=[
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.6",
+        "Programming Language :: Python :: 3.11",
         "License :: OSI Approved :: MIT License",
         "Operating System :: OS Independent",
     ],
