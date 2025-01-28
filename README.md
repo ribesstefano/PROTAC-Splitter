@@ -1,55 +1,77 @@
-# PROTAC Splitter
+# PROTAC-Splitter
 
 This repository contains a program to split PROTAC molecules into their substructures.
 
-## Quickstart
+<!-- Add some emojies to the subsections -->
+## Table of Contents 📜
 
-Install the required dependencies and activate the relative environment:
+- [Installation](#installation)
+- [Usage](#usage)
+- [License](#license)
 
-```bash
-conda env create -f environment.yml
-conda activate env-protac-splitter
-```
+## Installation 🛠️
 
-Run the following command for starting training the model:
+The package was tested in Python 3.10.8.
 
-```bash
-mkdir -p models
-hub_token="my-unforgettable-token"
-organization="my-awesome-organization"
-
-python main.py train_model \
-    "PROTAC-Splitter_untied_80-20-split_with-sampling" \
-    "ailab-bio/PROTAC-Substructures" \
-    --organization=${organization} \
-    --ds_config="80-20-split" \
-    --tokenizer="seyonec/ChemBERTa-zinc-base-v1" \
-    --pretrained_encoder="seyonec/ChemBERTa-zinc-base-v1" \
-    --pretrained_decoder="seyonec/ChemBERTa-zinc-base-v1" \
-    --tie_encoder_decoder=false \
-    --output_dir="/models" \
-    --batch_size=256 \
-    --max_steps=2000 \
-    --num_train_epochs=-1 \
-    --hub_token="${hub_token}" \
-    --delete_repo_first=false
-```
-
-In general, refer to the help message for more information about the command line arguments:
+For using the code under the [scripts](scripts) directory in this repository, run the following commands:
 
 ```bash
-python main.py --help
+git clone https://github.com/ribesstefano/PROTAC-Splitter.git
+cd PROTAC-Splitter
+pip install -r requirements.txt
+pip install -r scripts/requirements.txt
+
+# Add the package to the PYTHONPATH
+export PYTHONPATH=$PYTHONPATH:`pwd`/protac_splitter
 ```
 
-## Data Preparation
+Alternatively, you can install the package using pip:
 
-The train and test datasets are assembled in the notbook: [notebooks/data_curation.ipynb](notebooks/data_curation.ipynb).
+```bash
+pip install git+https://github.com/ribesstefano/PROTAC-Splitter.git
+```
 
-Raw CSV data are expected to be placed in the `data/raw` directory.
+## Usage 🚀
 
+To use the package, please refer to the function `split_protac` in the [protac_splitter/protac_splitter](protac_splitter/protac_splitter) module.
 
-## Code Cleaning
+Here is an example of how to use the function:
 
-- Started organizing Anders' curation code into a set of files in the `protac_splitter/gnn` directory.
-- Clustering code needs some polishing and refactoring, i.e., handling plotting and visualizations
-- There is a huge function for generating the train/val/test splits, but I still don't understand how it differs from other functions in the clustering file...
+```python
+from protac_splitter import split_protac
+
+# Split a PROTAC molecule
+protac_smiles = "CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O"
+
+# Split the PROTAC molecule
+ligands = split_protac(
+    protac_smiles,
+    model_name="change_to_local_model_path_if_required",
+    hf_token="your_awsome_hf_token_or_os.environ['HF_TOKEN']",
+)
+print(ligands)
+
+# One can also feed a DataFrame to the function
+df = pd.read_csv("my/local/file.csv")
+split_df = split_protac(
+    df,          
+    model_name="change_to_local_model_path_if_required",
+    hf_token="your_awsome_hf_token_or_os.environ['HF_TOKEN']",
+    protac_smiles_col="PROTAC SMILES",
+)
+print(split_df.head())
+```
+
+Alternatively, you can use the Gradio app at [scripts/protac_splitter_app.py](scripts/protac_splitter_app.py) have a GUI to split PROTAC molecules.
+
+```sh
+PYTHONNOUSERSITE=1 python -m script.protac_splitter_app
+```
+
+Until the repository is private, please download the model locally from this Google Drive link: https://drive.google.com/file/d/18hq62csehlmQlzfQoAAgmiV_vMT0AcP0/view?usp=share_link
+
+After unzipping, set the `model_name` argument to the path of the directory downloaded model. At this point, there is no need to set the `hf_token` argument.
+
+## License 📝
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
