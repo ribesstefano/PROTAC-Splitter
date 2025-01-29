@@ -9,6 +9,7 @@ from datasets import Dataset
 
 from protac_splitter.evaluation import score_prediction
 from protac_splitter.protac_splitter import fix_prediction
+from protac_splitter.chemoinformatics import canonize
 
 def main(
     num_proc: int = 16,
@@ -54,6 +55,10 @@ def main(
 
         # Remove rows in which the label_smiles has more than two dots
         df = df[~df['label_smiles'].str.contains("\.\[Cl-\]\.")]
+
+        # Canonize the SMILES strings
+        df['protac_smiles'] = df['protac_smiles'].apply(canonize)
+        df['label_smiles'] = df['label_smiles'].apply(canonize)
 
         # Convert the pandas DataFrame to a Hugging Face Dataset
         ds = Dataset.from_pandas(df, preserve_index=False)
