@@ -98,7 +98,7 @@ def process_csv(file, smiles_col: str, model_path: str):
     # Merge the results and fixed_results dictionaries
     # output_df = pd.merge(output_df, fixed_df, on="protac_smiles", suffixes=('', '_fixed'))
     
-    output_file = "split_results.csv"
+    output_file = "split_preds.csv"
     output_df.to_csv(output_file, index=False)
     
     return output_file

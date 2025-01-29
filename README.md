@@ -11,7 +11,7 @@ This repository contains a program to split PROTAC molecules into their substruc
 
 ## Installation 🛠️
 
-The package was tested in Python 3.10.8.
+The package was tested in Python 3.10.8. Always use a virtual environment to install the package.
 
 For using the code under the [scripts](scripts) directory in this repository, run the following commands:
 
@@ -25,7 +25,7 @@ pip install -r scripts/requirements.txt
 export PYTHONPATH=$PYTHONPATH:`pwd`/protac_splitter
 ```
 
-Alternatively, you can install the package using pip:
+Alternatively, you can install the package using pip (again, in a virtual environment):
 
 ```bash
 pip install git+https://github.com/ribesstefano/PROTAC-Splitter.git
@@ -65,12 +65,39 @@ print(split_df.head())
 Alternatively, you can use the Gradio app at [scripts/protac_splitter_app.py](scripts/protac_splitter_app.py) have a GUI to split PROTAC molecules.
 
 ```sh
-PYTHONNOUSERSITE=1 python -m script.protac_splitter_app
+python -m scripts.protac_splitter_app
 ```
+
+### Model Download
 
 Until the repository is private, please download the model locally from this Google Drive link: https://drive.google.com/file/d/18hq62csehlmQlzfQoAAgmiV_vMT0AcP0/view?usp=share_link
 
-After unzipping, set the `model_name` argument to the path of the directory downloaded model. At this point, there is no need to set the `hf_token` argument.
+After unzipping, set the `model_name` argument to the path of the unzipped directory. At this point, there is no need to set the `hf_token` argument when calling the `split_protac` function. Since the model is not open yet, the Gradio app works with local models only.
+
+## Score Predictions 📊
+
+If using the Gradio app, the predictions can be scored using the [scripts/score_predictions.py](scripts/score_predictions.py) script. The script requires that the predictions are saved in a CSV file that ends with "*preds.csv" under a directory named [logs](logs). The CSV shall have the following columns:
+
+- protac_smiles
+- label_smiles
+- default_pred_n0
+- default_pred_n1
+- default_pred_n2
+- default_pred_n3
+- default_pred_n4
+
+NOTE: The label_smiles can be obtained by the Pandas `merge` function with the original DataFrame and the DataFrame returned by the `split_protac` function.
+
+To run the script, execute the following command:
+
+```sh
+# Get help on the script
+python -m scripts.score_predictions --help
+# Run the scoring script with 4 processes
+python -m scripts.score_predictions --num_proc=4
+```
+
+The scores will be saved in the [logs](logs) directory as "\[the_original_filename\]scores.csv".
 
 ## License 📝
 

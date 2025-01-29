@@ -36,9 +36,9 @@ def main(
 
     for predictions_path in predictions_files:
 
-        if 'Trial' not in str(predictions_path.stem):
-            print(f"Skipping file: {predictions_path}")
-            continue
+        # if 'Trial' not in str(predictions_path.stem):
+        #     print(f"Skipping file: {predictions_path}")
+        #     continue
 
         print(f"Scoring predictions in {predictions_path}")
         print(f"Model name: {predictions_path.stem}")

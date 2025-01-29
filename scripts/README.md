@@ -18,5 +18,5 @@ module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
 source /mimer/NOBACKUP/groups/naiss2023-6-290/stefano/envs/env-protac-splitter/bin/activate
 export PYTHONPATH=$PYTHONPATH:`pwd`/protac_splitter
 export PYTHONPATH=/mimer/NOBACKUP/groups/naiss2023-6-290/stefano/envs/env-protac-splitter/lib/python3.11/site-packages:$PYTHONPATH
-PYTHONNOUSERSITE=1 python -m src.protac_splitter_app
+PYTHONNOUSERSITE=1 python -m scripts.protac_splitter_app
 ``` -->
