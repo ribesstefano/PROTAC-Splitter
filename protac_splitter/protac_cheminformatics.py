@@ -28,7 +28,7 @@ def find_atom_idx_of_map_atoms(
         find_e3: True,
         poi_attachment_id: int = 1,
         e3_attachment_id: int = 2,
-) -> int | Tuple[int, int]:
+) -> Union[int, Tuple[int, int]]:
     """ Find the indices of the attachment points in the given molecule.
 
     Args:

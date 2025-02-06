@@ -2,7 +2,7 @@
 
 import re
 import logging
-from typing import Tuple, Any, Dict, Optional
+from typing import Tuple, Any, Dict, Optional, Union
 
 import numpy as np
 from rdkit import Chem, RDLogger
@@ -45,7 +45,7 @@ def split_prediction(
         pred: str,
         poi_attachment_id: int = 1,
         e3_attachment_id: int = 2,
-) -> dict[str, str] | None:
+) -> Optional[dict[str, str]]:
     """ Split a PROTAC SMILES prediction into its three substructures.
 
     Args:
@@ -70,7 +70,7 @@ def split_prediction(
     return ret
 
 
-def rename_attachment_id(mol: str | Chem.Mol, old_id: int, new_id: int) -> str | Chem.Mol:
+def rename_attachment_id(mol: Union[str, Chem.Mol], old_id: int, new_id: int) -> Union[str, Chem.Mol]:
     """ Rename an attachment point ID in a molecule.
 
     Args:
@@ -207,7 +207,7 @@ def check_substructs(
         poi_attachment_id: int = 1,
         e3_attachment_id: int = 2,
         pred: str = None,
-) -> bool | Tuple[bool, dict[str, str]]:
+) -> Union[bool, Tuple[bool, dict[str, str]]]:
     """ DEPRECATED.
     
     Check if the reassembled PROTAC is correct.

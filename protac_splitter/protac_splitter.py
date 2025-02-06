@@ -1,5 +1,5 @@
 import logging
-from typing import Tuple, Optional, Dict, Any, List
+from typing import Union, Optional, Dict, Any, List
 
 import torch
 from transformers import (
@@ -289,7 +289,7 @@ def fix_prediction(
     return fixed_pred_smiles
 
 def split_protac(
-        protac_smiles: str | List | pd.DataFrame,
+        protac_smiles: Union[str, List, pd.DataFrame],
         model_name: str = "ailab-bio/PROTAC-Splitter-Trial-11",
         hf_token: str = None,
         tokenizer: Optional[Any] = None,
@@ -299,7 +299,7 @@ def split_protac(
         protac_smiles_col: str = "text",
         return_check_reassembly: bool = False,
         verbose: int = 0,
-) -> Dict[str, str] | List[Dict[str, str]]:
+) -> Union[Dict[str, str], List[Dict[str, str]]]:
     """
     Split a PROTAC SMILES into the two ligands and the linker.
 

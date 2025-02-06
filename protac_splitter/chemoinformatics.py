@@ -18,7 +18,7 @@ def GetSubstructMatchesWithTimeout(
     substruct: Chem.Mol,
     useChirality: bool = True,
     maxMatches: int = 50,
-    timeout: int | float = 10,
+    timeout: Union[int, float] = 10,
 ) -> Optional[List[List[int]]]:
     """ Get substructure matches with a timeout.
 
@@ -150,7 +150,7 @@ def canonize_smiles(smiles: str) -> str:
         return None
 
 
-def canonize(x: str | Chem.Mol) -> str | Chem.Mol:
+def canonize(x: Union[str, Chem.Mol]) -> Union[str, Chem.Mol]:
     """ Canonizes a SMILES string or RDKit molecule object.
 
     Args:

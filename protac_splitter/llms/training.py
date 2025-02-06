@@ -1,5 +1,5 @@
 import os
-from typing import Optional, Dict, Any, Callable, Tuple
+from typing import Optional, Dict, Any, Callable, Tuple, Union
 from functools import partial
 import subprocess
 import copy
@@ -347,7 +347,7 @@ def train_model(
         hub_token: Optional[str] = None,
         organization: Optional[str] = None,
         output_dir: str = "./models/",
-        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        tokenizer: Union[AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
         pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
         pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
         encoder_max_length: int = 512,

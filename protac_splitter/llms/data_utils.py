@@ -1,6 +1,6 @@
 import random
 import logging
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 from datasets import load_dataset, concatenate_datasets, Dataset
@@ -62,7 +62,7 @@ def randomize_smiles_dataset(
 
 def process_data_to_model_inputs(
         batch,
-        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        tokenizer: Union[AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
         encoder_max_length: int = 512,
         decoder_max_length: int = 512,
 ):
@@ -108,7 +108,7 @@ def get_fragments_in_labels(labels: str, linkers_only_as_labels: bool = True) ->
 def load_tokenized_dataset(
         daset_dir: str,
         dataset_config: str = 'default',
-        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        tokenizer: Union[AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
         batch_size: int = 512,
         encoder_max_length: int = 512,
         decoder_max_length: int = 512,
@@ -209,7 +209,7 @@ def load_tokenized_dataset(
 
 
 def load_trl_dataset(
-    tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",  
+    tokenizer: Union[AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",  
     token: Optional[str] = None,
     max_length: int = 512,
     dataset_name: str = "ailab-bio/PROTAC-Splitter-Dataset",

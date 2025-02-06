@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Union
 
 from transformers import AutoTokenizer
 import numpy as np
@@ -41,7 +41,7 @@ def process_predictions(args) -> list:
 
 def decode_and_get_metrics(
         pred,
-        tokenizer: AutoTokenizer | str = "seyonec/ChemBERTa-zinc-base-v1",
+        tokenizer: Union[AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
         rouge = None, # Optional[evaluate.metrics.rouge.Rouge] = None,
         fpgen = None, # Optional[Chem.rdFingerprintGenerator] = None,
         compute_rdkit_metrics: bool = False,
