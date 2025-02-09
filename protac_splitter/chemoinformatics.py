@@ -1,17 +1,18 @@
-import random
 import logging
-from typing import List, Tuple, Callable, Any, Union, Dict, Optional, Literal
+from typing import List, Any, Union, Optional
 from multiprocessing import Process, Queue
+from hashlib import sha256
 
 import numpy as np
 from tqdm import tqdm
 from rdkit import Chem, DataStructs
 from rdkit.Chem import (
-    rdchem,
-    AllChem,
     rdFingerprintGenerator,
-    rdMolHash,
+    Draw,
 )
+
+from protac_splitter.display_utils import safe_display, display_mol
+
 
 def GetSubstructMatchesWithTimeout(
     mol: Chem.Mol,
@@ -193,136 +194,57 @@ def compute_RDKitFP(
     return fps
 
 
-def merge_molecules(
-        mol1: Chem.rdchem.Mol,
-        mol2: Chem.rdchem.Mol,
-        atom_idx1: int,
-        atom_idx2: int,
-        bond_type: Literal['single', 'double', 'triple', 'rand_uniform'] = 'single',
-        rand_generator = None,
-) -> rdchem.Mol:
-    """ Combine two molecules into a single editable molecule.
+def remove_dummy_atoms(mol: Union[str, Chem.Mol], canonical=True) -> Union[str, Chem.Mol]:
+    """
+    Removes all dummy atoms (attachment points) from a molecule.
     
     Args:
-        mol1 (rdkit.Chem.rdchem.Mol): The first molecule.
-        mol2 (rdkit.Chem.rdchem.Mol): The second molecule.
-        atom_idx1 (int): The index of the attachment point in the first molecule.
-        atom_idx2 (int): The index of the attachment point in the second molecule.
-        bond_type (str): The type of bond to be added between the attachment points. Can be 'single' or 'rand_uniform'.
-        rand_generator: A random number generator for 'rand_uniform'. Defaults to None, i.e., standard library random.
-    
-    Returns:
-        rdkit.Chem.rdchem.Mol: The combined molecule.
-    """
-    # Find neighbors of the attachment points
-
-    neighbor_atom_idx2 = None
-    for nbr in mol2.GetAtomWithIdx(atom_idx2).GetNeighbors():
-        if nbr.GetAtomicNum() > 1:
-            neighbor_atom_idx2 = nbr.GetIdx() + mol1.GetNumAtoms()
-            break
-    
-    # Handle case when linker has no length
-    if neighbor_atom_idx2 is None:
-        smi_e3_linker_with_e3_attachment = Chem.MolToSmiles(mol1, canonical=True)
-        smi_e3_linker_with_poi_attachment = smi_e3_linker_with_e3_attachment.replace("[*:2]", "[*:1]")
-        mol_e3_linker_with_poi_attachment = Chem.MolFromSmiles(smi_e3_linker_with_poi_attachment)
-        return mol_e3_linker_with_poi_attachment
-
-    for nbr in mol1.GetAtomWithIdx(atom_idx1).GetNeighbors():
-        if nbr.GetAtomicNum() > 1:
-            neighbor_atom_idx1 = nbr.GetIdx()
-            break
-
-    editable_mol = Chem.EditableMol(Chem.CombineMols(mol1, mol2))
-
-    # Add a bond between the neighboring atoms (ignoring the dummy atoms)
-    if bond_type == 'single':
-        editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=rdchem.BondType.SINGLE)
-    else:
-        # Get the highest allowed bond order for the neighboring atoms
-        neighbor_atom1 = mol1.GetAtomWithIdx(neighbor_atom_idx1)
-        neighbor_atom2 = mol2.GetAtomWithIdx(neighbor_atom_idx2-mol1.GetNumAtoms())
-        max_bond_atom_idx1 = neighbor_atom1.GetTotalNumHs() + 1 # +1 for the attatchment point
-        max_bond_atom_idx2 = neighbor_atom2.GetTotalNumHs() + 1
-        max_bond = min([max_bond_atom_idx1, max_bond_atom_idx2])
-        possible_bonds = [
-            rdchem.BondType.SINGLE,
-            rdchem.BondType.DOUBLE,
-            rdchem.BondType.TRIPLE,
-        ][0:max_bond]
-        if bond_type == 'rand_uniform':
-            if rand_generator is None:
-                rand_generator = random
-            sampled_bond = rand_generator.choice(possible_bonds)
-            editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=sampled_bond)
-        elif bond_type == 'double' and len(possible_bonds) > 1:
-            editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=rdchem.BondType.DOUBLE)
-        elif bond_type == 'triple' and len(possible_bonds) > 2:
-            editable_mol.AddBond(neighbor_atom_idx1, neighbor_atom_idx2, order=rdchem.BondType.TRIPLE)
-        else:
-            raise ValueError(f"Invalid bond type requested: {bond_type}. Highest bond order allowed: {possible_bonds[-1]}.")
-
-    # Calculate the adjusted index for the attachment point in mol2
-    adjusted_atom_idx2 = atom_idx2 + mol1.GetNumAtoms()
-
-    # Remove the dummy atoms - IMPORTANT: remove the atom with the higher index first!
-    max_idx = max(atom_idx1, adjusted_atom_idx2)
-    min_idx = min(atom_idx1, adjusted_atom_idx2)
-
-    editable_mol.RemoveAtom(max_idx)
-    editable_mol.RemoveAtom(min_idx)
-
-    # Get the modified molecule
-    modified_mol = editable_mol.GetMol()
-
-    # Sanitize the molecule to ensure its chemical validity
-    Chem.SanitizeMol(modified_mol)
-
-    # # Reassign stereochemistry
-    # Chem.AssignStereochemistry(modified_mol, force=True, cleanIt=True)
-
-    return modified_mol
-
-
-def get_boundary_bondtype(mol: Chem.Mol, bondtype_count: Optional[Dict[str, int]] = None) -> Dict[str, int]:
-    """
-    Get the count of different bond types connected to dummy atoms in a molecule.
-
-    Args:
-        mol (Chem.Mol): The molecule to analyze.
-        bondtype_count (Optional[Dict[str, int]]): A dictionary to store the count of different bond types.
-            Defaults to None.
+        mol: RDKit Mol object with dummy atoms.
 
     Returns:
-        Dict[str, int]: A dictionary containing the count of different bond types connected to dummy atoms.
-            The keys are the bond types ('SINGLE', 'DOUBLE', 'TRIPLE') and the values are the corresponding counts.
+        A new RDKit Mol object without dummy atoms.
     """
-    if bondtype_count is None:
-        bondtype_count = {'SINGLE': 0, 'DOUBLE': 0, 'TRIPLE': 0}
-    bondtype_to_str = {
-        Chem.rdchem.BondType.SINGLE: 'SINGLE',
-        Chem.rdchem.BondType.DOUBLE: 'DOUBLE',
-        Chem.rdchem.BondType.TRIPLE: 'TRIPLE',
-    }
+    return_smiles = False
+    if isinstance(mol, str):
+        return_smiles = True
+        mol = Chem.MolFromSmiles(mol)
+    
+    if mol is None:
+        return None
+    
+    # Remove all dummy atoms with a query
+    mol_no_dummy = Chem.DeleteSubstructs(mol, Chem.MolFromSmarts('[#0]'))
 
-    # Find dummy atoms by symbol or index
-    dummy_atoms = [atom.GetIdx() for atom in mol.GetAtoms()
-                   if atom.GetSymbol() == '*']
-    # reverse to avoid index shifting issues
-    for dummy_atom_idx in reversed(dummy_atoms):
-        # identify the order of the bond
-        atom = mol.GetAtomWithIdx(dummy_atom_idx)
-        neighbors = atom.GetNeighbors()
+    if mol_no_dummy is None:
+        # --------------------------------------------------------------------------
+        # Other approach: editing molecule and removing dummy atoms
+        # --------------------------------------------------------------------------
+        # Create an editable molecule to remove atoms
+        editable_mol = Chem.EditableMol(mol)
+        
+        # List of atoms to remove (dummy atoms have atomic number 0)
+        dummy_atoms = [atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomicNum() == 0]
+        
+        # Remove dummy atoms
+        for atom_idx in sorted(dummy_atoms, reverse=True):  # Remove from the highest index to avoid index shifts
+            editable_mol.RemoveAtom(atom_idx)
+        
+        if editable_mol is None:
+            return None
 
-        for neighbour_atom in neighbors:
-            neighbour_idx = neighbour_atom.GetIdx()
-            dummy_atom_bond = mol.GetBondBetweenAtoms(
-                dummy_atom_idx, neighbour_idx)
-            dummy_atom_bondtype = dummy_atom_bond.GetBondType()
-            bondtype_count[bondtype_to_str[dummy_atom_bondtype]] += 1
+        # Return the modified molecule
+        if return_smiles:
+            return Chem.MolToSmiles(editable_mol.GetMol())
+        editable_mol = editable_mol.GetMol()
+        editable_mol.UpdatePropertyCache()
+        return editable_mol
+        # --------------------------------------------------------------------------
 
-    return bondtype_count
+    # Return the modified molecule
+    if return_smiles:
+        return Chem.MolToSmiles(mol_no_dummy, canonical=canonical)
+    return mol_no_dummy
+
 
 def dummy2query(mol: Chem.Mol) -> Chem.Mol:
     """ Converts dummy atoms to query atoms, so that a molecule with attachment points can be used in HasSubstructMatch.
@@ -338,6 +260,7 @@ def dummy2query(mol: Chem.Mol) -> Chem.Mol:
     p = Chem.AdjustQueryParameters.NoAdjustments()
     p.makeDummiesQueries = True
     return Chem.AdjustQueryProperties(mol, p)
+
 
 def get_substr_match(
         protac_mol: Chem.Mol,
@@ -404,26 +327,6 @@ def remove_attach_atom(mol: Chem.Mol, attach_id: int, sanitize: bool = False) ->
     return new_mol
 
 
-def get_anonymous_mol(mol: Chem.Mol) -> str:
-    """
-    Get the anonymous graph representation of a molecule.
-
-    Args:
-        mol (rdkit.Chem.rdchem.Mol): The input molecule.
-
-    Returns:
-        str: The anonymous graph representation of the molecule.
-
-    Raises:
-        ValueError: If there is an error processing the molecule.
-    """
-    try:
-        return rdMolHash.MolHash(mol, rdMolHash.HashFunction.AnonymousGraph)
-    except:
-        raise ValueError(
-            f"Error processing molecule with rdMolHash.HashFunction.AnonymousGraph")
-
-
 def get_bond_idx(smi: str, bonds_start_end_atoms: List[List[int]]) -> List[int]:
     """
     Get the indices of bonds in a molecule that match the given start and end atom indices.
@@ -449,3 +352,140 @@ def get_bond_idx(smi: str, bonds_start_end_atoms: List[List[int]]) -> List[int]:
             bond_indices.append(bond.GetIdx())
 
     return bond_indices
+
+
+def get_mol_id(smiles: str) -> str | None:
+    """ Get the Hash of a given SMILES string.
+    
+    Args:
+        smiles (str): The SMILES string to hash.
+
+    Returns:
+        str | None: The Hash of the SMILES string. None if the function failed.
+    """
+    if smiles is None:
+        print("Error: SMILES is None.")
+        return None
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+    except Exception as e:
+        print(f"Error: {e}")
+        print(f"SMILES: {smiles}")
+        return None
+    if mol is None:
+        return None
+    # Remove stereochemistry from the molecule
+    try:
+        Chem.RemoveStereochemistry(mol)
+    except:
+        return None
+    # Get the InChIKey for the molecule
+    inchi_key = Chem.MolToInchiKey(mol)
+    smiles = Chem.MolToSmiles(mol, canonical=True)
+    return sha256((inchi_key + smiles).encode()).hexdigest()
+
+
+def get_atom_idx_at_attachment(
+        protac: Chem.Mol,
+        substruct: Chem.Mol,
+        linker: Optional[Chem.Mol] = None,
+        timeout: Optional[int | float] = None,
+        return_dict: bool = False,
+        verbose: int = 0,
+) -> List[int]:
+    """ Get the atom index of the attachment point of a substructure in the PROTAC molecule.
+
+    Args:
+        protac: The PROTAC molecule.
+        substruct: The substructure of the PROTAC that contains the attachment point, e.g., the POI or E3 ligase.
+        linker: The linker molecule.
+        verbose: Verbosity level.
+    
+    Returns:
+        List[int]: The two atom indices at the attachment point.
+    """
+    if linker is None:
+        # Get the "other" substructure, i.e., replace side chain of PROTAC using the substruct
+        linker = Chem.DeleteSubstructs(protac, remove_dummy_atoms(substruct), useChirality=True)
+        if timeout is None:
+            timeout = 60
+            logging.warning(f'No timeout set when linker is not provided, using default value of {timeout} seconds.')
+
+    substruct_match = set(protac.GetSubstructMatch(dummy2query(substruct), useChirality=True))
+    if verbose:
+        print(f'Substruct match: {substruct_match}')
+    
+    linker_no_dummy = remove_dummy_atoms(linker)
+    if verbose:
+        print(f'Linker without dummy atoms found.')
+
+    max_matches = 2
+    linker_match = set()
+    shared_atoms = set()
+
+    # NOTE: The following is a hacky way to speed up the search for linker
+    # matches. In fact, the linker can be quite short, so it might match in
+    # multiple places of the PROTAC molecule.
+    # If the number of max matches in GetSubstructMatches is low, then the
+    # search tends to be faster, but imprecise. However, we are interested in
+    # the interesection of the matches, so we can progressively increase the
+    # number of max matches until we find a single atom in common.
+    while len(shared_atoms) != 1 and max_matches <= 50:
+        if timeout is None:
+            linker_matches = list(protac.GetSubstructMatches(linker_no_dummy, useChirality=True, maxMatches=max_matches))
+        else:
+            linker_matches = GetSubstructMatchesWithTimeout(protac, linker_no_dummy, useChirality=True, maxMatches=max_matches, timeout=timeout)
+        if verbose:
+            print(f'Linker matches: {linker_matches}')
+
+        if not linker_matches:
+            # return None
+            linker_match = set()
+            shared_atoms = set()
+            max_matches += 1
+            continue
+
+        for match in linker_matches:
+            shared_atoms = set(match) & set(substruct_match)
+            linker_match = match
+            if len(shared_atoms) == 1:
+                if verbose:
+                    print(f'Shared atoms: {list(shared_atoms)}')
+                break
+
+        if len(shared_atoms) != 1:
+            linker_match = set()
+            shared_atoms = set()
+            max_matches += 1
+
+    if not shared_atoms:
+        if verbose:
+            print('No shared atoms found.')
+        return None
+
+    attachment_idx = list(shared_atoms)
+    attachments = {'substruct': attachment_idx[0]}
+
+    # Get the other atom at the attachment point that is NOT in the linker
+    for neighbor in protac.GetAtomWithIdx(attachment_idx[0]).GetNeighbors():
+        if neighbor.GetIdx() not in linker_match:
+            attachment_idx.append(neighbor.GetIdx())
+            attachments['linker'] = neighbor.GetIdx()
+            break
+
+    if verbose:
+        display_mol(substruct)
+        display_mol(linker)
+
+        # Get the bond idx between the attachment atoms
+        bond = protac.GetBondBetweenAtoms(*attachment_idx)
+
+        # Show te bonds in cyan
+        img = Draw.MolToImage(protac, highlightAtoms=attachment_idx, highlightBonds=[bond.GetIdx()], size=(800, 500), highlightAtomColors={attachment_idx[0]: (0, 255, 255), attachment_idx[1]: (0, 255, 255)})
+        safe_display(img)
+    
+    if return_dict:
+        return attachments
+    return attachment_idx
+
+
