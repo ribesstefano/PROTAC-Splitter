@@ -17,5 +17,4 @@ from protac_splitter.display_utils import (
     display_mol,
 )
 from protac_splitter.evaluation import check_reassembly
-from protac_splitter.data.curation.timeout_utils import GetSubstructMatchesWithTimeout
 

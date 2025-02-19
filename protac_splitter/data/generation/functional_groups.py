@@ -196,7 +196,7 @@ def get_functional_groups_distributions(
         load_from_file: bool = True,
         verbose: int = 0,
 ) -> Dict[str, Dict[str, set]]:
-    """ Get the distributions of functional groups at attachment points in PROTACs.
+    """ Get the distributions of functional groups at attachment points in a dataframe of PROTACs.
     
     The input dataframe should contain the following columns:
         - 'PROTAC SMILES': The SMILES of the PROTAC.
@@ -266,7 +266,7 @@ def get_functional_groups_distributions(
             print(f'E3: {e3_smiles}')
             print('-' * 80)
 
-        # We a bit of care with the linker, as it can be empty
+        # We have a bit of care with the linker, as it can be empty
         try:
             _ = Chem.molzip(Chem.MolFromSmiles('.'.join([poi_smiles, linker_smiles, e3_smiles])))
         except:
