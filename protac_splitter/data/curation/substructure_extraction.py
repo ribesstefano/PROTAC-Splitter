@@ -19,103 +19,6 @@ from protac_splitter.display_utils import (
 from protac_splitter.evaluation import check_reassembly
 
 
-def get_atom_idx_at_attachment(
-        protac: Chem.Mol,
-        substruct: Chem.Mol,
-        linker: Chem.Mol,
-        timeout: Optional[Union[int, float]] = None,
-        return_dict: bool = False,
-        return_img: bool = False,
-        verbose: int = 0,
-        image_kwargs: Dict[str, Any] = {},
-) -> List[int]:
-    """ Get the atom index of the attachment point of a substructure in the PROTAC molecule.
-
-    Args:
-        protac: The PROTAC molecule.
-        substruct: The substructure of the PROTAC that contains the attachment point, e.g., the POI or E3 ligase.
-        linker: The linker molecule.
-        verbose: Verbosity level.
-    
-    Returns:
-        List[int]: The two atom indices at the attachment point.
-    """
-    substruct_match = set(protac.GetSubstructMatch(dummy2query(substruct), useChirality=True))
-    if verbose:
-        print(f'Substruct match: {substruct_match}')
-    
-    linker_no_dummy = remove_dummy_atoms(linker)
-    if verbose:
-        print(f'Linker without dummy atoms found.')
-
-    if timeout is None:
-        linker_matches = list(protac.GetSubstructMatches(linker_no_dummy, useChirality=True, maxMatches=50))
-    else:
-        linker_matches = GetSubstructMatchesWithTimeout(protac, linker_no_dummy, useChirality=True, maxMatches=50, timeout=timeout)
-    if verbose:
-        print(f'Linker matches: {linker_matches}')
-    
-    if not linker_matches:
-        return None
-
-    shared_atoms = None
-    linker_match = None
-    for match in linker_matches:
-        shared_atoms = set(match) & set(substruct_match)
-        linker_match = match
-        if len(shared_atoms) == 1:
-            if verbose:
-                print(f'Shared atoms: {list(shared_atoms)}')
-            break
-
-    if not shared_atoms:
-        if verbose:
-            print('No shared atoms found.')
-        return None
-
-    attachment_idx = list(shared_atoms)
-    attachments = {'substruct': attachment_idx[0]}
-
-    # Get the other atom at the attachment point that is NOT in the linker
-    for neighbor in protac.GetAtomWithIdx(attachment_idx[0]).GetNeighbors():
-        if neighbor.GetIdx() not in linker_match:
-            attachment_idx.append(neighbor.GetIdx())
-            attachments['linker'] = neighbor.GetIdx()
-            break
-
-    if verbose:
-        display_mol(substruct)
-        display_mol(linker)
-
-    if return_img or verbose:
-        # Get the bond idx between the attachment atoms
-        bond = protac.GetBondBetweenAtoms(*attachment_idx)
-
-        # Show te bonds in cyan
-        img = Draw.MolToImage(
-            protac,
-            highlightAtoms=attachment_idx,
-            highlightBonds=[bond.GetIdx()],
-            size=(800, 500),
-            highlightAtomColors={
-                attachment_idx[0]: (0, 255, 255),
-                attachment_idx[1]: (0, 255, 255),
-            },
-            **image_kwargs,
-        )
-    
-    if verbose:
-        safe_display(img)
-    
-    if return_img:
-        return img
-
-    if return_dict:
-        return attachments
-
-    return attachment_idx
-
-
 def get_substructs_from_mapped_linker(
         protac_smiles: str,
         linker_smiles: str,
@@ -496,3 +399,188 @@ def get_substructure_from_non_perfect_match(
         return None
 
     return substruct_mol
+
+
+def get_mapped_substr_from_protac(
+        protac: Chem.Mol,
+        substr: Chem.Mol,
+        attachment_id: int = 1,
+) -> Optional[Chem.Mol]:
+    """ Get the mapped substructure from a PROTAC molecule and an unmapped substructure.
+    
+    Args:
+        protac: The PROTAC molecule.
+        substr: The unmapped substructure.
+        attachment_id: The attachment point ID to be assigned to the substructure.
+    
+    Returns:
+        The mapped substructure molecule. None if the function fails to find the substructure.
+    """
+    num_matches = len(protac.GetSubstructMatches(substr, useChirality=True))
+    if num_matches != 1:
+        return None
+    other_substr = Chem.ReplaceCore(protac, substr, labelByIndex=False, replaceDummies=False)
+    if other_substr is None:
+        return None
+    mapped_substr = Chem.ReplaceCore(protac, remove_dummy_atoms(other_substr), labelByIndex=False, replaceDummies=False)
+    if mapped_substr is None:
+        return None
+    mapped_smiles = Chem.MolToSmiles(mapped_substr, canonical=True)
+    # Replace "[1*]" or "[2*]" with the correct attachment point with a regex
+    mapped_smiles = re.sub(r'\[(\d+)\*\]', f'[*:{attachment_id}]', mapped_smiles)
+    mapped_smiles = canonize(mapped_smiles)
+    if mapped_smiles is None:
+        return None
+    return Chem.MolFromSmiles(mapped_smiles)
+
+
+def get_substructs_from_substr_and_linker(
+        protac_smiles: str,
+        protac: Chem.Mol,
+        substr: Chem.Mol,
+        linker: Chem.Mol,
+        attachment_id: int = 1,
+        poi_attachment_id: int = 1,
+        e3_attachment_id: int = 2,
+        verbose: int = 0,
+        stats: Counter = None,
+) -> Optional[Dict[str, str]]:
+    """ Get the substructures of a PROTAC molecule from an unmapped substructure and linker.
+
+    Args:
+        protac_smiles: The SMILES of the PROTAC molecule.
+        protac: The RDKit molecule object of the PROTAC.
+        substr: The RDKit molecule object of the currently matching substructure. Should be UNMAPPED.
+        linker: The RDKit molecule object of the linker.
+        attachment_id: The attachment point ID of the currently matching substructure.
+        verbose: The verbosity level.
+    
+    Returns:
+        Dict: The substructures of the PROTAC molecule. None if the function fails to find the substructures.
+    """
+    if attachment_id not in [poi_attachment_id, e3_attachment_id]:
+        raise ValueError('Attachment ID must be either 1 or 2')
+    
+    if substr is None:
+        return None
+    
+    subr_matches = list(protac.GetSubstructMatches(substr, useChirality=True))
+    if len(subr_matches) != 1:
+        if stats is not None:
+            stats['multiple substructure matches'] += 1
+        if verbose:
+            print('ERROR: Multiple substructure matches')
+        return None
+    subr_match = subr_matches[0]
+
+    mapped_substr = get_mapped_substr_from_protac(protac, substr, attachment_id)
+    if mapped_substr is None:
+        if stats is not None:
+            stats['mapped substructure not found'] += 1
+        if verbose:
+            print('ERROR: Mapped substructure not found')
+        return None
+
+    linker_matches = protac.GetSubstructMatches(remove_dummy_atoms(linker), useChirality=True)
+    for linker_match in linker_matches:
+        # Check that the intersection between the substructure and the linker
+        # matches is only one atom, i.e., the attachment point
+        if len(set(subr_match).intersection(linker_match)) == 1:
+            linker_match = linker_match
+            break
+
+    # Based on the linker match found, remove it from the PROTAC
+    emol = Chem.EditableMol(protac)
+
+    # Remove atoms in descending order of their indices
+    for idx in sorted(linker_match, reverse=True):
+        emol.RemoveAtom(idx)
+    # Get the modified molecule
+    try:
+        protac_fragments = emol.GetMol()
+    except Exception as e:
+        if verbose:
+            print(e)
+        return None
+    try:
+        Chem.SanitizeMol(protac_fragments)
+    except Exception as e:
+        if verbose:
+            print(e)
+        return None
+    if verbose:
+        img = Draw.MolToImage(protac_fragments, highlightAtoms=linker_match, size=(800, 300))
+        safe_display(img)
+
+    # Get the fragments after removing the linker
+    try:
+        fragments = Chem.GetMolFrags(protac_fragments, asMols=True, sanitizeFrags=True)
+    except Exception as e:
+        if verbose:
+            print(e)
+        return None
+
+    if len(fragments) != 2:
+        if stats is not None:
+            stats['multiple fragments after removing the linker'] += 1
+        if verbose:
+            for frag in fragments:
+                safe_display(frag)
+            print('ERROR: Multiple fragments after removing the linker')
+        return None
+    
+    substructs = {}
+    substructs['linker'] = Chem.MolToSmiles(linker, canonical=True)
+    for frag in fragments:
+        if frag.HasSubstructMatch(substr, useChirality=True):
+            label = 'e3' if attachment_id == e3_attachment_id else 'poi'
+            substructs[label] = Chem.MolToSmiles(mapped_substr, canonical=True)
+            # Replace "[1*]" or "[2*]" with the correct attachment point with a regex
+            substructs[label] = re.sub(r'\[(\d+)\*\]', f'[*:{attachment_id}]', substructs[label])
+            if verbose:
+                print(f'Found {label.capitalize()} fragment.')
+                img = Draw.MolToImage(Chem.MolFromSmiles(substructs[label]), size=(800, 300))
+                safe_display(img)
+        else:
+            label = 'e3' if attachment_id == poi_attachment_id else 'poi'
+            other_attachment_id = e3_attachment_id if label == 'e3' else poi_attachment_id
+
+            other_substr = get_mapped_substr_from_protac(protac, frag, other_attachment_id)
+            if other_substr is None:
+                return None
+            substructs[label] = Chem.MolToSmiles(other_substr, canonical=True)
+
+            if verbose:
+                print(f'Found {label.capitalize()} fragment.')
+                img = Draw.MolToImage(Chem.MolFromSmiles(substructs[label]), size=(800, 300))
+                safe_display(img)
+    # Canonicalize the SMILES strings
+    substructs = {k: canonize(v) for k, v in substructs.items()}
+
+    # Check that the reassembled PROTAC matches the original PROTAC
+    if not check_reassembly(protac_smiles, '.'.join(substructs.values()), stats, verbose):
+        return None
+
+    return substructs
+
+
+def swap_attachment_points(
+        s: str,
+        poi_attachment_id: int = 1,
+        e3_attachment_id: int = 2,
+) -> str:
+    """ Swaps the attachment points in a SMARTS string.
+    
+    Args:
+        s: The input SMARTS string.
+
+    Returns:
+        The SMARTS string with the attachment points swapped.
+    """
+    tmp_e3_id = '^^^^E3^^^^'
+    tmp_poi_id = '^^^^POI^^^^'
+    s = s.replace(f'[*:{poi_attachment_id}]', f'[*:{tmp_poi_id}]')
+    s = s.replace(f'[*:{e3_attachment_id}]', f'[*:{tmp_e3_id}]')
+    s = s.replace(f'[*:{tmp_poi_id}]', f'[*:{e3_attachment_id}]')
+    s = s.replace(f'[*:{tmp_e3_id}]', f'[*:{poi_attachment_id}]')
+    return canonize(s)

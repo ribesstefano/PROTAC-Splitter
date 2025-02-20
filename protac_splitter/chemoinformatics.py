@@ -1,17 +1,10 @@
 import logging
-from typing import List, Any, Union, Optional
+from typing import List, Union, Optional
 from multiprocessing import Process, Queue
 from hashlib import sha256
 
-import numpy as np
-from tqdm import tqdm
-from rdkit import Chem, DataStructs
-from rdkit.Chem import (
-    rdFingerprintGenerator,
-    Draw,
-)
-
-from protac_splitter.display_utils import safe_display, display_mol
+from rdkit import Chem
+from rdkit.Chem import rdFingerprintGenerator
 
 
 def GetSubstructMatchesWithTimeout(
@@ -472,17 +465,6 @@ def get_atom_idx_at_attachment(
             attachment_idx.append(neighbor.GetIdx())
             attachments['linker'] = neighbor.GetIdx()
             break
-
-    if verbose:
-        display_mol(substruct)
-        display_mol(linker)
-
-        # Get the bond idx between the attachment atoms
-        bond = protac.GetBondBetweenAtoms(*attachment_idx)
-
-        # Show te bonds in cyan
-        img = Draw.MolToImage(protac, highlightAtoms=attachment_idx, highlightBonds=[bond.GetIdx()], size=(800, 500), highlightAtomColors={attachment_idx[0]: (0, 255, 255), attachment_idx[1]: (0, 255, 255)})
-        safe_display(img)
     
     if return_dict:
         return attachments
