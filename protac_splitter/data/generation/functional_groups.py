@@ -22,7 +22,7 @@ def get_functional_group_at_attachment(
         substruct: Chem.Mol,
         linker: Chem.Mol,
         n_hops: int = 1,
-        timeout: Optional[int | float] = None,
+        timeout: Optional[Union[int, float]] = None,
         return_dict: bool = False,
         verbose: int = 0,
 ) -> Union[str, Dict[str, str]]:

@@ -7,6 +7,10 @@ from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
 
 
+def GetSubstructMatchesWorker(q, mol, substruct, useChirality, maxMatches):
+    q.put(list(mol.GetSubstructMatches(substruct, useChirality=useChirality, maxMatches=maxMatches)))
+
+
 def GetSubstructMatchesWithTimeout(
     mol: Chem.Mol,
     substruct: Chem.Mol,
@@ -26,11 +30,11 @@ def GetSubstructMatchesWithTimeout(
     Returns:
         Optional[List[List[int]]]: A list of lists containing the atom indices of the substructure matches. Returns None if the search times out or failed.
     """
-    def worker(q, mol, substruct, useChirality, maxMatches):
-        q.put(list(mol.GetSubstructMatches(substruct, useChirality=useChirality, maxMatches=maxMatches)))
-
     q = Queue()
-    p = Process(target=worker, args=(q, mol, substruct, useChirality, maxMatches))
+    p = Process(
+        target=GetSubstructMatchesWorker,
+        args=(q, mol, substruct, useChirality, maxMatches),
+    )
     p.start()
     p.join(timeout)
 
@@ -382,7 +386,7 @@ def get_atom_idx_at_attachment(
         protac: Chem.Mol,
         substruct: Chem.Mol,
         linker: Optional[Chem.Mol] = None,
-        timeout: Optional[int | float] = None,
+        timeout: Optional[Union[int, float]] = None,
         return_dict: bool = False,
         verbose: int = 0,
 ) -> List[int]:
