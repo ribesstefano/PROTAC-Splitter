@@ -87,6 +87,7 @@ def process_data_to_model_inputs(
     # batch["labels"] = [[-100 if token == tokenizer.pad_token_id else token for token in labels] for labels in batch["labels"]]
     return batch
 
+
 def get_fragments_in_labels(labels: str, linkers_only_as_labels: bool = True) -> list[str]:
     """ Get the fragments in the labels.
     
@@ -122,6 +123,7 @@ def load_tokenized_dataset(
         cache_dir: Optional[str] = None,
         all_fragments_as_labels: bool = True,
         linkers_only_as_labels: bool = False,
+        causal_language_modeling: bool = False,
 ) -> Dataset:
     """ Load dataset and tokenize it.
     
@@ -188,12 +190,27 @@ def load_tokenized_dataset(
             desc="Randomizing SMILES",
         )
         print(f"Randomized SMILES in dataset. Length: {dataset.num_rows}")
+    
+    if causal_language_modeling:
+        dataset = dataset.map(
+            lambda x: {
+                "text": x["text"] + "." + x["labels"],
+                "labels": x["labels"],
+            },
+            batched=False,
+            num_proc=num_proc_map,
+            load_from_cache_file=True,
+            desc="Setting labels to text",
+        )
+        print(f"Set labels to text. Length: {dataset.num_rows}")
 
+    # NOTE: Remove the "labels" column if causal language modeling, since the
+    # DataCollatorForLM will automatically set the labels to the input_ids.
     dataset = dataset.map(
         process_data_to_model_inputs,
         batched=True,
         batch_size=batch_size,
-        remove_columns=["text"],
+        remove_columns=["text", "labels"] if causal_language_modeling else ["text"],
         fn_kwargs={
             "tokenizer": tokenizer,
             "encoder_max_length": encoder_max_length,

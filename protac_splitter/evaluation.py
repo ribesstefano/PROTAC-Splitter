@@ -124,13 +124,13 @@ def check_reassembly(
         protac_smiles (str): The original PROTAC SMILES.
         ligands_smiles (str): The SMILES of the joined PROTAC ligands, separated by a "." (dot).
         stats (Optional[Dict[str, int]]): A dictionary to store statistics about the reassembly process.
-        linker_can_be_null (bool): If True, the linker can be empty and a special check is performed.
+        linker_can_be_null (bool): If False, the linker cannot be empty, and if so, a None will be returned. If True, a special check is performed to rename the E3 and WH attchament points to assemble them together.
         poi_attachment_id (int): The label of the attachment point for the POI ligand, i.e., "[*:{poi_attachment_id}]". Default is 1.
         e3_attachment_id (int): The label of the attachment point for the E3 binder, i.e., "[*:{e3_attachment_id}]". Default is 2.
         verbose (int): The verbosity
 
     Returns:
-        bool: True if the reassembled PROTAC matches the original PROTAC SMILES, False otherwise.
+        bool: True if the reassembled PROTAC matches the original PROTAC SMILES, False otherwise. None if it failed.
     """
     ligands_smiles = canonize_smiles(ligands_smiles)
     if ligands_smiles is None:

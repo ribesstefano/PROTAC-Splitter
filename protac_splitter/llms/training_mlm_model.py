@@ -18,7 +18,7 @@ from .hf_utils import (
     delete_hf_repository,
     repo_exists,
 )
-from .model_utils import get_model
+from .model_utils import get_encoder_decoder_model
 
 
 def compute_metrics_for_mlm(pred) -> Dict[str, float]:
@@ -176,7 +176,7 @@ def train_mlm_model(
     print("Dataset loaded.")
 
     # Setup the model for `model_init` in the Trainer
-    bert2bert = lambda: get_model(
+    bert2bert = lambda: get_encoder_decoder_model(
         pretrained_encoder=pretrained_encoder,
         pretrained_decoder=pretrained_decoder,
         max_length=encoder_max_length,

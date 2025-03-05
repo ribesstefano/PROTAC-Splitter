@@ -10,12 +10,16 @@ import torch
 import numpy as np
 import huggingface_hub as hf
 from transformers import (
+    Trainer,
+    TrainingArguments,
     Seq2SeqTrainer,
     Seq2SeqTrainingArguments,
     DataCollatorForSeq2Seq,
+    DataCollatorForLanguageModeling,
     AutoTokenizer,
     GenerationConfig,
     TrainerCallback,
+    set_seed,
 )
 from accelerate.utils import write_basic_config
 from accelerate import Accelerator
@@ -38,7 +42,7 @@ from .hf_utils import (
     delete_hf_repository,
     repo_exists,
 )
-from .model_utils import get_model
+from .model_utils import get_encoder_decoder_model, get_causal_model
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Use GPU with index 0
 # logging.basicConfig(level=logging.DEBUG)
@@ -196,6 +200,7 @@ def get_best_hyperparameters(
         training_args: Dict[str, Any],
         num_optuna_trials: int,
         lr_scheduler_type: Optional[str] = None,
+        causal_language_modeling: bool = False,
 ) -> Tuple[float, Dict[str, Any], Dict[str, Any]]:
     """Runs an Optuna hyperparameter search to find the best hyperparameters.
 
@@ -275,26 +280,34 @@ def get_best_hyperparameters(
     hp_training_args["eval_delay"] = 5000 # TODO: Double check if this is needed
     hp_training_args["logging_steps"] = 500
     hp_training_args["save_steps"] = 5000
-    # Use greedy decoding for the hyperparameter search
-    hp_training_args["generation_config"] = GenerationConfig(
-        max_length=512,
-        max_new_tokens=512,
-        do_sample=False,
-        num_beams=1,
-    )
+    if not causal_language_modeling:
+        # Use greedy decoding for the evaluation during HP search
+        hp_training_args["generation_config"] = GenerationConfig(
+            max_length=512,
+            max_new_tokens=512,
+            do_sample=False,
+            num_beams=1,
+        )
 
     print("Hyperparameter search training arguments:")
     for k, v in hp_training_args.items():
         if 'token' in k:
             continue
         print(f"  - {k}: {v}")
+        
+    if causal_language_modeling:
+        TrainerClass = Trainer
+        TrainingArgumentsClass = TrainingArguments
+    else:
+        TrainerClass = Seq2SeqTrainer
+        TrainingArgumentsClass = Seq2SeqTrainingArguments
 
     # Setup a "fake" Trainer for the hyperparameter search
-    trainer = Seq2SeqTrainer(
+    trainer = TrainerClass(
         model_init=model_init,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        args=Seq2SeqTrainingArguments(**hp_training_args),
+        args=TrainingArgumentsClass(**hp_training_args),
         compute_metrics=compute_metrics,
         train_dataset=dataset_tokenized["train"],
         eval_dataset=dataset_tokenized["validation"],
@@ -328,8 +341,12 @@ def get_best_hyperparameters(
     )
 
     # Set the best hyperparameters in the original Trainer arguments
-    print("-" * 80)
-    print(f"Best trial objective: {best_run.objective:.4f}. Summary: {best_run.run_summary}")
+    try:
+        print("-" * 80)
+        print(f"Best trial objective: {best_run.objective:.4f}. Summary: {best_run.run_summary}")
+    except Exception as e:
+        print(e)
+        print("WARNING. Best trial objective could not be printed.")
 
     return best_run, hp_training_args
 
@@ -370,6 +387,7 @@ def train_model(
         warmup_ratio: Optional[float] = None,
         num_cycles: Optional[int] = None,
         warmup_steps: Optional[int] = None,
+        causal_language_modeling: bool = False,
 ):
     """Trains a model on a given dataset.
     
@@ -396,6 +414,8 @@ def train_model(
         resume_from_checkpoint (Optional[str], optional): The checkpoint to resume training from. Defaults to None.
         num_optuna_trials (int, optional): The number of Optuna trials. Defaults to 0, i.e., no Optuna hyperparameter search.
     """
+    set_seed(42)
+
     # if torch.cuda.is_available():
     #     write_basic_config(mixed_precision='fp16')
     accelerator = Accelerator()
@@ -458,31 +478,46 @@ def train_model(
         randomize_smiles_prob=randomize_smiles_prob,
         all_fragments_as_labels=all_fragments_as_labels,
         linkers_only_as_labels=linkers_only_as_labels,
-    )
-    # Precompute a "length" column for the dataset using the map function
-    def add_length(x):
-        x["length"] = len(x["input_ids"])
-        return x
-    dataset_tokenized = dataset_tokenized.map(
-        add_length,
-        num_proc=num_proc_map,
+        causal_language_modeling=causal_language_modeling,
     )
     print("Dataset loaded.")
 
-    # Setup the model for `model_init` in the Trainer
-    bert2bert = lambda: get_model(
-        pretrained_encoder=pretrained_encoder,
-        pretrained_decoder=pretrained_decoder,
-        max_length=encoder_max_length,
-        tie_encoder_decoder=tie_encoder_decoder,
-    )
+    if causal_language_modeling:
+        # Setup the model for `model_init` in the Trainer
+        model_lambda = lambda: get_causal_model(
+            pretrained_model=pretrained_decoder,
+        )
 
-    # Setup the data collator, which will efficiently pad the inputs and targets
-    data_collator = DataCollatorForSeq2Seq(
-        tokenizer,
-        model=bert2bert(),
-        pad_to_multiple_of=32, # Default: None, Original: 8
-    )
+        # Setup the data collator, which will efficiently pad the inputs and targets
+        data_collator = DataCollatorForLanguageModeling(
+            tokenizer,
+            mlm=False,
+            pad_to_multiple_of=8, # Default: None, Original: 8
+        )
+    else:
+        # Precompute a "length" column for the dataset using the map function
+        def add_length(x):
+            x["length"] = len(x["input_ids"])
+            return x
+        dataset_tokenized = dataset_tokenized.map(
+            add_length,
+            num_proc=num_proc_map,
+        )
+
+        # Setup the model for `model_init` in the Trainer
+        model_lambda = lambda: get_encoder_decoder_model(
+            pretrained_encoder=pretrained_encoder,
+            pretrained_decoder=pretrained_decoder,
+            max_length=encoder_max_length,
+            tie_encoder_decoder=tie_encoder_decoder,
+        )
+
+        # Setup the data collator, which will efficiently pad the inputs and targets
+        data_collator = DataCollatorForSeq2Seq(
+            tokenizer,
+            model=model_lambda(),
+            pad_to_multiple_of=32, # Default: None, Original: 8
+        )
 
     # Setup the training arguments
     if per_device_train_batch_size is None:
@@ -490,13 +525,6 @@ def train_model(
     if per_device_eval_batch_size is None:
         per_device_eval_batch_size = batch_size // gradient_accumulation_steps
     if training_args is None:
-        generation_config = GenerationConfig(
-            max_length=512,
-            max_new_tokens=512,
-            do_sample=True,
-            num_beams=5,
-            temperature=1.0,
-        )
         training_args = {
             "output_dir": output_dir,
             # Optimizer-related configs
@@ -509,10 +537,6 @@ def train_model(
             "adam_beta1": 0.9, # NOTE: ChemFormer: 0.9
             "adam_beta2": 0.999, # NOTE: ChemFormer: 0.999
             "adam_epsilon": 1e-8, # Default: 1e-8
-            # Generation configs
-            "predict_with_generate": True,
-            "generation_config": generation_config,
-            "generation_max_length": 512,
             # Batch size, device, and performance optimizations configs
             "batch_eval_metrics": False, # Default: False
             "group_by_length": True,
@@ -563,45 +587,37 @@ def train_model(
             training_args["warmup_ratio"] = warmup_ratio
         if warmup_steps is not None:
             training_args["warmup_steps"] = warmup_steps
+            
+        # Add Generation configs
+        if not causal_language_modeling:
+            generation_config = GenerationConfig(
+                max_length=512,
+                max_new_tokens=512,
+                do_sample=True,
+                num_beams=5,
+                temperature=1.0,
+            )
+            training_args["generation_config"] = generation_config
+            training_args["predict_with_generate"] = True
+            training_args["generation_config"] = generation_config
+            training_args["generation_max_length"] = 512
 
     # Modify the training arguments with Optuna hyperparameter search
     best_trial = None
     if num_optuna_trials > 0:
         # Setup the compute_metrics function for the hyperparameter search
-
-        # def hp_compute_metrics(eval_pred, compute_result: bool = True) -> Optional[Dict[str, float]]:
-        #     # NOTE: For some reasons the eval_pred is now of type: transformers.tokenization_utils_base.BatchEncoding,
-        #     # which is similar to a dictionary containing the input_ids, attention_mask, etc.,
-        #     # so we just need to extract the input_ids.
-        #     eval_pred.inputs = eval_pred.inputs["input_ids"]
-
-        #     rouge = None
-        #     fpgen = None
-        #     hp_score_metric.update(decode_and_get_metrics(
-        #         eval_pred,
-        #         tokenizer=tokenizer,
-        #         rouge=rouge,
-        #         fpgen=fpgen,
-        #         compute_rdkit_metrics=False,
-        #         compute_graph_metrics=False,
-        #         num_proc=num_proc_map,
-        #     ))
-
-        #     if compute_result:
-        #         print(f"Collecting metrics in HP search ({compute_result=}).")
-        #         return hp_score_metric.compute()
-
         hp_compute_metrics = partial(
             decode_and_get_metrics,
             tokenizer=tokenizer,
             compute_rdkit_metrics=False,
             compute_graph_metrics=False,
             num_proc=num_proc_map,
+            causal_language_modeling=causal_language_modeling,
         )
 
         # Run the HP search (and update the training_args accordingly)
         best_run, hp_training_args = get_best_hyperparameters(
-            model_init=bert2bert,
+            model_init=model_lambda,
             tokenizer=tokenizer,
             data_collator=data_collator,
             compute_metrics=hp_compute_metrics,
@@ -609,6 +625,7 @@ def train_model(
             training_args=copy.deepcopy(training_args),
             lr_scheduler_type=lr_scheduler_type,
             num_optuna_trials=num_optuna_trials,
+            causal_language_modeling=causal_language_modeling,
         )
         best_objective = best_run.objective
         best_trial_number = best_run.run_id
@@ -658,26 +675,6 @@ def train_model(
         # Update the training arguments with the best hyperparameters
         training_args.update(hp_training_args)
 
-
-    # def compute_metrics(eval_pred, compute_result: bool = True) -> Optional[Dict[str, float]]:
-    #     # NOTE: For some reasons the eval_pred is now of type: transformers.tokenization_utils_base.BatchEncoding,
-    #     # which is similar to a dictionary containing the input_ids, attention_mask, etc.,
-    #     # so we just need to extract the input_ids.
-    #     eval_pred.inputs = eval_pred.inputs["input_ids"]
-
-    #     score_metric.update(decode_and_get_metrics(
-    #         eval_pred,
-    #         tokenizer=tokenizer,
-    #         compute_rdkit_metrics=False,
-    #         compute_graph_metrics=True,
-    #         num_proc=max(1, num_proc_map - 2), # NOTE: Use 2 less process for the metrics, since there will be a timeout logic
-    #     ))
-
-    #     if compute_result:
-    #         print(f"[{datetime.datetime.now()}] Collecting metrics ({compute_result=}).")
-    #         return score_metric.compute()
-
-
     # rouge = evaluate.load("rouge") # , cache_dir="/mimer/NOBACKUP/groups/naiss2023-6-290/stefano/.cache/huggingface/evaluate/")
     # fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
     #     radius=11,
@@ -693,14 +690,22 @@ def train_model(
         compute_rdkit_metrics=False,
         compute_graph_metrics=True,
         num_proc=max(1, num_proc_map - 2), # NOTE: Use 2 less process for the metrics, since there will be a timeout logic
+        causal_language_modeling=causal_language_modeling,
     )
 
+    if causal_language_modeling:
+        TrainerClass = Trainer
+        TrainingArgumentsClass = TrainingArguments
+    else:
+        TrainerClass = Seq2SeqTrainer
+        TrainingArgumentsClass = Seq2SeqTrainingArguments
+
     # Setup the Trainer and start training (no Optuna hyperparameter search)
-    trainer = Seq2SeqTrainer(
-        model_init=bert2bert,
+    trainer = TrainerClass(
+        model_init=model_lambda,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        args=Seq2SeqTrainingArguments(**training_args),
+        args=TrainingArgumentsClass(**training_args),
         compute_metrics=compute_metrics,
         train_dataset=dataset_tokenized["train"],
         eval_dataset=dataset_tokenized["test"],

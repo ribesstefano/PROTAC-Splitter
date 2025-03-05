@@ -1,6 +1,6 @@
 from typing import Union
 
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, EvalPrediction
 import numpy as np
 from rdkit import Chem, DataStructs
 import evaluate
@@ -40,7 +40,7 @@ def process_predictions(args) -> list:
 
 
 def decode_and_get_metrics(
-        pred,
+        pred: EvalPrediction,
         tokenizer: Union[AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
         rouge = None, # Optional[evaluate.metrics.rouge.Rouge] = None,
         fpgen = None, # Optional[Chem.rdFingerprintGenerator] = None,
@@ -49,11 +49,12 @@ def decode_and_get_metrics(
         num_proc: int = 1,
         batch_size: int = 128,
         use_nan_for_missing: bool = True,
+        causal_language_modeling: bool = False,
 ) -> dict[str, float]:
     """ Compute metrics for tokenized PROTAC predictions.
 
     Args:
-        pred (transformers.BatchEncoding): The predictions from the model.
+        pred (transformers.EvalPrediction): The predictions from the model.
         rouge (Rouge): The Rouge object to use for scoring. Example: `rouge = evaluate.load("rouge")`
         tokenizer (AutoTokenizer | str): The tokenizer to use for decoding the predictions. If a string, the tokenizer will be loaded using `AutoTokenizer.from_pretrained(tokenizer)`. Default: "seyonec/ChemBERTa-zinc-base-v1"
         fpgen (Chem.rdFingerprintGenerator): The fingerprint generator to use for computing the Tanimoto similarity. Default: `Chem.rdFingerprintGenerator.GetMorganGenerator(radius=8, fpSize=2048)`
@@ -65,23 +66,42 @@ def decode_and_get_metrics(
 
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    
-    input_ids = pred.inputs
+        
     labels_ids = pred.label_ids
     pred_ids = pred.predictions
+    input_ids = pred.inputs
+    
+    if causal_language_modeling:
+        # The prediction logits will be of shape: (batch_size, sequence_length, vocabulary_size)
+        # So we need to get the argmax of the last dimension to get the
+        # predicted token IDs.
+        # NOTE: Not exactly the same as what would happen during generation, but
+        # hopefully it's close enough to assess model performance during
+        # training.
+        pred_ids = np.argmax(pred_ids, axis=-1)
     
     # Replace -100 in the IDs with the tokenizer pad token id
     # NOTE: Check the `ignore_index` argument in nn.CrossEntropyLoss.
     # TODO: Understand why this needs to be done to the inputs as well
     ignore_index = -100
-    input_ids[input_ids == ignore_index] = tokenizer.pad_token_id
     labels_ids[labels_ids == ignore_index] = tokenizer.pad_token_id
     pred_ids[pred_ids == ignore_index] = tokenizer.pad_token_id
     
     # Get strings from IDs
-    input_str = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
     pred_str = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
     label_str = tokenizer.batch_decode(labels_ids, skip_special_tokens=True)
+
+    if not causal_language_modeling:
+        input_ids[input_ids == ignore_index] = tokenizer.pad_token_id
+        input_str = tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+    else:
+        # NOTE: For causal language models, i.e., decoder only, the input PROTAC
+        # is in the label. Therefore, we need to decode the label to get the
+        # input. The label looks something like "PROTAC.E3.Linker.WH", so we
+        # need to split it and get the last (three) parts.
+        input_str = [str(s.split('.')[0]) for s in label_str]
+        label_str = ['.'.join(s.split('.')[1:]) for s in label_str]
+        pred_str = ['.'.join(s.split('.')[1:]) if '.' in s else s for s in pred_str]
 
     # Get scores
     if num_proc == 1:

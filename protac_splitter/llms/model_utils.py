@@ -1,8 +1,13 @@
 from typing import Optional
-from transformers import AutoTokenizer, EncoderDecoderModel
+from transformers import (
+    AutoTokenizer,
+    EncoderDecoderModel,
+    AutoModelForCausalLM,
+)
 import torch
 
-def get_model(
+
+def get_encoder_decoder_model(
         pretrained_encoder: str = "seyonec/ChemBERTa-zinc-base-v1",
         pretrained_decoder: str = "seyonec/ChemBERTa-zinc-base-v1",
         max_length: Optional[int] = 512,
@@ -26,7 +31,7 @@ def get_model(
     )
     print(f"Number of parameters: {bert2bert.num_parameters():,}")
     tokenizer = AutoTokenizer.from_pretrained(pretrained_encoder)
-    # Tokenizer configs
+    # Tokenizer-related configs
     bert2bert.config.decoder_start_token_id = tokenizer.cls_token_id
     bert2bert.config.eos_token_id = tokenizer.sep_token_id
     bert2bert.config.pad_token_id = tokenizer.pad_token_id
@@ -68,3 +73,25 @@ def get_model(
     bert2bert.to(device)
 
     return bert2bert
+
+
+def get_causal_model(
+        pretrained_model: str = "seyonec/ChemBERTa-zinc-base-v1",
+        max_length: Optional[int] = 512,
+) -> AutoModelForCausalLM:
+    """ Get the causal language model for the PROTAC splitter.
+
+    Args:
+        pretrained_model (str): The pretrained model to use for the causal language model. Default: "seyonec/ChemBERTa-zinc-base-v1"
+        max_length (int): The maximum length of the input sequence. Default: 512
+
+    Returns:
+        AutoModelForCausalLM: The causal language model for the PROTAC splitter
+    """
+    model = AutoModelForCausalLM.from_pretrained(pretrained_model, is_decoder=True)
+    # model.is_decoder = True # It might not be necessary, but it's good to be explicit
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.to(device)
+
+    return model
