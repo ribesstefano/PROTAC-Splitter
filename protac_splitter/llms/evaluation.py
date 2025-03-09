@@ -64,6 +64,11 @@ def decode_and_get_metrics(
     """
     print(f"[{datetime.datetime.now()}] Starting decode_and_get_metrics (protac_splitter/llms/evaluation.py)")
 
+    if causal_language_modeling:
+        # NOTE: For causal language models, we only care about perplexity, so we
+        # only need the eval_loss, which is automatically added.
+        return {}
+
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
         
@@ -139,7 +144,7 @@ def decode_and_get_metrics(
         else:
             valid_values = values[~np.isnan(values)]
             aggregated_scores[k] = np.mean(valid_values) if valid_values.size > 0 else float('nan')
-    
+
     # Get Rouge score
     if rouge is not None:
         rouge_output = rouge.compute(predictions=pred_str, references=label_str)

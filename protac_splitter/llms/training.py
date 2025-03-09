@@ -5,6 +5,8 @@ import subprocess
 import copy
 import datetime
 import logging
+import math
+import json
 
 import torch
 import numpy as np
@@ -41,6 +43,7 @@ from .hf_utils import (
     create_hf_repository,
     delete_hf_repository,
     repo_exists,
+    upload_single_file,
 )
 from .model_utils import get_encoder_decoder_model, get_causal_model
 
@@ -201,6 +204,8 @@ def get_best_hyperparameters(
         num_optuna_trials: int,
         lr_scheduler_type: Optional[str] = None,
         causal_language_modeling: bool = False,
+        all_fragments_as_labels: bool = True,
+        linkers_only_as_labels: bool = False,
 ) -> Tuple[float, Dict[str, Any], Dict[str, Any]]:
     """Runs an Optuna hyperparameter search to find the best hyperparameters.
 
@@ -256,10 +261,25 @@ def get_best_hyperparameters(
             "warmup_ratio": warmup_ratio,
         }
 
-    def compute_objective(metrics: Dict[str, float]):
-        # NOTE: Having a higher eval_reassembly score should also correspond
-        # to a low eval loss, so we just focus on the reassembly score.
-        return metrics["eval_all_ligands_equal"]
+    if causal_language_modeling:
+        def compute_objective(metrics: Dict[str, float]):
+            # NOTE: We want to minimize the model perplexity, which is the
+            # exponential of the negative log-likelihood loss. Optuna is setup
+            # to maximize the objective, so we return the negative perplexity.
+            return -math.exp(metrics["eval_loss"])
+    else:
+        if all_fragments_as_labels:
+            def compute_objective(metrics: Dict[str, float]):
+                # NOTE: Having a higher eval_reassembly score should also correspond
+                # to a low eval loss, so we just focus on the reassembly score.
+                return metrics["eval_all_ligands_equal"]
+        else:
+            if linkers_only_as_labels:
+                def compute_objective(metrics: Dict[str, float]):
+                    return metrics["eval_linker_equal"]
+            else:
+                def compute_objective(metrics: Dict[str, float]):
+                    return metrics["eval_e3_equal"] + metrics["eval_poi_equal"]
     
     def hp_name(trial: Any) -> str:
         trial_name = f"trial-number={trial.number}"
@@ -589,7 +609,9 @@ def train_model(
             training_args["warmup_steps"] = warmup_steps
             
         # Add Generation configs
-        if not causal_language_modeling:
+        if causal_language_modeling:
+            training_args["metric_for_best_model"] = "eval_loss"
+        else:
             generation_config = GenerationConfig(
                 max_length=512,
                 max_new_tokens=512,
@@ -602,8 +624,13 @@ def train_model(
             training_args["generation_config"] = generation_config
             training_args["generation_max_length"] = 512
 
+    print("Training arguments:")
+    for k, v in training_args.items():
+        if 'token' in k:
+            continue
+        print(f"  - {k}: {v}")
+
     # Modify the training arguments with Optuna hyperparameter search
-    best_trial = None
     if num_optuna_trials > 0:
         # Setup the compute_metrics function for the hyperparameter search
         hp_compute_metrics = partial(
@@ -626,6 +653,8 @@ def train_model(
             lr_scheduler_type=lr_scheduler_type,
             num_optuna_trials=num_optuna_trials,
             causal_language_modeling=causal_language_modeling,
+            all_fragments_as_labels=all_fragments_as_labels,
+            linkers_only_as_labels=linkers_only_as_labels,
         )
         best_objective = best_run.objective
         best_trial_number = best_run.run_id
@@ -660,20 +689,72 @@ def train_model(
                     f.write(line)
         print(f"Best hyperparameters saved to '{output_dir}/best_hyperparameters.md'.")
 
-        try:
-            api = hf.HfApi()
-            api.upload_file(
-                path_or_fileobj=f"{output_dir}/best_hyperparameters.md",
-                path_in_repo="best_hyperparameters.md",
-                repo_id=hub_model_id,
-                token=hub_token,
-            )
-        except Exception as e:
-            print(e)
-            print("WARNING. Best parameters NOT pushed to the hub.")
+        upload_single_file(
+            path_or_fileobj=f"{output_dir}/best_hyperparameters.md",
+            path_in_repo="best_hyperparameters.md",
+            repo_id=hub_model_id,
+            token=hub_token,
+        )
+        
+        # Save the best_hparams to a JSON file
+        with open(f"{output_dir}/best_hyperparameters.json", "w") as f:
+            json.dump(best_hparams, f, indent=4)
+        print(f"Best hyperparameters saved to '{output_dir}/best_hyperparameters.json'.")
+        
+        upload_single_file(
+            path_or_fileobj=f"{output_dir}/best_hyperparameters.json",
+            path_in_repo="best_hyperparameters.json",
+            repo_id=hub_model_id,
+            token=hub_token,
+        )
         
         # Update the training arguments with the best hyperparameters
-        training_args.update(hp_training_args)
+        hp_specific_args = [
+            "num_train_epochs",
+            "max_steps",
+            "eval_steps",
+            "eval_delay",
+            "logging_steps",
+            "save_steps",
+            "generation_config",
+        ]
+        for k, v in hp_training_args.items():
+            # Skip the specific arguments set/modifed by the HP search
+            if k in hp_specific_args:
+                continue
+            training_args[k] = v
+
+        # Update the num_cycles according to the original max_steps
+        lr_scheduler_kwargs = hp_training_args["lr_scheduler_kwargs"]
+        
+        if "num_cycles" in lr_scheduler_kwargs:
+            hp_num_cycles = lr_scheduler_kwargs["num_cycles"]
+            hp_max_steps = hp_training_args["max_steps"]
+            
+            # Adjust/scale the max_cycles according to the number of steps
+            if hp_max_steps > 0:
+                hp_cycle_ratio = hp_num_cycles / hp_max_steps
+                num_cycles = int(hp_cycle_ratio * max_steps)
+                training_args["lr_scheduler_kwargs"]["num_cycles"] = num_cycles
+                print(f"Adjusted number of cycles: {num_cycles}")
+
+        # Adjust the warmup steps according to the original max_steps
+        if "warmup_ratio" in hp_training_args:
+            hp_warmup_ratio = hp_training_args["warmup_ratio"]
+            hp_max_steps = hp_training_args["max_steps"]
+            warmup_steps = int(hp_warmup_ratio * hp_max_steps)
+            warmup_ratio = warmup_steps / max_steps
+            training_args["warmup_steps"] = warmup_steps
+            training_args["warmup_ratio"] = warmup_ratio
+
+        print("Training arguments updated with the best hyperparameters:")
+        for k, v in training_args.items():
+            if 'token' in k:
+                continue
+            print(f"  - {k}: {v}")
+        print("-" * 80)
+        print("Starting training with the best hyperparameters.")
+        print("-" * 80)
 
     # rouge = evaluate.load("rouge") # , cache_dir="/mimer/NOBACKUP/groups/naiss2023-6-290/stefano/.cache/huggingface/evaluate/")
     # fpgen = Chem.rdFingerprintGenerator.GetMorganGenerator(
@@ -719,6 +800,11 @@ def train_model(
     print("-" * 80)
     print("Training completed.")
     print("-" * 80)
+    
+    if causal_language_modeling:
+        tasks = ["Text Generation"]
+    else:
+        tasks = ["Text2Text Generation", "question-answering"]
 
     if hub_model_id is not None:
         print("Pushing model to Hugging Face Hub.")
@@ -729,7 +815,7 @@ def train_model(
             model_name=hub_model_id,
             license="mit",
             finetuned_from=f"{pretrained_encoder}",
-            tasks=["Text2Text Generation", "question-answering"],
+            tasks=tasks,
             tags=["PROTAC", "cheminformatics"],
             dataset=[ds_name],
             dataset_args=[ds_config],

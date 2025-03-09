@@ -392,7 +392,7 @@ def score_prediction(
         try:
             scores[f'{sub}_heavy_atoms_difference'] = Chem.MolFromSmiles(label_substructs[sub]).GetNumHeavyAtoms()
         except:
-            print(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
+            logging.warning(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
         scores[f'{sub}_heavy_atoms_difference_norm'] = 1.0
 
     # Calculate metrics for each substructure
@@ -403,7 +403,7 @@ def score_prediction(
         if pred_sub is None:
             continue
         if label_sub is None:
-            print(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
+            logging.warning(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
             continue
 
         # Check if the predicted substructure is a valid RDKit molecule
@@ -444,13 +444,20 @@ def score_prediction(
         # Get the number of heavy atoms difference between the predicted substructure and the ground truth substructure
         if scores[f'{sub}_valid']:
             pred_mol = Chem.MolFromSmiles(pred_sub)
+            label_mol = Chem.MolFromSmiles(label_sub)
+            if label_mol is None:
+                logging.warning(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
+                continue
             scores[f'{sub}_heavy_atoms_difference'] -= pred_mol.GetNumHeavyAtoms()
-            scores[f'{sub}_heavy_atoms_difference_norm'] = scores[f'{sub}_heavy_atoms_difference'] / Chem.MolFromSmiles(label_sub).GetNumHeavyAtoms()
+            scores[f'{sub}_heavy_atoms_difference_norm'] = scores[f'{sub}_heavy_atoms_difference'] / label_mol.GetNumHeavyAtoms()
 
         # Get Tanimoto similarity b/w the predicted substructure and the ground truth
         if scores[f'{sub}_valid'] and compute_rdkit_metrics:
             pred_mol = Chem.MolFromSmiles(pred_sub)
             label_mol = Chem.MolFromSmiles(label_sub)
+            if label_mol is None:
+                logging.warning(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
+                continue
             pred_fp = fpgen.GetFingerprint(pred_mol)
             label_fp = fpgen.GetFingerprint(label_mol)
             scores[f'{sub}_tanimoto_similarity'] = DataStructs.TanimotoSimilarity(pred_fp, label_fp)

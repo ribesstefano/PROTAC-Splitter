@@ -202,7 +202,7 @@ def load_tokenized_dataset(
             load_from_cache_file=True,
             desc="Setting labels to text",
         )
-        print(f"Set labels to text. Length: {dataset.num_rows}")
+        print(f"Appended labels to text. Length: {dataset.num_rows}")
 
     # NOTE: Remove the "labels" column if causal language modeling, since the
     # DataCollatorForLM will automatically set the labels to the input_ids.

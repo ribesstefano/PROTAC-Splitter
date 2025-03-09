@@ -23,3 +23,13 @@ def delete_hf_repository(**kwargs):
     print(f'Deleting repository {kwargs["repo_id"]}.')
     api = hf.HfApi()
     return api.delete_repo(**kwargs)
+
+
+def upload_single_file(**kwargs):
+    """Uploads a single file to a Hugging Face repository."""
+    try:
+        api = hf.HfApi()
+        api.upload_file(**kwargs)
+    except Exception as e:
+        print(e)
+        print("WARNING. Best parameters NOT pushed to the hub.")
