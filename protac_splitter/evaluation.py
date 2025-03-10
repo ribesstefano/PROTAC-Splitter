@@ -24,20 +24,38 @@ from .graphs_utils import (
 )
 
 
-def is_valid_smiles(smiles: str, return_mol: bool = False) -> bool:
+def is_valid_smiles(
+        smiles: Optional[str],
+        return_mol: bool = False,
+) -> Union[bool, Tuple[bool, Chem.Mol]]:
+    """ Check if a SMILES is valid, i.e., it can be parsed by RDKit.
+    
+    Args:
+        smiles (Optional[str]): The SMILES to check.
+        return_mol (bool): If True, return the RDKit molecule object, i.e., `(is_valid, mol)`.
+    
+    Returns:
+        bool | Tuple[bool, Chem.Mol]: True if the SMILES is valid, False otherwise. If return_mol is True, also return the RDKit molecule object.
+    """
+    if smiles is None:
+        return False
     mol = Chem.MolFromSmiles(smiles)
     if return_mol:
         return mol is not None, mol
     return mol is not None
 
 
-def has_three_substructures(smiles: str) -> bool:
+def has_three_substructures(smiles: Optional[str]) -> bool:
     """ Check if a PROTAC SMILES has three substructures. """
+    if smiles is None:
+        return False
     return smiles.count(".") == 2
 
 
-def has_all_attachment_points(smiles: str) -> bool:
+def has_all_attachment_points(smiles: Optional[str]) -> bool:
     """ Check if a PROTAC SMILES has all attachment points, i.e., [*:1] and [*:2], two each. """
+    if smiles is None:
+        return False
     return smiles.count("[*:1]") == 2 and smiles.count("[*:2]") == 2
 
 
@@ -57,9 +75,13 @@ def split_prediction(
         dict[str, str] | None: A dictionary (with keys: 'e3', 'linker', 'poi') containing the SMILES notations for the POI, linker, and E3 substructures, or None if the prediction is invalid
     """
     ret = {k: None for k in ['poi', 'linker', 'e3']}
+    if pred is None:
+        return ret
+
     ligands = pred.split('.')
     if len(ligands) != 3:
         return ret
+
     for ligand in ligands:
         if f'[*:{poi_attachment_id}]' in ligand and f'[*:{e3_attachment_id}]' not in ligand:
             ret['poi'] = ligand
@@ -328,7 +350,7 @@ def score_prediction(
     scores = {
         'has_three_substructures': has_three_substructures(pred_smiles),
         'has_all_attachment_points': has_all_attachment_points(pred_smiles),
-        'num_fragments': pred_smiles.count('.') + 1,
+        'num_fragments': 0 if pred_smiles is None else pred_smiles.count('.') + 1,
         'tanimoto_similarity': 0.0, # Default value
         'valid': False,
         'reassembly': False,
