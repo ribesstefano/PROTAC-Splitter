@@ -197,7 +197,7 @@ def get_lr_scheduler_kwargs(lr_scheduler_type: str) -> Dict[str, Any]:
 def get_best_hyperparameters(
         model_init: Callable,
         tokenizer: AutoTokenizer,
-        data_collator: DataCollatorForSeq2Seq,
+        data_collator: Union[DataCollatorForSeq2Seq, DataCollatorForLanguageModeling],
         compute_metrics: Callable,
         dataset_tokenized: Dict[str, Any],
         training_args: Dict[str, Any],

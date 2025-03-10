@@ -61,6 +61,7 @@ def get_pipeline(
         generation_strategy: Optional[str] = None,
 ) -> pipeline:
     if is_causal_language_model and generation_strategy is None:
+        print('Loading pipeline for causal language models...')
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=token, padding_side='left')
         return pipeline(
             "text-generation",
@@ -70,7 +71,8 @@ def get_pipeline(
             device='cuda' if torch.cuda.is_available() else 'cpu',
             num_return_sequences=1,
         )
-    elif is_causal_language_model and generation_strategy is not None:
+    if is_causal_language_model and generation_strategy is not None:
+        print('Loading pipeline for causal language models...')
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=token, padding_side='left')
         return pipeline(
             "text-generation",
@@ -80,7 +82,8 @@ def get_pipeline(
             device='cuda' if torch.cuda.is_available() else 'cpu',
             generation_config=get_generation_config(generation_strategy),
         )
-    elif not is_causal_language_model and generation_strategy is None:
+    if not is_causal_language_model and generation_strategy is None:
+        print('Loading pipeline for sequence-to-sequence models...')
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
         return pipeline(
             "text2text-generation",
@@ -89,7 +92,8 @@ def get_pipeline(
             token=token,
             device='cuda' if torch.cuda.is_available() else 'cpu',
         )
-    elif not is_causal_language_model and generation_strategy is not None:
+    if not is_causal_language_model and generation_strategy is not None:
+        print('Loading pipeline for sequence-to-sequence models...')
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
         return pipeline(
             "text2text-generation",
@@ -141,8 +145,8 @@ def run_seq2seq_pipeline(
         List[Dict[str, str]]: A list of dictionaries containing the predictions.
     """
     preds = []
-    for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size), total=len(test_ds) // batch_size):
-        p = {f'pred_n{i}': pred[i]['generated_text'] for i in range(len(pred))}
+    for pred in tqdm(pipe(KeyDataset(test_ds, 'text'), batch_size=batch_size, max_length=512), total=len(test_ds) // batch_size):
+        p = {f'pred_n{i}': p['generated_text'] for i, p in enumerate(pred)}
         preds.append(p)
     return preds
 
@@ -208,6 +212,7 @@ def main(
             },
             num_proc=num_proc,
         )
+        
 
     # Run the pipeline to generate predictions with its predefined gen. strategy
     print('Generating "default" predictions (training config)...')
@@ -256,8 +261,8 @@ if __name__ == '__main__':
     parser.add_argument('--num_proc', type=int, default=8, help='Number of processes to use for evaluation')
     parser.add_argument('--report_model_name', type=str, help='Model name to use for reporting')
     parser.add_argument('--cache_dir', type=str, default='~/.cache/huggingface', help='Hugging Face cache directory')
-    parser.add_argument('--is_causal_language_model', type=bool, default=False, help='Whether the model is a causal language model')
-    parser.add_argument('--eval_gen_strategies', type=bool, default=False, help='Whether to evaluate different generation strategies')
+    parser.add_argument('--is_causal_language_model', type=lambda x: x.lower() == 'true', default=False, help='Whether the model is a causal language model')
+    parser.add_argument('--eval_gen_strategies', type=lambda x: x.lower() == 'true', default=False, help='Whether to evaluate different generation strategies')
     args = parser.parse_args()
     main(
         hub_token=args.hub_token,
