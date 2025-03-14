@@ -787,11 +787,14 @@ def train_model(
         args.hub_token = hub_token
     else:
         if causal_language_modeling:
-            TrainerClass = Trainer
             args = TrainingArguments(**training_args)
         else:
-            TrainerClass = Seq2SeqTrainer
             args = Seq2SeqTrainingArguments(**training_args)
+
+    if causal_language_modeling:
+        TrainerClass = Trainer
+    else:
+        TrainerClass = Seq2SeqTrainer
 
     # Setup the Trainer and start training (no Optuna hyperparameter search)
     trainer = TrainerClass(

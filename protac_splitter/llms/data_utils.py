@@ -165,7 +165,7 @@ def load_tokenized_dataset(
         # Reduce the size of the training dataset but just selecting a fraction of the samples
         dataset["train"] = dataset["train"].select(range(int(train_size_ratio * dataset["train"].num_rows)))
         print(f"Reduced training dataset size to {train_size_ratio}. Length: {dataset.num_rows}")
-    else:
+    elif train_size_ratio > 1.0 or train_size_ratio < 0:
         raise ValueError("train_size_ratio must be between 0 and 1.")
 
     if not all_fragments_as_labels:
