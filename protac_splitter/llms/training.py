@@ -408,6 +408,8 @@ def train_model(
         num_cycles: Optional[int] = None,
         warmup_steps: Optional[int] = None,
         causal_language_modeling: bool = False,
+        train_size_ratio: float = 1.0,
+        training_args_bin: Optional[str] = None,
 ):
     """Trains a model on a given dataset.
     
@@ -499,6 +501,7 @@ def train_model(
         all_fragments_as_labels=all_fragments_as_labels,
         linkers_only_as_labels=linkers_only_as_labels,
         causal_language_modeling=causal_language_modeling,
+        train_size_ratio=train_size_ratio,
     )
     print("Dataset loaded.")
 
@@ -774,19 +777,28 @@ def train_model(
         causal_language_modeling=causal_language_modeling,
     )
 
-    if causal_language_modeling:
-        TrainerClass = Trainer
-        TrainingArgumentsClass = TrainingArguments
+    if training_args_bin is not None:
+        # Load training arguments from a binary file and update model-specific arguments
+        args = torch.load(training_args_bin)
+        args.output_dir = output_dir
+        args.push_to_hub_model_id = model_id
+        args.push_to_hub_organization = organization
+        args.hub_model_id = hub_model_id
+        args.hub_token = hub_token
     else:
-        TrainerClass = Seq2SeqTrainer
-        TrainingArgumentsClass = Seq2SeqTrainingArguments
+        if causal_language_modeling:
+            TrainerClass = Trainer
+            args = TrainingArguments(**training_args)
+        else:
+            TrainerClass = Seq2SeqTrainer
+            args = Seq2SeqTrainingArguments(**training_args)
 
     # Setup the Trainer and start training (no Optuna hyperparameter search)
     trainer = TrainerClass(
         model_init=model_lambda,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        args=TrainingArgumentsClass(**training_args),
+        args=args,
         compute_metrics=compute_metrics,
         train_dataset=dataset_tokenized["train"],
         eval_dataset=dataset_tokenized["test"],

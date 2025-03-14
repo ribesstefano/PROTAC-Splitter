@@ -124,6 +124,7 @@ def load_tokenized_dataset(
         all_fragments_as_labels: bool = True,
         linkers_only_as_labels: bool = False,
         causal_language_modeling: bool = False,
+        train_size_ratio: float = 1.0,
 ) -> Dataset:
     """ Load dataset and tokenize it.
     
@@ -141,6 +142,11 @@ def load_tokenized_dataset(
         randomize_smiles_repeat (int, optional): The number of times to repeat the randomization. Defaults to 1.
         randomize_text (bool, optional): Whether to randomize text. Defaults to True.
         randomize_labels (bool, optional): Whether to randomize labels. Defaults to False.
+        cache_dir (Optional[str], optional): The directory to cache the dataset. Defaults to None.
+        all_fragments_as_labels (bool, optional): Whether to get all fragments in the labels. Defaults to True.
+        linkers_only_as_labels (bool, optional): Whether to get only the linkers in the labels. Defaults to False.
+        causal_language_modeling (bool, optional): Whether to use causal language modeling. Defaults to False.
+        train_size_ratio (float, optional): The ratio of the training dataset to use. Defaults to 1.0.
 
     Returns:
         Dataset: The tokenized dataset.
@@ -154,6 +160,13 @@ def load_tokenized_dataset(
         cache_dir=cache_dir,
     )
     print(f"Loaded dataset. Length: {dataset.num_rows}")
+
+    if train_size_ratio < 1.0 and train_size_ratio > 0:
+        # Reduce the size of the training dataset but just selecting a fraction of the samples
+        dataset["train"] = dataset["train"].select(range(int(train_size_ratio * dataset["train"].num_rows)))
+        print(f"Reduced training dataset size to {train_size_ratio}. Length: {dataset.num_rows}")
+    else:
+        raise ValueError("train_size_ratio must be between 0 and 1.")
 
     if not all_fragments_as_labels:
         dataset = dataset.map(
