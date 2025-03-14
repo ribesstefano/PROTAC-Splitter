@@ -778,13 +778,21 @@ def train_model(
     )
 
     if training_args_bin is not None:
+        print(f"Loading training arguments from: {training_args_bin}.")
         # Load training arguments from a binary file and update model-specific arguments
         args = torch.load(training_args_bin)
         args.output_dir = output_dir
+        args.overwrite_output_dir = True if delete_local_repo_if_exists else False
         args.push_to_hub_model_id = model_id
         args.push_to_hub_organization = organization
         args.hub_model_id = hub_model_id
         args.hub_token = hub_token
+        # Print all the training arguments
+        print("Training arguments loaded:")
+        for k, v in args.__dict__.items():
+            if 'token' in k:
+                continue
+            print(f"  - {k}: {v}")
     else:
         if causal_language_modeling:
             args = TrainingArguments(**training_args)
