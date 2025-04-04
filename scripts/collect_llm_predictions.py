@@ -12,9 +12,10 @@ from rdkit import rdBase
 
 import torch
 from datasets import load_dataset, Dataset
-from transformers import AutoTokenizer, pipeline, GenerationConfig
+from transformers import AutoTokenizer, pipeline, GenerationConfig, EncoderDecoderModel
 from transformers.pipelines.pt_utils import KeyDataset
 from tqdm import tqdm
+from torchmetrics.text import Perplexity
 
 
 # Disable the RDKit warnings that pop up when RDKit fails to create molecules
@@ -172,6 +173,7 @@ def main(
         report_model_name: Optional[str] = None,
         cache_dir: str = '~/.cache/huggingface',
         is_causal_language_model: bool = False,
+        get_predictions_probabilities: bool = False,
 ):
     # Set log level to ERROR
     logging.basicConfig(level=logging.ERROR)
@@ -185,7 +187,7 @@ def main(
     print('Loading dataset...')
     ds = load_dataset(
         'ailab-bio/PROTAC-Splitter-Dataset',
-        'large',
+        'clustered',
         token=hub_token,
         cache_dir=cache_dir,
     )
@@ -212,11 +214,90 @@ def main(
             },
             num_proc=num_proc,
         )
-        
+    
+    if get_predictions_probabilities:
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=hub_token)
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # NOTE: We will ignore the padding token for the perplexity calculation
+        perplexity = Perplexity(ignore_index=tokenizer.pad_token_id).to(device)
 
-    # Run the pipeline to generate predictions with its predefined gen. strategy
-    print('Generating "default" predictions (training config)...')
-    preds['default'] = run_pipeline(pipe, test_ds, batch_size, is_causal_language_model)
+        if is_causal_language_model:
+            raise ValueError('Getting predictions probabilities is not supported for causal language models yet.')
+
+        model = EncoderDecoderModel.from_pretrained(model_name, token=hub_token)
+        model.to(device)
+        model.eval()
+
+        # Apply tokenization and run generate to batches of inputs
+        for i in tqdm(range(0, len(test_ds), batch_size), desc='Getting probabilities and perplexity scores'):
+            # Get a batch of inputs, tokenize them, and move to GPU
+            indeces = list(range(i, min(i + batch_size, len(test_ds))))
+            batch = tokenizer(
+                test_ds.select(indeces)['text'], # [i:i+batch_size],
+                return_tensors='pt',
+                padding=True,
+                truncation=True,
+                max_length=512,
+            )
+            batch = {k: v.to(model.device) for k, v in batch.items()}
+
+            # Generate predictions and get probabilities
+            with torch.no_grad():
+                outputs = model.generate(
+                    **batch,
+                    output_scores=True,
+                    return_dict_in_generate=True,
+                )
+
+            # Get the probabilities of the generated sequences
+            # NOTE: The scores are in log space, so we need to exponentiate them
+            # to get the probabilities
+            probs = torch.exp(outputs.sequences_scores).tolist()
+            
+            # Use the generated output as the decoder input IDs
+            decoder_input_ids = outputs.sequences
+            labels = decoder_input_ids.clone()
+            labels[labels == tokenizer.pad_token_id] = -100
+            # Generate decoder attention mask
+            decoder_attention_mask = torch.ones_like(decoder_input_ids)
+            decoder_attention_mask[decoder_input_ids == tokenizer.pad_token_id] = 0
+
+            # Compute loss on generated output (we need the logits)
+            # NOTE: Since we have an encoder-decoder model, the "inputs" are actually the
+            # ones to the encoder. We however need the logits on the decoder outputs, so
+            # we need to input them accordingly. The "labels" will be the decoder inputs
+            # themselves.
+            with torch.no_grad():
+                logits = model(
+                    **batch,
+                    decoder_input_ids=decoder_input_ids,
+                    decoder_attention_mask=decoder_attention_mask,
+                    labels=labels,
+                ).logits
+
+            # Compute the perplexity score for each generated sequence in batch
+            for generated_logits, generated_target, generated_prob in zip(logits, decoder_input_ids, probs):
+                generated_string = tokenizer.decode(generated_target, skip_special_tokens=True)
+                generated_logits = generated_logits.unsqueeze(0)
+                generated_target = generated_target.unsqueeze(0)
+
+                # NOTE: We need to shift both the logits and the target, since
+                # each token in the target indexes the logit of the previous
+                # token.
+                perplexity_score = perplexity(
+                    preds=generated_logits[:, :-1],
+                    target=generated_target[:, 1:],
+                ).item()
+
+                preds['default'].append({
+                    'pred_n0': generated_string,
+                    'prob_n0': generated_prob,
+                    'perplexity_n0': perplexity_score,
+                })
+    else:
+        # Run the pipeline to generate predictions with its predefined gen. strategy
+        print('Generating "default" predictions (training config)...')
+        preds['default'] = run_pipeline(pipe, test_ds, batch_size, is_causal_language_model)
 
     if eval_gen_strategies:
         for generation_strategy in GENERATION_STRATEGY_PARAMS.keys():
@@ -225,6 +306,7 @@ def main(
 
             print(f'Generating predictions with generation strategy: {generation_strategy}')
             preds[generation_strategy] = run_pipeline(pipe, test_ds, batch_size, is_causal_language_model)
+
     print('Predictions collected. Saving to file...')
 
     df = []
@@ -263,6 +345,7 @@ if __name__ == '__main__':
     parser.add_argument('--cache_dir', type=str, default='~/.cache/huggingface', help='Hugging Face cache directory')
     parser.add_argument('--is_causal_language_model', type=lambda x: x.lower() == 'true', default=False, help='Whether the model is a causal language model')
     parser.add_argument('--eval_gen_strategies', type=lambda x: x.lower() == 'true', default=False, help='Whether to evaluate different generation strategies')
+    parser.add_argument('--get_predictions_probabilities', type=lambda x: x.lower() == 'true', default=False, help='Whether to get predictions probabilities')
     args = parser.parse_args()
     main(
         hub_token=args.hub_token,
@@ -274,4 +357,5 @@ if __name__ == '__main__':
         cache_dir=args.cache_dir,
         is_causal_language_model=args.is_causal_language_model,
         eval_gen_strategies=args.eval_gen_strategies,
+        get_predictions_probabilities=args.get_predictions_probabilities,
     )

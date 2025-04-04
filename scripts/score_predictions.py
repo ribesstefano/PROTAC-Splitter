@@ -13,7 +13,7 @@ from protac_splitter.chemoinformatics import canonize
 
 def main(
     num_proc: int = 16,
-    skip_is_log_exists: bool = False,
+    skip_if_log_exists: bool = False,
 ):
     # Set logging level to error
     logging.basicConfig(level=logging.ERROR) # , force=True)
@@ -42,7 +42,7 @@ def main(
         print(f"Scoring predictions in {predictions_path}")
         scores_path = predictions_path.with_name(predictions_path.stem.replace("preds", "scores") + ".csv")
 
-        if skip_is_log_exists and os.path.exists(scores_path):
+        if skip_if_log_exists and os.path.exists(scores_path):
             print(f"Scores already exist for {predictions_path.stem}, skipping...")
             continue
         print(f"Scores will be saved in {scores_path}")
@@ -67,7 +67,7 @@ def main(
             scores['label_smiles'] = label_smiles = row['label_smiles']
             
             for pred_name, pred_smiles in row.items():
-                if pred_name in ['protac_smiles', 'label_smiles', 'model_name'] or '_n' not in pred_name:
+                if pred_name in ['protac_smiles', 'label_smiles', 'model_name'] or 'pred_n' not in pred_name:
                     continue
                 
                 curr_scores = score_prediction(
@@ -129,9 +129,9 @@ if __name__ == "__main__":
     # Setup the argparser
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_proc", type=int, default=16, help="Number of processes to use for scoring predictions")
-    parser.add_argument("--skip_is_log_exists", action="store_true", help="Skip scoring if the scores file already exists")
+    parser.add_argument("--skip_if_log_exists", action="store_true", help="Skip scoring if the scores file already exists")
     args = parser.parse_args()
     main(
         num_proc=args.num_proc,
-        skip_is_log_exists=args.skip_is_log_exists,
+        skip_if_log_exists=args.skip_if_log_exists,
     )

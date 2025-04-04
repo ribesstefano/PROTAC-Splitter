@@ -224,8 +224,15 @@ def get_best_hyperparameters(
     def optuna_hp_space(trial):
         # NOTE: Tuning generation config is not implemented yet, please refer to this issue: https://github.com/huggingface/transformers/issues/33755
         # Suggest hparams "shared" across all scheduler types
-        learning_rate = trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True)
-        warmup_ratio = trial.suggest_float("warmup_ratio", 0.01, 0.1, step=0.01)
+        # learning_rate = trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True)
+        # warmup_ratio = trial.suggest_float("warmup_ratio", 0.01, 0.1, step=0.01)
+
+        # Restrict learning rate closer to best-performing values
+        learning_rate = trial.suggest_float("learning_rate", 5e-6, 2e-4, log=True)  # Previously 1e-6 to 1e-3
+
+        # Slightly adjust warmup ratio to avoid extreme values
+        warmup_ratio = trial.suggest_float("warmup_ratio", 0.02, 0.06, step=0.01)  # Previously 0.01 to 0.1
+
 
         # NOTE: We might want to use QMCSampler instead of TPESampler, which
         # doesn't support categorical parameters. Categories can be encoded as
@@ -250,8 +257,8 @@ def get_best_hyperparameters(
             }
         elif lr_scheduler_type == "reduce_lr_on_plateau":
             lr_scheduler_kwargs = {
-                "min_lr": trial.suggest_float("min_lr", 1e-12, 1e-9, log=True),
-                "factor": trial.suggest_float("factor", 0.1, 0.99, step=0.01),
+                "min_lr": trial.suggest_float("min_lr", 1e-10, 1e-8, log=True),  # Previously 1e-12 to 1e-9
+                "factor": trial.suggest_float("factor", 0.8, 0.98, step=0.01),  # Previously 0.1 to 0.99
             }
 
         return {

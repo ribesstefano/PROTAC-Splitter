@@ -184,6 +184,21 @@ def alter_atom(substructs: Dict[str, str]) -> Dict[str, str]:
             break
     return substructs
 
+def alter_kirality(substructs: Dict[str, str]) -> Dict[str, str]:
+    subs = ['e3', 'linker', 'poi']
+    bonds = ['@@', '##']
+    random.shuffle(subs)
+    for sub in subs:
+        random.shuffle(bonds)
+        for bond in bonds:
+            error = '@' if bond == '@@' else '#'
+            if bond in substructs[sub]:
+                num_errors = random.choice([1, 2])
+                substructs[sub] = substructs[sub].replace(bond, error, num_errors)
+                print(f'Altering N.{num_errors} kiral centers in {sub.upper()}')
+                break
+    return substructs
+
 def test_fix_prediction():
     for i in range(5):
         random.seed(42 + i)
@@ -193,6 +208,7 @@ def test_fix_prediction():
             add_atom,
             add_extra_atoms,
             alter_atom,
+            alter_kirality,
         ]
         for error_function in error_functions:
             print('-' * 100)
