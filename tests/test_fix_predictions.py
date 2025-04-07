@@ -98,6 +98,10 @@ def protac_examples() -> List[Tuple[str, str]]:
             'N#Cc1ccc(O[C@H]2CC[C@H](NC(=O)c3ccc(NCCCCCCCCCNc4ccc5c(c4)C(=O)N(C4CCC(=O)NC4=O)C5=O)cc3)CC2)cc1Cl',
             '[*:1]N[C@@H]2CC[C@@H](Oc1ccc(C#N)c(Cl)c1)CC2.[*:2]CCC[*:1].[*:2]c3ccc2c(=O)n(C1CCC(=O)NC1=O)c(=O)c2c3',
         ],
+        [
+            'CC(=O)N[C@H](C(=O)N1C[C@H](O)C[C@H]1C(=O)N[C@@H](CC(=O)N1CCC(N2CCC(C#Cc3ccc(C(=O)N[C@H]4C(C)(C)[C@H](Oc5ccc(C#N)c(Cl)c5)C4(C)C)cc3)CC2)CC1)c1ccc(-c2scnc2C)cc1)C(C)(C)C',
+            'CC(=O)N[C@H](C(=O)N1C[C@H](O)C[C@H]1C(=O)[*:2])C(C)(C)C.Cc1ncsc1-c1ccc([C@H](CC(=O)N2CCC(N3CCC(C#C[*:1])CC3)CC2)N[*:2])cc1.CC1(C)[C@H](NC(=O)c2ccc([*:1])cc2)C(C)(C)[C@H]1Oc1ccc(C#N)c(Cl)c1',
+        ],
     ]
 
 # Set logging level so that we can debug the code
@@ -186,16 +190,31 @@ def alter_atom(substructs: Dict[str, str]) -> Dict[str, str]:
 
 def alter_kirality(substructs: Dict[str, str]) -> Dict[str, str]:
     subs = ['e3', 'linker', 'poi']
-    bonds = ['@@', '##']
     random.shuffle(subs)
     for sub in subs:
-        random.shuffle(bonds)
-        for bond in bonds:
-            error = '@' if bond == '@@' else '#'
-            if bond in substructs[sub]:
-                num_errors = random.choice([1, 2])
-                substructs[sub] = substructs[sub].replace(bond, error, num_errors)
-                print(f'Altering N.{num_errors} kiral centers in {sub.upper()}')
+        # First get all the indexes of all '@@' and all '@' in the substructure
+        clock_indexes = [i for i, c in enumerate(substructs[sub]) if c == '@' and substructs[sub][i + 1] != '@' and substructs[sub][i - 1] != '@']
+        anti_indexes = [i for i, c in enumerate(substructs[sub]) if c == '@@']
+        if len(clock_indexes) == 0 and len(anti_indexes) == 0:
+            continue
+
+        # Randomly select one of the indexes
+        if len(clock_indexes) > 0 and len(anti_indexes) > 0:
+            select_clock = random.choice([True, False])
+        else:
+            select_clock = True
+
+        if len(clock_indexes) > 0 and select_clock:
+            index = random.choice(clock_indexes)
+            # Replace the '@' with '@@'
+            if substructs[sub][index] == '@':
+                substructs[sub] = substructs[sub][:index] + '@@' + substructs[sub][index + 1:]
+                break
+        else:
+            index = random.choice(anti_indexes)
+            # Replace the '@@' with '@'
+            if substructs[sub][index:index+1] == '@@':
+                substructs[sub] = substructs[sub][:index] + '@' + substructs[sub][index + 2:]
                 break
     return substructs
 

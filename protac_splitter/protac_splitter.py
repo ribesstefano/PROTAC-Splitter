@@ -22,7 +22,54 @@ from .chemoinformatics import (
     canonize,
     dummy2query,
     remove_attach_atom,
+    remove_dummy_atoms,
 )
+from .data.curation.substructure_extraction import get_attachment_bonds
+
+
+def fix_tetrahedral_centers_ligand(
+        protac_mol: Chem.Mol,
+        ligand_smiles: str,
+        attachment_id: int = 1,
+) -> str:
+    ligand_mol = Chem.MolFromSmiles(ligand_smiles)
+    if ligand_mol is None:
+        logging.error(f"Invalid ligand SMILES: {ligand_smiles}")
+        return None
+
+    ligand_mol = remove_dummy_atoms(ligand_mol)
+    ligand_match = protac_mol.GetSubstructMatch(ligand_mol, useChirality=False) # useChirality=True
+
+    # Get bonds to break to separate the POI ligand
+    bonds_to_break_poi = get_attachment_bonds(protac_mol, ligand_match)
+
+    # Return if no bonds are found
+    if len(bonds_to_break_poi) != 1:
+        logging.error('ERROR: Multiple POI attachment bonds')
+        return None
+
+    # Break the bonds to isolate the POI ligand
+    frag_ligand_mol = Chem.FragmentOnBonds(protac_mol, bonds_to_break_poi, addDummies=True, dummyLabels=[(attachment_id, attachment_id)])
+
+    # Get the fragments resulting from bond breaking
+    try:
+        frags = Chem.GetMolFrags(frag_ligand_mol, asMols=True, sanitizeFrags=True)
+    except Exception as e:
+        logging.error(e)
+        return None
+
+    # Identify the ligand fragment
+    ligand_fragment = None
+    for frag in frags:
+        if frag.HasSubstructMatch(ligand_mol):
+            ligand_fragment = frag
+            break
+    if ligand_fragment is None:
+        logging.error('ERROR: POI fragment not found')
+
+    ligand_fixed = Chem.MolToSmiles(ligand_fragment)
+    ligand_fixed = canonize(ligand_fixed.replace(f'[{attachment_id}*]', f'[*:{attachment_id}]'))
+    return ligand_fixed
 
 
 def fix_prediction(
@@ -283,8 +330,35 @@ def fix_prediction(
         protac_smiles,
         fixed_pred_smiles,
     ):
-        logging.warning(f"Failed to fix prediction, re-assembly check failed. Generated fixed prediction (failing): {fixed_pred_smiles}")
-        return None
+        # Check if by flipping the tetrahedral centers of the ligands we can
+        # still fix the prediction.
+        protac_mol = canonize(Chem.MolFromSmiles(protac_smiles))
+        chiral_centers = Chem.FindMolChiralCenters(
+            protac_mol,
+            includeUnassigned=True,
+            useLegacyImplementation=False,
+        )
+        if not chiral_centers:
+            logging.warning(f"Failed to fix prediction, re-assembly check failed. Generated fixed prediction (failing): {fixed_pred_smiles}")
+            return None
+
+        # Get the fixed ligands
+        e3_fixed = fix_tetrahedral_centers_ligand(protac_mol, substructs['e3']['smiles'], attachment_id=e3_attachment_id)
+        poi_fixed = fix_tetrahedral_centers_ligand(protac_mol, substructs['poi']['smiles'], attachment_id=poi_attachment_id)
+        if e3_fixed is None or poi_fixed is None:
+            logging.warning(f"Failed to fix prediction, re-assembly check failed. Generated fixed prediction (failing): {fixed_pred_smiles}")
+            return None
+
+        # Update the substructures with the fixed ligands and check re-assembly
+        substructs['e3']['smiles'] = e3_fixed
+        substructs['poi']['smiles'] = poi_fixed
+        fixed_pred_smiles = f"{substructs['e3']['smiles']}.{substructs['linker']['smiles']}.{substructs['poi']['smiles']}"
+        if not check_reassembly(
+            protac_smiles,
+            fixed_pred_smiles,
+        ):
+            logging.warning(f"Failed to fix prediction, re-assembly check failed. Generated fixed prediction (failing): {fixed_pred_smiles}")
+            return None
 
     return fixed_pred_smiles
 
