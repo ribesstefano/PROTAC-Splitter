@@ -7,8 +7,7 @@ import numpy as np
 from tqdm import tqdm
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
-import seaborn as sns
-from matplotlib import pyplot as plt
+
 from scipy.stats import skew
 from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
@@ -171,6 +170,9 @@ def main(
     metrics_df = pd.DataFrame(metrics_df)
 
     if show_plots:
+        import seaborn as sns
+        from matplotlib import pyplot as plt
+
         # Bar-plot silhouette score, Davies-Bouldin score, and Calinski-Harabasz score, hue by the clustering algorithm
         _, axs = plt.subplots(1, 3, figsize=(20, 5))
         sns.barplot(data=metrics_df, x='num_clusters', y='silhouette', hue='cluster_algorithm', ax=axs[0])
