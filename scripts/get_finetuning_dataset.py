@@ -149,7 +149,7 @@ def main(
     centroids_dict = {}
     clusters_dict = {}
     metrics_df = []
-    for n_clusters in tqdm([10, 25, 50], desc="Clustering and evaluating"):
+    for n_clusters in tqdm([10, 25, 50, 100], desc="Clustering and evaluating"):
         clusters, centroids = get_kmeans_clusters_fp(fp_list, n_clusters=n_clusters, return_centroids=True)
         metrics = evaluate_clusters(fp_list, clusters)
         clusters_dict[f'kmeans_n{n_clusters}'] = clusters.copy()
