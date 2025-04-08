@@ -4,7 +4,14 @@ This directory contains scripts that can be used to interact with the PROTAC-Spl
 
 ## Table of Contents 📜
 
+- [Generate Finetuning Dataset](#generate-finetuning-dataset)
 - [protac_splitter_app](#protac_splitter_app)
+
+## Generate Finetuning Dataset
+
+```bash
+python scripts/get_finetuning_dataset.py --filename_held_out_df=data/processed/mapped_protacs_with_functional_groups.csv --ds_root=data/finetuning_dataset
+```
 
 ## Collect LLMs Predictions
 
