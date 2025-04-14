@@ -1,5 +1,5 @@
 import logging
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Literal
 from multiprocessing import Process, Queue
 from hashlib import sha256
 
@@ -263,6 +263,8 @@ def get_substr_match(
         protac_mol: Chem.Mol,
         substr: Chem.Mol,
         max_allowed_fragments: int = 1,
+        replace: Literal['core', 'sidechains'] = 'core',
+        useChirality: bool = True,
 ) -> bool:
     """ Check if a molecule contains a substructure match with a given molecule.
     Compared to RDKit HasSubstructMatch, this function also checks the number of fragments when replacing the substr in the PROTAC.
@@ -276,11 +278,17 @@ def get_substr_match(
         bool: True if the PROTAC contains a substructure match with the given molecule and the fragments count is equal, False otherwise.
     """
     # Count the number of fragments when replacing the substr in the PROTAC
-    fragments = Chem.ReplaceCore(protac_mol, dummy2query(substr), useChirality=True)
+    if replace == 'core':
+        fragments = Chem.ReplaceCore(protac_mol, dummy2query(substr), useChirality=useChirality)
+    elif replace == 'sidechains':
+        fragments = Chem.ReplaceSidechains(protac_mol, dummy2query(substr), useChirality=useChirality)
+    else:
+        raise ValueError(f"replace argument should be either 'core' or 'sidechains', provided: {replace}")
+    # Check if the number of fragments is equal to the max allowed fragments
     if fragments is None:
         return False
     try:
-        fragments = Chem.GetMolFrags(fragments)
+        fragments = Chem.GetMolFrags(fragments, sanitizeFrags=False)
     except Exception as e:
         print(e)
         return False
