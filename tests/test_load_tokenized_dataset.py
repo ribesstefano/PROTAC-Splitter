@@ -110,7 +110,7 @@ def test_load_tokenized_dataset(mock_load_dataset, sample_dataset, tokenizer):
     mock_load_dataset.return_value = sample_dataset
 
     dataset = load_tokenized_dataset(
-        daset_dir="dummy_dir",
+        dataset_dir="dummy_dir",
         dataset_config="default",
         tokenizer=tokenizer,
         batch_size=2,
@@ -130,7 +130,7 @@ def test_load_tokenized_dataset(mock_load_dataset, sample_dataset, tokenizer):
 
 
     dataset = load_tokenized_dataset(
-        daset_dir="dummy_dir",
+        dataset_dir="dummy_dir",
         dataset_config="default",
         tokenizer=tokenizer,
         batch_size=2,
@@ -155,7 +155,7 @@ def test_load_tokenized_dataset_with_fragments_and_linkers(mock_load_dataset, sa
     mock_load_dataset.return_value = sample_dataset
 
     dataset = load_tokenized_dataset(
-        daset_dir="dummy_dir",
+        dataset_dir="dummy_dir",
         dataset_config="default",
         tokenizer=tokenizer,
         batch_size=2,
@@ -184,7 +184,7 @@ def test_load_tokenized_dataset_with_fragments_and_linkers(mock_load_dataset, sa
 
 
     dataset = load_tokenized_dataset(
-        daset_dir="dummy_dir",
+        dataset_dir="dummy_dir",
         dataset_config="default",
         tokenizer=tokenizer,
         batch_size=2,

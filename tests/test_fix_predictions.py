@@ -261,6 +261,6 @@ def test_fix_prediction():
                 if fixed_smiles is None:
                     # display(Chem.MolFromSmiles(protac_smiles))
                     print(f'Failed to fix prediction for "{pred_smiles}"')
-                assert fixed_smiles is not None, f'Failed to fix prediction for "{pred_smiles}"'
-                assert fixed_smiles == label_smiles, f'Fixed prediction is not the same as the original prediction for "{pred_smiles}"'
+                assert fixed_smiles is not None, f'Failed to fix "{error_function.__name__}" function for wrong prediction: "{pred_smiles}"'
+                assert fixed_smiles == label_smiles, f'Fixed prediction after "{error_function.__name__}" is not the same as the label prediction. Wrong prediction: "{pred_smiles}"'
                 print('-' * 80)

@@ -105,18 +105,40 @@ def evaluate_clusters(X, clusters):
     }
 
 
-def get_text_labels(x):
-    e3_smiles = x['E3 Binder SMILES with direction']
-    linker_smiles = x['Linker SMILES with direction']
-    poi_smiles = x['POI Ligand SMILES with direction']
+def get_text_labels(
+        x,
+        protac_smiles_col: str = 'PROTAC SMILES',
+        e3_smiles_col: str = 'E3 Binder SMILES with direction',
+        linker_smiles_col: str = 'Linker SMILES with direction',
+        poi_smiles_col: str = 'POI Ligand SMILES with direction',
+):
+    e3_smiles = x[e3_smiles_col]
+    linker_smiles = x[linker_smiles_col]
+    poi_smiles = x[poi_smiles_col]
     return {
-        'text': x['PROTAC SMILES'],
+        'text': x[protac_smiles_col],
         'labels': '.'.join([e3_smiles, linker_smiles, poi_smiles]),
     }
 
 
-def process_dataframe(df):
-    processed = df.apply(get_text_labels, axis=1, result_type='expand')
+def process_dataframe(
+        df: pd.DataFrame,
+        protac_smiles_col: str = 'PROTAC SMILES',
+        e3_smiles_col: str = 'E3 Binder SMILES with direction',
+        linker_smiles_col: str = 'Linker SMILES with direction',
+        poi_smiles_col: str = 'POI Ligand SMILES with direction',
+):
+    processed = df.apply(
+        lambda x: get_text_labels(
+            x,
+            protac_smiles_col=protac_smiles_col,
+            e3_smiles_col=e3_smiles_col,
+            linker_smiles_col=linker_smiles_col,
+            poi_smiles_col=poi_smiles_col,
+        ),
+        axis=1,
+        result_type='expand',
+    )
     return processed[['text', 'labels']]
 
 
@@ -124,6 +146,10 @@ def main(
     filename_held_out_df: str,
     ds_root: str = 'finetuning_dataset',
     show_plots: bool = False,
+    protac_smiles_col: str = 'PROTAC SMILES',
+    e3_smiles_col: str = 'E3 Binder SMILES with direction',
+    linker_smiles_col: str = 'Linker SMILES with direction',
+    poi_smiles_col: str = 'POI Ligand SMILES with direction',
 ):
     held_out_df = pd.read_csv(filename_held_out_df)
 
@@ -210,11 +236,23 @@ def main(
             finetune_samples.append(sample)
 
         finetune_samples_df = pd.concat(finetune_samples)
-        train_df = process_dataframe(finetune_samples_df)
+        train_df = process_dataframe(
+            finetune_samples_df,
+            protac_smiles_col=protac_smiles_col,
+            e3_smiles_col=e3_smiles_col,
+            linker_smiles_col=linker_smiles_col,
+            poi_smiles_col=poi_smiles_col,
+        )
 
         # Remove the isolated samples from the held-out dataset to get a test set
         test_df = held_out_df[~held_out_df['PROTAC SMILES'].isin(finetune_samples_df['PROTAC SMILES'])].copy()
-        test_df = process_dataframe(test_df)
+        test_df = process_dataframe(
+            test_df,
+            protac_smiles_col=protac_smiles_col,
+            e3_smiles_col=e3_smiles_col,
+            linker_smiles_col=linker_smiles_col,
+            poi_smiles_col=poi_smiles_col,
+        )
 
         os.makedirs(os.path.join(ds_root, f'n{n_clusters}'), exist_ok=True)
         train_df.to_csv(os.path.join(ds_root, f'n{n_clusters}', 'train.csv'), index=False)
@@ -256,6 +294,38 @@ if __name__ == '__main__':
         action="store_true",
         help="Whether to show plots on cluster metrics. Default: False",
     )
+    parser.add_argument(
+        "--protac_smiles_col",
+        type=str,
+        default="PROTAC SMILES",
+        help="Column name for PROTAC SMILES in the input CSV file.",
+    )
+    parser.add_argument(
+        "--e3_smiles_col",
+        type=str,
+        default="E3 Binder SMILES with direction",
+        help="Column name for E3 Binder SMILES in the input CSV file.",
+    )
+    parser.add_argument(
+        "--linker_smiles_col",
+        type=str,
+        default="Linker SMILES with direction",
+        help="Column name for Linker SMILES in the input CSV file.",
+    )
+    parser.add_argument(
+        "--poi_smiles_col",
+        type=str,
+        default="POI Ligand SMILES with direction",
+        help="Column name for POI Ligand SMILES in the input CSV file.",
+    )
     args = parser.parse_args()
 
-    main(args.filename_held_out_df, args.ds_root)
+    main(
+        filename_held_out_df=args.filename_held_out_df,
+        ds_root=args.ds_root,
+        show_plots=args.show_plots,
+        protac_smiles_col=args.protac_smiles_col,
+        e3_smiles_col=args.e3_smiles_col,
+        linker_smiles_col=args.linker_smiles_col,
+        poi_smiles_col=args.poi_smiles_col,
+    )

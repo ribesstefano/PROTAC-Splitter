@@ -107,9 +107,8 @@ def create_interface():
     with gr.Blocks() as demo:
         gr.Markdown("# PROTAC Splitter")
         gr.Markdown("Upload a CSV file or enter a single SMILES string to predict PROTAC fragments.\n\nWarheads and E3 ligands connections (bonding) to the linker are marked with dummy atoms, i.e., attachment points. For the warhead, we have \"[*:1]\", whereas we have \"[*:2]\" for the E3 ligand.")
-        
-        # model_path = gr.Textbox(label="Local Model Path", placeholder="Enter the local model directory", value="/mimer/NOBACKUP/groups/naiss2023-6-290/stefano/models/PROTAC-Splitter-Trial-11")
-        model_path = gr.Textbox(label="Local Model Path", placeholder="Enter the local model directory, e.g., /download/directory/PROTAC-Splitter-Trial-11")
+
+        model_path = gr.Textbox(label="Local Model Path", placeholder="Enter the local model directory, e.g., /download/directory/PROTAC-Splitter-Model")
         
         with gr.Tab("Single SMILES Input"):
             # smiles_input = gr.Textbox(label="Enter SMILES String", value="CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O")

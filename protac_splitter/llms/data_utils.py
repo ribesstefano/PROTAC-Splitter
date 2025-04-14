@@ -1,3 +1,4 @@
+import os
 import random
 import logging
 from typing import Optional, Union
@@ -107,7 +108,7 @@ def get_fragments_in_labels(labels: str, linkers_only_as_labels: bool = True) ->
 
 
 def load_tokenized_dataset(
-        daset_dir: str,
+        dataset_dir: str,
         dataset_config: str = 'default',
         tokenizer: Union[AutoTokenizer, str] = "seyonec/ChemBERTa-zinc-base-v1",
         batch_size: int = 512,
@@ -129,7 +130,7 @@ def load_tokenized_dataset(
     """ Load dataset and tokenize it.
     
     Args:
-        daset_dir (str): The directory of the dataset or the name of the data on the Hugging Face Hub.
+        dataset_dir (str): The directory of the dataset or the name of the data on the Hugging Face Hub.
         dataset_config (str, optional): The configuration of the dataset. Defaults to 'default'.
         tokenizer (AutoTokenizer | str, optional): The tokenizer to use for tokenization. If a string, the tokenizer will be loaded using `AutoTokenizer.from_pretrained(tokenizer)`. Defaults to "seyonec/ChemBERTa-zinc-base-v1".
         batch_size (int, optional): The batch size for tokenization. Defaults to 512.
@@ -153,13 +154,21 @@ def load_tokenized_dataset(
     """
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    dataset = load_dataset(
-        daset_dir,
-        dataset_config,
-        token=token,
-        cache_dir=cache_dir,
-    )
-    print(f"Loaded dataset. Length: {dataset.num_rows}")
+    if os.path.exists(dataset_dir):
+        # NOTE: We need a different argument to load a dataset from disk:
+        dataset = load_dataset(
+            dataset_dir,
+            data_dir=dataset_config,
+        )
+        print(f"Dataset loaded from disk at: \"{dataset_dir}\". Length: {dataset.num_rows}")
+    else:
+        dataset = load_dataset(
+            dataset_dir,
+            dataset_config,
+            token=token,
+            cache_dir=cache_dir,
+        )
+        print(f"Dataset loaded from hub. Length: {dataset.num_rows}")
 
     if train_size_ratio < 1.0 and train_size_ratio > 0:
         # Reduce the size of the training dataset but just selecting a fraction of the samples

@@ -174,6 +174,9 @@ def main(
         cache_dir: str = '~/.cache/huggingface',
         is_causal_language_model: bool = False,
         get_predictions_probabilities: bool = False,
+        dataset_dir: Optional[str] = 'ailab-bio/PROTAC-Splitter-Dataset',
+        dataset_config: Optional[str] = 'clustered',
+        dataset_test_split: Optional[str] = 'held_out',
 ):
     # Set log level to ERROR
     logging.basicConfig(level=logging.ERROR)
@@ -185,13 +188,18 @@ def main(
             raise ValueError('Hugging Face API token not provided. Please provide a token using the --hub_token argument or set the HF_TOKEN environment variable')
     
     print('Loading dataset...')
-    ds = load_dataset(
-        'ailab-bio/PROTAC-Splitter-Dataset',
-        'clustered',
-        token=hub_token,
-        cache_dir=cache_dir,
-    )
-    test_ds = ds['held_out']
+    if os.path.exists(dataset_dir):
+        test_ds = load_dataset(
+            dataset_dir,
+            data_dir=dataset_config,
+        )[dataset_test_split]
+    else:
+        test_ds = load_dataset(
+            dataset_dir,
+            dataset_config,
+            token=hub_token,
+            cache_dir=cache_dir,
+        )[dataset_test_split]
 
     if report_model_name is None:
         report_model_name = [n for n in model_name.split('/') if 'PROTAC-Splitter' in n][0]
@@ -346,6 +354,9 @@ if __name__ == '__main__':
     parser.add_argument('--is_causal_language_model', type=lambda x: x.lower() == 'true', default=False, help='Whether the model is a causal language model')
     parser.add_argument('--eval_gen_strategies', type=lambda x: x.lower() == 'true', default=False, help='Whether to evaluate different generation strategies')
     parser.add_argument('--get_predictions_probabilities', type=lambda x: x.lower() == 'true', default=False, help='Whether to get predictions probabilities')
+    parser.add_argument('--dataset_dir', type=str, default='ailab-bio/PROTAC-Splitter-Dataset', help='Dataset directory')
+    parser.add_argument('--dataset_config', type=str, default='clustered', help='Dataset config')
+    parser.add_argument('--dataset_test_split', type=str, default='held_out', help='Dataset test split')
     args = parser.parse_args()
     main(
         hub_token=args.hub_token,
@@ -358,4 +369,7 @@ if __name__ == '__main__':
         is_causal_language_model=args.is_causal_language_model,
         eval_gen_strategies=args.eval_gen_strategies,
         get_predictions_probabilities=args.get_predictions_probabilities,
+        dataset_dir=args.dataset_dir,
+        dataset_config=args.dataset_config,
+        dataset_test_split=args.dataset_test_split,
     )

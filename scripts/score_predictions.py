@@ -14,6 +14,7 @@ from protac_splitter.chemoinformatics import canonize
 def main(
     num_proc: int = 16,
     skip_if_log_exists: bool = False,
+    log_dir: str = "logs",
 ):
     # Set logging level to error
     logging.basicConfig(level=logging.ERROR) # , force=True)
@@ -21,7 +22,7 @@ def main(
     logger.setLevel(logging.ERROR)
 
     # Get all files with "*preds.csv" in the logs directory
-    logs_dir = Path("logs")
+    logs_dir = Path(log_dir)
     if not logs_dir.exists():
         raise FileNotFoundError("logs directory not found")
     
@@ -130,8 +131,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--num_proc", type=int, default=16, help="Number of processes to use for scoring predictions")
     parser.add_argument("--skip_if_log_exists", action="store_true", help="Skip scoring if the scores file already exists")
+    parser.add_argument("--log_dir", type=str, default="logs", help="Directory to retrieve predictions and save the scores")
     args = parser.parse_args()
     main(
         num_proc=args.num_proc,
         skip_if_log_exists=args.skip_if_log_exists,
+        log_dir=args.log_dir,
     )

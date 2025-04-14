@@ -354,7 +354,7 @@ def test_time_decode_and_get_metrics():
     tokenizer = AutoTokenizer.from_pretrained("seyonec/ChemBERTa-zinc-base-v1")
 
     dataset = load_tokenized_dataset(
-        daset_dir="ailab-bio/PROTAC-Splitter-Dataset",
+        dataset_dir="ailab-bio/PROTAC-Splitter-Dataset",
         dataset_config="large",
         tokenizer=tokenizer,
         batch_size=tokenizer_batch_size,

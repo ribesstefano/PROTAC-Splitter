@@ -5,25 +5,69 @@ This directory contains scripts that can be used to interact with the PROTAC-Spl
 ## Table of Contents 📜
 
 - [Generate Finetuning Dataset](#generate-finetuning-dataset)
+- [Finetuning Model](#finetuning-model)
+- [Collect LLMs Predictions](#collect-llms-predictions)
+- [Score Predictions](#score-predictions)
 - [protac_splitter_app](#protac_splitter_app)
 
 ## Generate Finetuning Dataset
+
+To cluster 10, 20, 50, and 100 representative PROTACs from your dataset, you can use the [`scripts/get_finetuning_dataset.py`](scripts/get_finetuning_dataset.py) script. This script will take care of the following steps:
+1. **Load the dataset**: The script will load the dataset from a CSV file. The CSV file should contain one column for each SMILES of the PROTAC and its three ligands.
+2. **Cluster the PROTACs**: The script will cluster the PROTACs via K-means clustering.
+3. **Generate the finetuning dataset**: The script will then generate the finetuning dataset (readeable by HuggingFace) under the specified directory.
+
+Please run `python scripts/get_finetuning_dataset.py --help` for more information on the arguments.
+
+Example of usage:
 
 ```bash
 python scripts/get_finetuning_dataset.py --filename_held_out_df=data/processed/mapped_protacs_with_functional_groups.csv --ds_root=data/finetuning_dataset
 ```
 
+## Finetuning Model
+
+To finetune the model on your own dataset, you can use the [`scripts/finetune_model.sh`](scripts/finetune_model.sh) script. Please modify the script to setup the correct paths to your dataset and the model you want to finetune, as well as the resulting training directory.
+
+Example of usage:
+
+```bash
+bash scripts/finetune_model.sh
+```
+
 ## Collect LLMs Predictions
+
+To collect the predictions from the finetuned model, you can use the [`scripts/collect_predictions.py`](scripts/collect_predictions.py) script.
+
+Please run `python scripts/collect_predictions.py --help` for more information on the arguments. Example of usage:
+
+```bash
+python scripts/collect_llm_predictions.py --model_name=PROTAC-Splitter-Finetuned --dataset_dir=data/finetuning_dataset --dataset_config=n10 --dataset_test_split=test --log_dir=logs
+```
+
+In the example above, the model will be run to predict on the `data/finetuning_dataset/n10/test` dataset, _i.e._, at rootdir `data/finetuning_dataset/`, configuration `n10` (10 clustered PROTACs) and test split `test`. The model will be loaded from the `PROTAC-Splitter-Finetuned` directory.
 
 ## Score Predictions
 
+To score the predictions, you can use the [`scripts/score_predictions.py`](scripts/score_predictions.py) script.
+
+Please run `python scripts/score_predictions.py --help` for more information on the arguments. Example of usage:
+
+```bash
+python scripts/score_predictions.py --log_dir=logs --num_proc=8
+```
+
 ## PROTAC-Splitter App
 
-<!-- ```bash
-module load Python/3.11.3-GCCcore-12.3.0
-module load PyTorch/2.1.2-foss-2023a-CUDA-12.1.1
-source /mimer/NOBACKUP/groups/naiss2023-6-290/stefano/envs/env-protac-splitter/bin/activate
-export PYTHONPATH=$PYTHONPATH:`pwd`/protac_splitter
-export PYTHONPATH=/mimer/NOBACKUP/groups/naiss2023-6-290/stefano/envs/env-protac-splitter/lib/python3.11/site-packages:$PYTHONPATH
-PYTHONNOUSERSITE=1 python -m scripts.protac_splitter_app
-``` -->
+We also provide a simple Gradio app to interact with the PROTAC-Splitter model. The app can be run using the [`scripts/protac_splitter_app.py`](scripts/protac_splitter_app.py) script.
+The app will be usually available at `http://localhost:7860` but please double-check your terminal for the precise address.
+
+If running on a remote server, one could run the script above, then on your local machine, open a terminal and run the following command:
+
+```bash
+ssh -L 7860:127.0.0.1:7860 username@remote_serve
+```
+
+After running the above command, you can open a web browser on your local machine and navigate to: `http://127.0.0.1:7860`
+
+**NOTE**: By default the model will try to run on a GPU, if available. If not available, the model will run on CPU, but can be very slow even for predicting one single PROTAC. 

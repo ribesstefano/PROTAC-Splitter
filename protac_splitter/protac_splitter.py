@@ -330,6 +330,9 @@ def fix_prediction(
         protac_smiles,
         fixed_pred_smiles,
     ):
+        # logging.warning(f"Failed to fix prediction, re-assembly check failed. Generated fixed prediction (failing): {fixed_pred_smiles}")
+        # return None
+        
         # Check if by flipping the tetrahedral centers of the ligands we can
         # still fix the prediction.
         protac_mol = canonize(Chem.MolFromSmiles(protac_smiles))

@@ -600,7 +600,7 @@ def train_model(
             "report_to": ["tensorboard"],
             "save_only_model": False, # Default: False
             # Hub information configs
-            "push_to_hub": True, # NOTE: Also manually done further down
+            "push_to_hub": hub_model_id is not None, # NOTE: Also manually done further down
             "push_to_hub_model_id": model_id,
             "push_to_hub_organization": organization,
             "hub_model_id": hub_model_id,
@@ -699,24 +699,26 @@ def train_model(
                     f.write(line)
         print(f"Best hyperparameters saved to '{output_dir}/best_hyperparameters.md'.")
 
-        upload_single_file(
-            path_or_fileobj=f"{output_dir}/best_hyperparameters.md",
-            path_in_repo="best_hyperparameters.md",
-            repo_id=hub_model_id,
-            token=hub_token,
-        )
+        if hub_model_id is not None:
+            upload_single_file(
+                path_or_fileobj=f"{output_dir}/best_hyperparameters.md",
+                path_in_repo="best_hyperparameters.md",
+                repo_id=hub_model_id,
+                token=hub_token,
+            )
         
         # Save the best_hparams to a JSON file
         with open(f"{output_dir}/best_hyperparameters.json", "w") as f:
             json.dump(best_hparams, f, indent=4)
         print(f"Best hyperparameters saved to '{output_dir}/best_hyperparameters.json'.")
         
-        upload_single_file(
-            path_or_fileobj=f"{output_dir}/best_hyperparameters.json",
-            path_in_repo="best_hyperparameters.json",
-            repo_id=hub_model_id,
-            token=hub_token,
-        )
+        if hub_model_id is not None:
+            upload_single_file(
+                path_or_fileobj=f"{output_dir}/best_hyperparameters.json",
+                path_in_repo="best_hyperparameters.json",
+                repo_id=hub_model_id,
+                token=hub_token,
+            )
         
         # Update the training arguments with the best hyperparameters
         hp_specific_args = [
@@ -836,10 +838,11 @@ def train_model(
     else:
         tasks = ["Text2Text Generation", "question-answering"]
 
+    tokenizer.save_pretrained(output_dir)
+
     if hub_model_id is not None:
         print("Pushing model to Hugging Face Hub.")
         print("-" * 80)
-        tokenizer.save_pretrained(output_dir)
         trainer.push_to_hub(
             commit_message="Initial version",
             model_name=hub_model_id,
@@ -857,4 +860,10 @@ def train_model(
             token=hub_token,
             tags=["PROTAC", "cheminformatics"],
         )
+    else:
+        print("Pushing model to local directory.")
+        print("-" * 80)
+        trainer.save_model(output_dir)
+        tokenizer.save_pretrained(output_dir)
+        print(f"Model saved to '{output_dir}'.")
     print("All done.")
