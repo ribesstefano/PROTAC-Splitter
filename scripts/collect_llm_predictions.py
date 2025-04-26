@@ -344,7 +344,7 @@ def main(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Evaluate PROTAC-Splitter models.')
-    parser.add_argument('--hub_token', type=str, required=True, help='Hugging Face API token')
+    parser.add_argument('--hub_token', type=str, default=None, help='Hugging Face API token')
     parser.add_argument('--model_name', type=str, default="ailab-bio/PROTAC-Splitter-standard_recombined-ChemBERTa-zinc-base-v1", help='Model name')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--log_dir', type=str, default='logs', help='Directory to save logs and predictions')
