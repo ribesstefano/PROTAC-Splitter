@@ -198,7 +198,8 @@ def main(
         df.columns = df.columns.str.replace("default_pred_n0_", "")
 
         # Filter columns with "heavy_atoms_difference" and "num_fragments" and "has_three_substructures" and "is_fixed"
-        df = df[df.columns[~df.columns.str.contains("heavy_atoms_difference|num_fragments|has_three_substructures|is_fixed|graph")]]
+        # df = df[df.columns[~df.columns.str.contains("heavy_atoms_difference|num_fragments|has_three_substructures|is_fixed|graph")]]
+        df = df[df.columns[~df.columns.str.contains("num_fragments|has_three_substructures|is_fixed|graph")]]
 
         # Remove the "default_pred_n0" column
         df = df[df.columns[~df.columns.str.contains("default_pred_n0")]]
@@ -238,8 +239,8 @@ def main(
         plt.grid(axis='x', alpha=0.5)
         # For each bar in the plot, add the value at x=0.5, use ax.patches to get the bars
         for p in ax.patches:
-            ax.annotate(f"{p.get_width():.2%}", (0.05, p.get_y() + p.get_height() / 2),
-                        ha='left', va='center', fontsize=10, color='white')
+            ax.annotate(f"{p.get_width():.2f}", (0.05, p.get_y() + p.get_height() / 2),
+                        ha='left', va='center', fontsize=10, color='black')
 
         # Convert the x-axis to percentage
         plt.gca().xaxis.set_major_formatter(mtick.PercentFormatter(1))
@@ -260,7 +261,7 @@ def main(
             df = processed_scores_df[processed_scores_df['strategy'] == best_strategy].copy()
             df = df[df['reduce'] == 'mean']
             df = df[~df['metric'].str.contains("graph", regex=False)]
-            df = df[~df['metric'].str.contains("heavy_atoms", regex=False)]
+            # df = df[~df['metric'].str.contains("heavy_atoms", regex=False)]
             df = df[~df['metric'].str.contains("is_fixed", regex=False)]
             df = df[~df['metric'].str.contains("num_fragments", regex=False)]
             df = df[~df['metric'].str.contains("has_three_substructures", regex=False)]
@@ -301,8 +302,8 @@ def main(
             plt.grid(axis='x', alpha=0.5)
             # For each bar in the plot, add the value at x=0.5, use ax.patches to get the bars
             for p in ax.patches:
-                ax.annotate(f"{p.get_width():.2%}", (0.05, p.get_y() + p.get_height() / 2),
-                            ha='left', va='center', fontsize=10, color='white')
+                ax.annotate(f"{p.get_width():.2f}", (0.05, p.get_y() + p.get_height() / 2),
+                            ha='left', va='center', fontsize=10, color='black')
 
             # Convert the x-axis to percentage
             plt.gca().xaxis.set_major_formatter(mtick.PercentFormatter(1))
@@ -315,63 +316,63 @@ def main(
             else:
                 plt.show()
 
-    print('-' * 80)
-    print('Perplexity scores.')
-    print('-' * 80)
-    for x_metric in ['default_prob_n0', 'default_perplexity_n0']:
-        for hue_metric in ['default_pred_n0_reassembly', 'default_pred_n0_all_ligands_equal']:
-            plt.figure(figsize=(10, 5))
-            sns.histplot(data=scores_df, x=x_metric, hue=hue_metric, kde=True)
-
-            x_label = "Perplexity" if 'perplexity' in x_metric else "Probability"
-            hue_label = "Reassembly" if 'reassembly' in hue_metric else "All Ligands Equal"
-            plt.xlabel(x_label)
-            plt.ylabel("Frequency")
-            plt.title(f"Histogram of {x_label} vs {hue_label}")
-            plt.grid(axis='both', alpha=0.5)
-            # Change the legend title to hue_label
-            if img_dir:
-                plot_file = os.path.join(img_dir, f"plot_{x_metric}_vs_{hue_metric}.pdf")
-                plt.savefig(plot_file, bbox_inches='tight')
-                print(f"Plot saved to: {plot_file}")
-                plt.clf()
-                plt.close()
-            else:
-                plt.show()
-
-            plt.figure(figsize=(10, 5))
-            sns.histplot(data=scores_df, x=x_metric, hue=hue_metric, kde=True)
-            plt.xlabel(x_label)
-            plt.ylabel("Frequency")
-            plt.title(f"Histogram of {x_label} vs {hue_label}")
-            plt.grid(axis='both', alpha=0.5)
-            plt.ylim(0, 300)
-            if img_dir:
-                plot_file = os.path.join(img_dir, f"plot_{x_metric}_vs_{hue_metric}_zoom.pdf")
-                plt.savefig(plot_file, bbox_inches='tight')
-                plt.clf()
-                plt.close()
-                print(f"Plot saved to: {plot_file}")
-            else:
-                plt.show()
-
-            plt.figure(figsize=(10, 5))
-            sns.scatterplot(data=scores_df, x=x_metric, y=hue_metric)
-            plt.xlabel(x_label)
-            plt.ylabel("Frequency")
-            plt.title(f"Scatter of {x_label} vs {hue_label}")
-            plt.grid(axis='both', alpha=0.5)
-            if img_dir:
-                plot_file = os.path.join(img_dir, f"plot_{x_metric}_vs_{hue_metric}_scatter.pdf")
-                plt.savefig(plot_file, bbox_inches='tight')
-                plt.clf()
-                plt.close()
-                print(f"Plot saved to: {plot_file}")
-            else:
-                plt.show()
-
 
     if 'default_prob_n0' in scores_df.columns:
+        print('-' * 80)
+        print('Perplexity scores.')
+        print('-' * 80)
+        for x_metric in ['default_prob_n0', 'default_perplexity_n0']:
+            for hue_metric in ['default_pred_n0_reassembly', 'default_pred_n0_all_ligands_equal']:
+                plt.figure(figsize=(10, 5))
+                sns.histplot(data=scores_df, x=x_metric, hue=hue_metric, kde=True)
+
+                x_label = "Perplexity" if 'perplexity' in x_metric else "Probability"
+                hue_label = "Reassembly" if 'reassembly' in hue_metric else "All Ligands Equal"
+                plt.xlabel(x_label)
+                plt.ylabel("Frequency")
+                plt.title(f"Histogram of {x_label} vs {hue_label}")
+                plt.grid(axis='both', alpha=0.5)
+                # Change the legend title to hue_label
+                if img_dir:
+                    plot_file = os.path.join(img_dir, f"plot_{x_metric}_vs_{hue_metric}.pdf")
+                    plt.savefig(plot_file, bbox_inches='tight')
+                    print(f"Plot saved to: {plot_file}")
+                    plt.clf()
+                    plt.close()
+                else:
+                    plt.show()
+
+                plt.figure(figsize=(10, 5))
+                sns.histplot(data=scores_df, x=x_metric, hue=hue_metric, kde=True)
+                plt.xlabel(x_label)
+                plt.ylabel("Frequency")
+                plt.title(f"Histogram of {x_label} vs {hue_label}")
+                plt.grid(axis='both', alpha=0.5)
+                plt.ylim(0, 300)
+                if img_dir:
+                    plot_file = os.path.join(img_dir, f"plot_{x_metric}_vs_{hue_metric}_zoom.pdf")
+                    plt.savefig(plot_file, bbox_inches='tight')
+                    plt.clf()
+                    plt.close()
+                    print(f"Plot saved to: {plot_file}")
+                else:
+                    plt.show()
+
+                plt.figure(figsize=(10, 5))
+                sns.scatterplot(data=scores_df, x=x_metric, y=hue_metric)
+                plt.xlabel(x_label)
+                plt.ylabel("Frequency")
+                plt.title(f"Scatter of {x_label} vs {hue_label}")
+                plt.grid(axis='both', alpha=0.5)
+                if img_dir:
+                    plot_file = os.path.join(img_dir, f"plot_{x_metric}_vs_{hue_metric}_scatter.pdf")
+                    plt.savefig(plot_file, bbox_inches='tight')
+                    plt.clf()
+                    plt.close()
+                    print(f"Plot saved to: {plot_file}")
+                else:
+                    plt.show()
+
         # Fit a logistic regression model to predict the threshold value for the "default_prob_n0" column
         # Split the data into training and testing sets
         X = scores_df['default_prob_n0'].values.reshape(-1, 1)
