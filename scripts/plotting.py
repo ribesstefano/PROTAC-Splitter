@@ -239,7 +239,7 @@ def main(
         plt.grid(axis='x', alpha=0.5)
         # For each bar in the plot, add the value at x=0.5, use ax.patches to get the bars
         for p in ax.patches:
-            ax.annotate(f"{p.get_width():.2f}", (0.05, p.get_y() + p.get_height() / 2),
+            ax.annotate(f"{p.get_width():.4f}", (0.05, p.get_y() + p.get_height() / 2),
                         ha='left', va='center', fontsize=10, color='black')
 
         # Convert the x-axis to percentage
@@ -302,7 +302,7 @@ def main(
             plt.grid(axis='x', alpha=0.5)
             # For each bar in the plot, add the value at x=0.5, use ax.patches to get the bars
             for p in ax.patches:
-                ax.annotate(f"{p.get_width():.2f}", (0.05, p.get_y() + p.get_height() / 2),
+                ax.annotate(f"{p.get_width():.4f}", (0.05, p.get_y() + p.get_height() / 2),
                             ha='left', va='center', fontsize=10, color='black')
 
             # Convert the x-axis to percentage
