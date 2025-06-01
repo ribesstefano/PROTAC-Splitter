@@ -42,7 +42,9 @@ def get_functional_group_at_attachment(
     """
     protac = Chem.AddHs(protac)
     substruct = Chem.AddHs(substruct)
-    linker = Chem.AddHs(linker)
+
+    if linker is not None:
+        linker = Chem.AddHs(linker)
 
     attachment_idxs = get_atom_idx_at_attachment(
             protac=protac,

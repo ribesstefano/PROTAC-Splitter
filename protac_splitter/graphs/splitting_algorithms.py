@@ -544,18 +544,30 @@ def split_protac_graph_based(
         "bonds_idx": bonds_idx,
     }
 
-def split_protac_with_graphs(
-    smiles_list: List[str],
+
+def split_protac_with_graphs_wrapper(
+    protac_smiles: List[str],
     use_classifier: bool = False,
     classifier: Optional['GraphEdgeClassifier'] = None,
+    representative_e3s: Optional[List[Any]] = None,
     representative_e3s_fp: Optional[List[Any]] = None,
     morgan_fp_generator: Optional[Any] = None,
     use_capacity_weight: bool = False,
     betweenness_threshold: float = 0.4,
-    n_jobs: int = 1,
 ) -> List[Dict[str, str]]:
-    """
-    Applies split_protac over a list of SMILES in parallel.
+    """ Wrapper function to apply split_protac_graph_based over a list of PROTAC SMILES.
+    
+    Parameters:
+        protac_smiles (List[str]): List of SMILES strings of PROTAC molecules.
+        use_classifier (bool): Whether to use a classifier for splitting.
+        classifier (Optional[GraphEdgeClassifier]): Classifier to use if use_classifier is True.
+        representative_e3s_fp (Optional[List[Any]]): Precomputed fingerprints of representative E3 ligands.
+        morgan_fp_generator (Optional[Any]): RDKit Morgan fingerprint generator.
+        use_capacity_weight (bool): Whether to use bond capacity as weight for the graph.
+        betweenness_threshold (float): Threshold for betweenness centrality to consider a node as a candidate for splitting.
+        
+    Returns:
+        List[Dict[str, str]]: List of dictionaries containing the split results for each PROTAC molecule.
     """
     if morgan_fp_generator is None:
         # Create a default Morgan fingerprint generator
@@ -565,35 +577,101 @@ def split_protac_with_graphs(
             useBondTypes=True,
             includeChirality=True,
         )
-    if representative_e3s_fp is None:
+
+    if representative_e3s is None and representative_e3s_fp is None:
         # Get the representative E3 ligands fingerprints
         representative_e3s_fp = get_representative_e3s_fp(fp_generator=morgan_fp_generator)
+    elif representative_e3s is not None and representative_e3s_fp is None:
+        # Convert representative E3 ligands to fingerprints
+        representative_e3s_fp = get_representative_e3s_fp(e3_list=representative_e3s, fp_generator=morgan_fp_generator)
+
+    # Load the classifier if it is a string or Path
+    if use_classifier and classifier is not None and isinstance(classifier, (str, Path)):
+        classifier = GraphEdgeClassifier.load(classifier)
+
+    return [
+        split_protac_graph_based(
+            protac_smiles=smi,
+            use_classifier=use_classifier,
+            classifier=classifier,
+            representative_e3s_fp=representative_e3s_fp,
+            morgan_fp_generator=morgan_fp_generator,
+            use_capacity_weight=use_capacity_weight,
+            betweenness_threshold=betweenness_threshold,
+        ) for smi in protac_smiles
+    ]
+
+
+def split_protac_with_graphs(
+    protac_smiles: List[str],
+    use_classifier: bool = False,
+    classifier: Optional['GraphEdgeClassifier'] = None,
+    representative_e3s: Optional[List[Any]] = None,
+    representative_e3s_fp: Optional[List[Any]] = None,
+    morgan_fp_generator: Optional[Any] = None,
+    use_capacity_weight: bool = False,
+    betweenness_threshold: float = 0.4,
+    n_jobs: int = 1,
+    batch_size: int = 1,
+) -> List[Dict[str, str]]:
+    """    Splits a list of PROTAC molecules using either ML classifier or deterministic betweenness centrality.
+    
+    Parameters:
+        protac_smiles (List[str]): List of SMILES strings of PROTAC molecules.
+        use_classifier (bool): Whether to use a classifier for splitting.
+        classifier (Optional[GraphEdgeClassifier]): Classifier to use if use_classifier is True.
+        representative_e3s (Optional[List[Any]]): List of representative E3 ligands. If None, uses precomputed fingerprints.
+        representative_e3s_fp (Optional[List[Any]]): Precomputed fingerprints of representative E3 ligands.
+        morgan_fp_generator (Optional[Any]): RDKit Morgan fingerprint generator.
+        use_capacity_weight (bool): Whether to use bond capacity as weight for the graph.
+        betweenness_threshold (float): Threshold for betweenness centrality to consider a node as a candidate for splitting.
+        n_jobs (int): Number of parallel jobs to run. If 1, runs sequentially.
+        batch_size (int): Size of each batch for parallel processing.
+    """
+    # Load the classifier if it is a string or Path
+    if use_classifier and classifier is not None and isinstance(classifier, (str, Path)):
+        classifier = GraphEdgeClassifier.load(classifier)
 
     if n_jobs < 1:
         raise ValueError("n_jobs must be a positive integer.")
     if n_jobs == 1:
         # If n_jobs is 1, run the function sequentially
-        return [split_protac_graph_based(
-            protac_smiles=smi,
+        return split_protac_with_graphs_wrapper(
+            protac_smiles=protac_smiles,
             use_classifier=use_classifier,
             classifier=classifier,
+            representative_e3s=representative_e3s,
             representative_e3s_fp=representative_e3s_fp,
             morgan_fp_generator=morgan_fp_generator,
             use_capacity_weight=use_capacity_weight,
             betweenness_threshold=betweenness_threshold,
-        ) for smi in smiles_list]
+        )
 
-    # If n_jobs > 1, run the function in parallel
-    func = delayed(split_protac_graph_based)
+    # Raise a warning if the n_jobs > 1 and the fingerprint generator is provided
+    if morgan_fp_generator is not None:
+        print("Warning: Using a custom Morgan fingerprint generator with n_jobs > 1 may be un-pickleable.")
+
+    # Split the SMILES list into batches
+    smiles_batches = [protac_smiles[i:i + batch_size] for i in range(0, len(protac_smiles), batch_size)]
+
+    # Ensure all SMILES are processed, even if the last batch is smaller than batch_size
+    smiles_batches = [protac_smiles[i:i + batch_size] for i in range(0, len(protac_smiles), batch_size)]
+    # Remove any empty batches (shouldn't happen, but for safety)
+    smiles_batches = [batch for batch in smiles_batches if batch]
+
+    # Run each batch in parallel
     results = Parallel(n_jobs=n_jobs)(
-        func(
-            protac_smiles=smi,
+        delayed(split_protac_with_graphs_wrapper)(
+            protac_smiles=batch,
             use_classifier=use_classifier,
             classifier=classifier,
+            representative_e3s=representative_e3s,
             representative_e3s_fp=representative_e3s_fp,
             morgan_fp_generator=morgan_fp_generator,
             use_capacity_weight=use_capacity_weight,
             betweenness_threshold=betweenness_threshold,
-        ) for smi in smiles_list
+        ) for batch in smiles_batches
     )
-    return results
+
+    # Flatten the list of lists into a single list
+    return [item for batch_result in results for item in batch_result]

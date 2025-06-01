@@ -1,4 +1,8 @@
 import pytest
+
+from rdkit import Chem
+from rdkit.Chem import rdFingerprintGenerator
+
 from protac_splitter.graphs.splitting_algorithms import split_protac_with_graphs
 
 @pytest.mark.parametrize("smiles,label", [
@@ -89,3 +93,25 @@ def test_split_protac_with_graphs(smiles, label):
     assert isinstance(result["e3"], str)
     assert isinstance(result["linker"], str)
     assert isinstance(result["poi"], str)
+
+    assert "[*:2]" in result["e3"]
+    assert "[*:1]" in result["linker"] and "[*:2]" in result["linker"]
+    assert "[*:1]" in result["poi"]
+
+def test_split_protac_with_graphs_parallel():
+    smiles_list = [
+        'N#Cc1ccc(O[C@H]2CC[C@H](NC(=O)c3ccc(N4CCN(CCCCCNc5ccc6c(c5)C(=O)N(C5CCC(=O)NC5=O)C6=O)CC4)cc3)CC2)cc1Cl',
+        'CN(c1ccc(C#N)c(Cl)c1)[C@H]1CC[C@H](NC(=O)c2ccc(N3CC(CN4CCN(c5ccc6c(c5)C(=O)N(C5CCC(=O)NC5=O)C6=O)CC4)C3)cc2)CC1',
+        'CN1C(=O)CCc2cc3cc(c21)OCCOCC1CN(C(=O)CCC(=O)NCCCOCCOCCOc2cccc4c2C(=O)N(C2CCC(=O)NC2=O)C4=O)CCN1c1ncc(Cl)c(n1)N3',
+    ]
+    # Duplicate to make a larger batch
+    smiles_list = smiles_list * 9
+    results = split_protac_with_graphs(smiles_list, n_jobs=2, batch_size=2)
+    assert len(results) == len(smiles_list)
+    for result in results:
+        assert isinstance(result["e3"], str)
+        assert isinstance(result["linker"], str)
+        assert isinstance(result["poi"], str)
+        assert "[*:2]" in result["e3"]
+        assert "[*:1]" in result["linker"] and "[*:2]" in result["linker"]
+        assert "[*:1]" in result["poi"]

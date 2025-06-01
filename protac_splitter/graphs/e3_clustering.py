@@ -261,6 +261,7 @@ DEFAULT_REPRESENTATIVE_E3S = [
 def get_representative_e3s_fp(
     e3_list: Optional[List[str]] = None,
     fp_generator: Optional[Any] = None,
+    verbose: int = 0,
 ) -> List[DataStructs.ExplicitBitVect]:
     """
     Generate Morgan fingerprints for a list of E3 ligands. If no list is provided,
@@ -274,7 +275,11 @@ def get_representative_e3s_fp(
         List[DataStructs.ExplicitBitVect]: List of RDKit Morgan fingerprints for the E3 ligands.
     """
     representative_e3s_fp = []
-    for smi in tqdm(e3_list or DEFAULT_REPRESENTATIVE_E3S, desc="Generating fingerprints for E3 ligands"):
+    if verbose > 0:
+        iterable = tqdm(e3_list or DEFAULT_REPRESENTATIVE_E3S, desc="Generating fingerprints for E3 ligands")
+    else:
+        iterable = e3_list or DEFAULT_REPRESENTATIVE_E3S
+    for smi in iterable:
         # Get the Morgan fingerprint for the SMILES string
         fp = get_fp(remove_dummy_atoms(smi), fp_generator, return_np=False)
         if fp is not None:

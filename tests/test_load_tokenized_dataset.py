@@ -6,8 +6,6 @@ from transformers import AutoTokenizer
 from datasets import Dataset
 from protac_splitter.llms.data_utils import load_tokenized_dataset
 
-# FILE: protac_splitter/llms/test_data_utils.py
-
 @pytest.fixture
 def protac_examples() -> List[Tuple[str, str]]:
     return [
