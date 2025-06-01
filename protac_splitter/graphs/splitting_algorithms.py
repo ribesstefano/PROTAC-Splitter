@@ -544,7 +544,7 @@ def split_protac_graph_based(
         "bonds_idx": bonds_idx,
     }
 
-def split_protac_batch(
+def split_protac_with_graphs(
     smiles_list: List[str],
     use_classifier: bool = False,
     classifier: Optional['GraphEdgeClassifier'] = None,

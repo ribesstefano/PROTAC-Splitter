@@ -122,8 +122,9 @@ def main(
     print_failed_predictions: bool = False,
 ):
     # Check if the image directory exists, if not create it
-    if not os.path.exists(img_dir) and img_dir is not None:
-        os.makedirs(img_dir)
+    if img_dir is not None:
+        if not os.path.exists(img_dir):
+            os.makedirs(img_dir)
         
     scores_df = pd.read_csv(score_file)
     processed_scores_df = process_score_file(score_file)

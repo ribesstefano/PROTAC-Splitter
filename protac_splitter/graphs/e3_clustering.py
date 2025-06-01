@@ -276,7 +276,7 @@ def get_representative_e3s_fp(
     representative_e3s_fp = []
     for smi in tqdm(e3_list or DEFAULT_REPRESENTATIVE_E3S, desc="Generating fingerprints for E3 ligands"):
         # Get the Morgan fingerprint for the SMILES string
-        fp = get_fp(remove_dummy_atoms(smi), fp_generator)
+        fp = get_fp(remove_dummy_atoms(smi), fp_generator, return_np=False)
         if fp is not None:
             representative_e3s_fp.append(fp)
         else:

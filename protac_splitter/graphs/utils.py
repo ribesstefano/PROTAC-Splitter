@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, List
+from typing import Any, Optional, List
 
 import numpy as np
 from rdkit import Chem, DataStructs
@@ -31,12 +31,11 @@ def get_fp(
             useBondTypes=True,
             includeChirality=True,
         )
-        
-    fp = fp_generator.GetFingerprint(mol)
+
     if return_np:
-        return np.array(fp)
+        return fp_generator.GetFingerprintAsNumPy(mol)
     else:
-        return fp
+        return fp_generator.GetFingerprint(mol)
 
 def average_tanimoto_distance(
     smiles: str,
