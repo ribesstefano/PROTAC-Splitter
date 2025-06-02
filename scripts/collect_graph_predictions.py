@@ -52,13 +52,16 @@ def main():
         batch_size=args.batch_size,
     )
 
+    # Determine model name based on whether classifier is used
+    model_name = "GraphEdgeClassifier" if args.use_classifier else "GraphHeuristic"
+
     # Prepare output DataFrame in the requested format
     out_df = pd.DataFrame([
         {
             "protac_smiles": smi,
             "label_smiles": label,
             "default_pred_n0": f"{ret['e3']}.{ret['linker']}.{ret['poi']}",
-            "model_name": "GraphHeuristic",
+            "model_name": model_name,
         }
         for smi, label, ret in zip(smiles_list, labels_list, results)
     ])

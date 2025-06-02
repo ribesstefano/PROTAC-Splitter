@@ -48,6 +48,16 @@ python scripts/collect_llm_predictions.py --model_name="PROTAC-Splitter-Finetune
 
 In the example above, the model will be run to predict on the `data/finetuning_dataset/n10/test` dataset, _i.e._, at rootdir `data/finetuning_dataset/`, configuration `n10` (10 clustered PROTACs) and test split `test`. The model will be loaded from the `PROTAC-Splitter-Finetuned` directory.
 
+## Collect Graph-Based Predictions
+
+To collect the predictions from the graph-based model, you can use the [`scripts/collect_graph_predictions.py`](../scripts/collect_graph_predictions.py) script.
+
+Please run `python scripts/collect_graph_predictions.py --help` for more information on the arguments. Example of usage with a pre-trained model:
+
+```bash
+python scripts/collect_graph_predictions.py --input_csv="your/awesome/PROTACs/to/split.csv" --output_csv="logs/example_output.csv" --classifier_model="models/edge_classifier_graph_features_bin.joblib" --n_jobs=4 --batch_size 256 --smiles_column="protac_smiles" --labels_column="label_smiles"
+```
+
 ## Score Predictions
 
 To score the predictions, you can use the [`scripts/score_predictions.py`](../scripts/score_predictions.py) script.
