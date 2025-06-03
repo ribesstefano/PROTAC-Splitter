@@ -267,6 +267,8 @@ def split_protac_with_edge_classifier(
     if isinstance(pipeline, str):
         pipeline = GraphEdgeClassifier.load(pipeline)
 
+    # TODO: Get the top-n bonds, if splitting results in more than 3 ligands,
+    # test other pairs of bonds, then repeat until we get 3 ligands exactly.
     bonds_idx = pipeline.predict_from_smiles(
         protac_smiles,
         wh_smiles=None,
@@ -324,8 +326,6 @@ def split_protac_with_edge_classifier(
     linker_smiles = linker_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
     return {'e3': e3_smiles, 'poi': wh_smiles, 'linker': linker_smiles, "bonds_idx": bonds_idx}
 
-
-
 def split_protac_graph_based(
     protac_smiles: str,
     use_classifier: bool = False,
@@ -339,211 +339,50 @@ def split_protac_graph_based(
     Splits a PROTAC molecule using either ML classifier or deterministic betweenness centrality.
     Returns a dictionary with e3, poi, linker, bonds_idx.
     """
-    if morgan_fp_generator is None:
-        # Create a default Morgan fingerprint generator
-        morgan_fp_generator = rdFingerprintGenerator.GetMorganGenerator(
-            radius=16,
-            fpSize=1024,
-            useBondTypes=True,
-            includeChirality=True,
-        )
 
     if representative_e3s_fp is None:
+        if morgan_fp_generator is None:
+            # Create a default Morgan fingerprint generator
+            morgan_fp_generator = rdFingerprintGenerator.GetMorganGenerator(
+                radius=16,
+                fpSize=1024,
+                useBondTypes=True,
+                includeChirality=True,
+            )
         # Get the representative E3 ligands fingerprints
         representative_e3s_fp = get_representative_e3s_fp(fp_generator=morgan_fp_generator)
- 
-    # Parse molecule
-    protac = Chem.MolFromSmiles(protac_smiles)
-    if protac is None:
-        raise ValueError(f"Invalid SMILES string: {protac_smiles}")
 
-    # --- Use classifier pipeline ---
     if use_classifier:
-        if classifier is None:
-            raise ValueError("Classifier must be provided if use_classifier=True")
-        bonds_idx = classifier.predict_from_smiles(
+        ret = split_protac_with_edge_classifier(
             protac_smiles=protac_smiles,
-            wh_smiles=None,
-            lk_smiles=None,
-            e3_smiles=None,
-            top_n=2,
-            return_array=True,
-        ).flatten().tolist()
-        # Fallback if -1 or not enough bonds predicted
-        if -1 in bonds_idx or len(bonds_idx) < 2:
-            bonds_idx = [b for b in bonds_idx if b != -1]
-            possible = [bond.GetIdx() for bond in protac.GetBonds() if bond.GetIdx() not in bonds_idx and not bond.IsInRing()]
-            for _ in range(2 - len(bonds_idx)):
-                if possible:
-                    bonds_idx.append(int(np.random.choice(possible)))
-        # Get the ligands by fragmenting the molecule
-        ligands = Chem.FragmentOnBonds(protac, bonds_idx, addDummies=True, dummyLabels=[(1, 1), (2, 2)])
-    # --- Use deterministic splitting ---
+            pipeline=classifier,
+            representative_e3s_fp=representative_e3s_fp,
+            morgan_fp_generator=morgan_fp_generator,
+        )
     else:
-        # Build NetworkX graph
-        G = nx.Graph()
-        for bond in protac.GetBonds():
-            G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
-        # Compute betweenness centrality
-        weight = 'capacity' if use_capacity_weight else None
-        centrality = nx.betweenness_centrality(G, normalized=True, endpoints=True, weight=weight)
-        sorted_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)
-        bridges = list(nx.bridges(G))
-        # Candidate bonds are bridges between top betweenness nodes
-        # Get the top two nodes
-        top_nodes = [n for n, _ in sorted_nodes if n in bridges]
+        ret = split_protac_with_betweenness_centrality(
+            protac_smiles=protac_smiles,
+            representative_e3s_fp=representative_e3s_fp,
+            morgan_fp_generator=morgan_fp_generator,
+            use_capacity_weight=use_capacity_weight,
+            betweenness_threshold=betweenness_threshold,
+        )
 
-        # Get the top nodes with the highest betweenness centrality that are not in
-        # a ring, but are adjacent to the top nodes or have a high betweenness
-        for node, score in sorted_nodes:
-            # Check if the node is in a ring in the protac molecule
-            atom = protac.GetAtomWithIdx(node)
-            if not atom.IsInRing():
-                # Check if the atom is adjacent to any of the top nodes, if so, add it to the list
-                for neighbor in G.neighbors(node):
-                    if neighbor in top_nodes:
-                        top_nodes.append(node)
-                        break
-                if score > betweenness_threshold:
-                    top_nodes.append(node)
-
-        # If a node as only top nodes as neighbors, add it to the list
-        for node in G.nodes():
-            if node not in top_nodes:
-                neighbors = list(G.neighbors(node))
-                if all(neighbor in top_nodes for neighbor in neighbors):
-                    top_nodes.append(node)
-
-        # Get all paths between the top nodes, e.g., rings
-        for i in range(len(top_nodes)):
-            for j in range(i + 1, len(top_nodes)):
-                node1 = top_nodes[i]
-                node2 = top_nodes[j]
-
-                for path in nx.all_simple_paths(G, node1, node2):
-                    for node in path:
-                        if node not in top_nodes:
-                            top_nodes.append(node)
-
-        # Remove duplicates
-        top_nodes = list(set(top_nodes))
-        
-        # Loop over the top nodes and find the nodes that have a neighbor outside
-        # the top nodes
-        edge_nodes = set()
-        for top_node in top_nodes:
-            for neighbor in G.neighbors(top_node):
-                if neighbor not in top_nodes:
-                    edge_nodes.update([(top_node, neighbor)])
-                    break
-                
-        # Get molecule fragment from the top nodes
-        bonds = [protac.GetBondBetweenAtoms(i, j) for (i, j) in edge_nodes]
-        bonds_idx = [bond.GetIdx() for bond in bonds if bond is not None]
-
-        # Try any pair of indexes, if the number of resulting fragments is not 3,
-        # then do not consider them as candidates for splitting
-        candidate_bonds = []
-        for i in range(len(bonds_idx)):
-            for j in range(i + 1, len(bonds_idx)):
-                bond1 = bonds_idx[i]
-                bond2 = bonds_idx[j]
-
-                # Get the fragments
-                fragments = Chem.FragmentOnBonds(protac, [bond1, bond2])
-                    
-                # Check if there are 3 fragments
-                if Chem.MolToSmiles(fragments).count(".") == 2:
-                    frag_lens = []
-                    avg_len = 0
-                    for frag in Chem.GetMolFrags(fragments, asMols=True):
-                        frag_len = frag.GetNumAtoms()
-                        frag_lens.append(frag_len)
-                        avg_len += frag_len
-                    avg_len /= 3
-
-                    # Calculate the standard deviation of the fragment lengths
-                    len_std = 0
-                    for frag_len in frag_lens:
-                        len_std += (frag_len - avg_len) ** 2
-                    len_std = (len_std / 3) ** 0.5
-                    candidate_bonds.append(((bond1, bond2), len_std))
-
-        # Sort the candidate bonds by distance to average (smallest first)
-        candidate_bonds = sorted(candidate_bonds, key=lambda x: x[1])
-
-        ligands = None
-        while ligands is None and len(candidate_bonds) > 0:
-            bonds_idx = candidate_bonds[0][0]
-            try:
-                ligands = Chem.FragmentOnBonds(protac, bonds_idx, addDummies=True, dummyLabels=[(1, 1), (2, 2)])
-            except Exception as e:
-                print(f"Error fragmenting the molecule: {e}")
-                candidate_bonds.pop(0)
-
-        # If no candidate bonds were found, return None
-        if ligands is None:
-            print(f"No candidate bonds found for splitting PROTAC: {protac_smiles}")
-            return {'e3': None, 'poi': None, 'linker': None, 'top_nodes': None, 'centrality': None}
-
-    # --- Fragment the molecule ---
-    substructures = []
-    for ligand in Chem.GetMolFrags(ligands, asMols=True):
-        ligand_smiles = Chem.MolToSmiles(ligand, canonical=True)
-        if ligand_smiles.count("*") == 2:
-            linker_smiles = ligand_smiles
-        else:
-            substructures.append(ligand_smiles)
-
-    # --- Assign fragments ---
-    if use_classifier and classifier and not getattr(classifier, "binary", False):
-        # Multiclass: labels are fixed
-        e3_smiles = substructures[0]
-        wh_smiles = substructures[1]
-        e3_attach_point, wh_attach_point = 1, 2
-    else:
-        # Binary or deterministic: use E3 reference fingerprints
-        if representative_e3s_fp is None or morgan_fp_generator is None:
-            raise ValueError("For binary or deterministic splitting, representative_e3s_fp and morgan_fp_generator must be provided.")
-        sub1_dist = average_tanimoto_distance(substructures[0], representative_e3s_fp, morgan_fp_generator)
-        sub2_dist = average_tanimoto_distance(substructures[1], representative_e3s_fp, morgan_fp_generator)
-        if sub1_dist < sub2_dist:
-            e3_smiles = substructures[0]
-            wh_smiles = substructures[1]
-        else:
-            e3_smiles = substructures[1]
-            wh_smiles = substructures[0]
-        e3_attach_point = extract_attachment_point(e3_smiles)
-        wh_attach_point = extract_attachment_point(wh_smiles)
-
-    # --- Normalize dummy labels ---
-    e3_smiles = e3_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
-    linker_smiles = linker_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
-    wh_smiles = wh_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
-    linker_smiles = linker_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
-
-    # --- Adjust bonds if necessary ---
     substructs = {
-        "e3": e3_smiles,
-        "poi": wh_smiles,
-        "linker": linker_smiles,
+        "e3": ret["e3"],
+        "poi": ret["poi"],
+        "linker": ret["linker"],
     }
 
     # If all of the substructures are not None, fix the amide and ester bonds
     if all(x is not None for x in substructs.values()):
         substructs = adjust_amide_bonds_in_substructs(substructs, protac_smiles)
         substructs = adjust_ester_bonds_in_substructs(substructs, protac_smiles)
-        e3_smiles = substructs["e3"]
-        wh_smiles = substructs["poi"]
-        linker_smiles = substructs["linker"]
+        ret["e3"] = substructs["e3"]
+        ret["poi"] = substructs["poi"]
+        ret["linker"] = substructs["linker"]
 
-    return {
-        "e3": e3_smiles,
-        "poi": wh_smiles,
-        "linker": linker_smiles,
-        "bonds_idx": bonds_idx,
-    }
-
+    return ret
 
 def split_protac_with_graphs_wrapper(
     protac_smiles: List[str],
@@ -569,7 +408,7 @@ def split_protac_with_graphs_wrapper(
     Returns:
         List[Dict[str, str]]: List of dictionaries containing the split results for each PROTAC molecule.
     """
-    if morgan_fp_generator is None:
+    if morgan_fp_generator is None and (representative_e3s is None or representative_e3s_fp is None):
         # Create a default Morgan fingerprint generator
         morgan_fp_generator = rdFingerprintGenerator.GetMorganGenerator(
             radius=16,
