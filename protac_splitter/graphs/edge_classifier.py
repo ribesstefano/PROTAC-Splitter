@@ -22,7 +22,7 @@ try:
 except ImportError:
     HAS_VISUALIZATION = False    
 
-from .graph_features import extract_edge_features, get_edge_features
+from .edge_features import extract_edge_features, get_edge_features
 
 
 class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
@@ -99,14 +99,14 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
 
         preprocessor = ColumnTransformer(transformers)
 
+        # Define the classifier
         classifier = XGBClassifier(
             random_state=42,
             eval_metric="logloss" if self.binary else "mlogloss",
             objective="binary:logistic" if self.binary else "multi:softprob",
-            tree_method="hist",
             **self.xgb_params
         )
-        
+
         if self.smote_k_neighbors is not None:
             return ImbPipeline([
                 ("preprocess", preprocessor),
@@ -150,6 +150,7 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
         verbose: int = 0
     ) -> pd.DataFrame:
         if any(x is None for x in [wh_smiles, lk_smiles, e3_smiles]):
+            # Get features from PROTAC only, for inference
             return extract_edge_features(
                 protac_smiles=protac_smiles,
                 n_bits=n_bits,
@@ -157,6 +158,7 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
                 descriptor_names=descriptor_names,
             )
         else:
+            # Get features and labels from all components, for training
             return get_edge_features(
                 protac_smiles=protac_smiles,
                 wh_smiles=wh_smiles,
@@ -305,7 +307,7 @@ def get_classification_report(y_true, y_pred, labels):
     return df_report
 
 def plot_confusion_matrix(y_true, y_pred, labels):
-    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    cm = confusion_matrix(y_true, y_pred)
     if HAS_VISUALIZATION:
         plt.figure(figsize=(8, 6))
         sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels)
@@ -394,17 +396,16 @@ def train_edge_classifier(
         "categorical_features": ["chem_bond_type", "chem_atom_u", "chem_atom_v"],
         "fingerprint_features": [c for c in X_train.columns if c.startswith("chem_mol_fp_")],
         "use_descriptors": False,
-        "use_fingerprints": False,
+        "use_fingerprints": True,
+        "n_svd_components": 50,
         "binary": True,
-        "smote_k_neighbors": 5,
+        "smote_k_neighbors": 10,
         "xgb_params": {
-            "n_estimators": 1000,
             "max_depth": 6,
-            "learning_rate": 0.01,
-            "subsample": 0.8,
-            "colsample_bytree": 0.8,
-            "min_child_weight": 1,
-            "gamma": 0.1
+            "learning_rate": 0.3,
+            "alpha": 0.1, # Default: 0
+            "lambda": 0.5, # Default: 1
+            "gamma": 0.1, # Default: 0
         },
     })
 
@@ -414,7 +415,7 @@ def train_edge_classifier(
         clf.save(model_filename)
         print(f"Model saved to {model_filename}")
 
-    target_labels = [0, 1] if clf.binary else [0, 1, 2]
+    target_labels = ["No Split", "Split"] if clf.binary else ["No Split", "WH-Linker", "E3-Linker"]
 
     if val_df is not None:
         # Get validation data

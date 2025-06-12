@@ -9,7 +9,8 @@ This directory contains scripts that can be used to interact with the PROTAC-Spl
 - [Collect LLMs Predictions](#collect-llms-predictions)
 - [Score Predictions](#score-predictions)
 - [Plotting Scores](#plotting-scores)
-- [protac_splitter_app](#protac_splitter_app)
+- [Plotting the Chemical Space](#plotting-the-chemical-space)
+- [PROTAC-Splitter App](#protac-splitter-app)
 
 ## Generate Finetuning Dataset
 
@@ -76,6 +77,17 @@ Please run `python scripts/plotting.py --help` for more information on the argum
 ```bash
 python scripts/plotting.py --score_file="logs/PROTAC-Splitter-Model-v2-scores.csv" --img_dir="images"
 ```
+
+## Plotting the Chemical Space
+
+To plot the chemical space of the PROTACs, you can use the [`scripts/plot_chemical_space.py`](../scripts/plot_chemical_space.py) script.
+Please run `python scripts/plot_chemical_space.py --help` for more information on the arguments. Example of usage:
+
+```bash
+python scripts/plot_chemical_space.py --protac_db_path=data/raw/PROTAC-DB-v3.csv --protac_pedia_path=data/raw/PROTAC-Pedia.csv --num_proc=8 --num_proc_fp_gen=8 --internal_data_path=path/to/interna/data.csv
+```
+
+Notice that the fingerprint generation can take a while, so the first run is recommended to run this script on a machine with multiple cores.
 
 ## PROTAC-Splitter App
 

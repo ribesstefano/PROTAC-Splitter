@@ -11,6 +11,54 @@ from protac_splitter.chemoinformatics import get_atom_idx_at_attachment
 from protac_splitter.display_utils import safe_display, get_mapped_protac_img
 
 
+def bond_capacity(bond: Chem.Bond) -> int:
+    """ Calculate the capacity of a bond based on its type and properties.
+    Parameters:
+        bond (Chem.Bond): The bond object from RDKit.
+    Returns:
+        int: The capacity of the bond, where higher values indicate less preference for cutting.
+    """
+    # High capacity for aromatic and ring bonds to avoid cutting them
+    if bond.GetIsAromatic() or bond.IsInRing():
+        return 1000  # very high capacity: avoid cutting aromatic bonds
+    elif bond.GetBondType() == Chem.BondType.SINGLE:
+        return 1     # low capacity: prefer to cut here
+    elif bond.GetBondType() == Chem.BondType.DOUBLE:
+        return 10    # medium penalty
+    elif bond.GetBondType() == Chem.BondType.TRIPLE:
+        return 20    # stronger penalty
+    else:
+        return 50    # fallback for unknown/rare types
+
+def smiles_to_nx(
+    smiles: str,
+    use_capacity: bool = False,
+) -> nx.Graph:
+    """ Convert a SMILES string to a NetworkX graph.
+    Parameters:
+        smiles (str): The SMILES string to convert.
+        use_capacity (bool): Whether to use bond capacity as edge weights.
+    Returns:
+        nx.Graph: The NetworkX graph representation of the molecule.
+    """
+    mol = Chem.MolFromSmiles(smiles)
+    if mol is None:
+        raise ValueError(f"Input SMILES could not be parsed: {smiles}")
+    # Canonicalize the SMILES
+    mol = Chem.MolFromSmiles(Chem.MolToSmiles(mol, canonical=True))
+    if mol is None:
+        raise ValueError(f"Input SMILES could not be canonicalized: {smiles}")
+    # Convert SMILES to NetworkX graph
+    G = nx.Graph()
+    if use_capacity:
+        for bond in mol.GetBonds():
+            capacity = bond_capacity(bond)
+            G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), capacity=capacity)
+    else:
+        for bond in mol.GetBonds():
+            G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())    
+    return G
+
 def extract_edge_features(
     protac_smiles: str,
     e3_split_pair: Tuple[int, int] = None,
@@ -42,12 +90,8 @@ def extract_edge_features(
         raise ValueError(f"Input SMILES could not be canonicalized: {protac_smiles}")
 
     # Step 1: Convert SMILES to NetworkX
-    G = nx.Graph()
-    # for atom in mol.GetAtoms():
-    #     G.add_node(atom.GetIdx())
-    for bond in mol.GetBonds():
-        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
-    
+    G = smiles_to_nx(protac_smiles, use_capacity=False)
+
     num_nodes = G.number_of_nodes()
     num_edges = G.number_of_edges()
 

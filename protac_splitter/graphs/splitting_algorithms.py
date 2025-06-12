@@ -31,11 +31,9 @@ def bond_capacity(bond: Chem.Bond) -> int:
 def smiles_to_nx(smiles: str) -> nx.Graph:
     mol = Chem.MolFromSmiles(smiles)
     G = nx.Graph()
-    for atom in mol.GetAtoms():
-        G.add_node(atom.GetIdx(), element=atom.GetSymbol())
     for bond in mol.GetBonds():
         capacity = bond_capacity(bond)
-        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), bond_type=bond.GetBondType(), capacity=capacity)
+        G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), capacity=capacity)
     return G
 
 def extract_attachment_point(smiles):
