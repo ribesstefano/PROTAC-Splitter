@@ -28,14 +28,14 @@ if __name__ == "__main__":
     parser.add_argument("--dataset_test_split", type=str, default="held_out", help="Test split of the dataset for seq2seq pipeline.")
     parser.add_argument("--batch_size", type=int, default=1, help="Batch size for processing.")
     parser.add_argument("--is_causal_language_model", action='store_true', help="Set to True if using a causal language model (e.g., GPT).")
-    parser.add_argument("--n_jobs", type=int, default=1, help="Number of parallel jobs.")
+    parser.add_argument("--num_proc", type=int, default=1, help="Number of parallel jobs.")
 
     args = parser.parse_args()
 
     # Check if hub_token is provided
     if args.hub_token is None:
-        hub_token = os.getenv('HF_TOKEN', None)
-        if hub_token is None:
+        args.hub_token = os.getenv('HF_TOKEN', None)
+        if args.hub_token is None:
             raise ValueError('Hugging Face API token not provided. Please provide a token using the --hub_token argument or set the HF_TOKEN environment variable')
 
     print('Loading dataset...')
@@ -56,7 +56,7 @@ if __name__ == "__main__":
             test_ds = load_dataset(
                 args.dataset_dir,
                 args.dataset_config,
-                token=hub_token,
+                token=args.hub_token,
                 cache_dir=args.cache_dir,
             )[args.dataset_test_split]
 
@@ -112,7 +112,7 @@ if __name__ == "__main__":
     out_df = test_ds.map(
         mapping_func,
         remove_columns=[args.smiles_column, args.labels_column, "predictions"],
-        num_proc=args.n_jobs,
+        num_proc=args.num_proc,
     ).to_pandas()
     print(f"Finished splitting PROTACs. Output DataFrame saved to: {args.output_csv}")
 
