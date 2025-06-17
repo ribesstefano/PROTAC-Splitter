@@ -1,9 +1,14 @@
-from typing import Optional
+from typing import Optional, List, Dict
+from datasets import Dataset
 from transformers import (
     AutoTokenizer,
     EncoderDecoderModel,
     AutoModelForCausalLM,
+    pipeline,
+    GenerationConfig,
 )
+from transformers.pipelines.pt_utils import KeyDataset
+from tqdm import tqdm
 import torch
 
 
@@ -95,3 +100,132 @@ def get_causal_model(
     model.to(device)
 
     return model
+
+
+# REF: https://github.com/huggingface/transformers/blob/v4.44.2/src/transformers/generation/configuration_utils.py#L71
+GENERATION_STRATEGY_PARAMS = {
+    "greedy": {"num_beams": 1, "do_sample": False},
+    "contrastive_search": {"penalty_alpha": 0.1, "top_k": 10},
+    "multinomial_sampling": {"num_beams": 1, "do_sample": True},
+    "beam_search_decoding": {"num_beams": 5, "do_sample": False, "num_return_sequences": 5},
+    "beam_search_multinomial_sampling": {"num_beams": 5, "do_sample": True, "num_return_sequences": 5},
+    "diverse_beam_search_decoding": {"num_beams": 5, "num_beam_groups": 5, "diversity_penalty": 1.0, "num_return_sequences": 5},
+}
+
+def get_generation_config(generation_strategy: str) -> GenerationConfig:
+    """ Get the generation config for the given generation strategy. """
+    return GenerationConfig(
+        max_length=512,
+        max_new_tokens=512,
+        **GENERATION_STRATEGY_PARAMS[generation_strategy],
+    )
+
+def get_pipeline(
+        model_name: str,
+        token: str,
+        is_causal_language_model: bool,
+        generation_strategy: Optional[str] = None,
+) -> pipeline:
+    if is_causal_language_model and generation_strategy is None:
+        print('Loading pipeline for causal language models...')
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=token, padding_side='left')
+        return pipeline(
+            "text-generation",
+            model=model_name,
+            tokenizer=tokenizer,
+            token=token,
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            num_return_sequences=1,
+        )
+    if is_causal_language_model and generation_strategy is not None:
+        print('Loading pipeline for causal language models...')
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=token, padding_side='left')
+        return pipeline(
+            "text-generation",
+            model=model_name,
+            tokenizer=tokenizer,
+            token=token,
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            generation_config=get_generation_config(generation_strategy),
+        )
+    if not is_causal_language_model and generation_strategy is None:
+        print('Loading pipeline for sequence-to-sequence models...')
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
+        return pipeline(
+            "text2text-generation",
+            model=model_name,
+            tokenizer=tokenizer,
+            token=token,
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+        )
+    if not is_causal_language_model and generation_strategy is not None:
+        print('Loading pipeline for sequence-to-sequence models...')
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
+        return pipeline(
+            "text2text-generation",
+            model=model_name,
+            tokenizer=tokenizer,
+            token=token,
+            device='cuda' if torch.cuda.is_available() else 'cpu',
+            generation_config=get_generation_config(generation_strategy),
+        )
+
+def run_causal_pipeline(
+        pipe: pipeline,
+        test_ds: Dataset,
+        batch_size: int,
+        smiles_column: str = 'prompt',
+) -> List[Dict[str, str]]:
+    """ Run the pipeline for causal language models and return the predictions.
+    
+    Args:
+        pipe (pipeline): The pipeline object to use for generating predictions.
+        test_ds (Dataset): The test dataset to generate predictions for.
+        batch_size (int): The batch size to use for generating predictions.
+
+    Returns:
+        List[Dict[str, str]]: A list of dictionaries containing the predictions.
+    """
+    preds = []
+    for pred in tqdm(pipe(KeyDataset(test_ds, smiles_column), batch_size=batch_size, max_length=512), total=len(test_ds) // batch_size):
+        generated_text = [p['generated_text'] for p in pred]
+        # Remove the prompt from the generated text
+        generated_text = ['.'.join(t.split('.')[1:]) for t in generated_text]
+        # Add the predictions to the list
+        p = {f'pred_n{i}': t for i, t in enumerate(generated_text)}
+        preds.append(p)
+    return preds
+
+def run_seq2seq_pipeline(
+        pipe: pipeline,
+        test_ds: Dataset,
+        batch_size: int,
+        smiles_column: str = 'text',
+) -> List[Dict[str, str]]:
+    """ Run the pipeline for sequence-to-sequence models and return the predictions.
+    
+    Args:
+        pipe (pipeline): The pipeline object to use for generating predictions.
+        test_ds (Dataset): The test dataset to generate predictions for.
+        batch_size (int): The batch size to use for generating predictions.
+        
+    Returns:
+        List[Dict[str, str]]: A list of dictionaries containing the predictions.
+    """
+    preds = []
+    for pred in tqdm(pipe(KeyDataset(test_ds, smiles_column), batch_size=batch_size, max_length=512), total=len(test_ds) // batch_size):
+        p = {f'pred_n{i}': p['generated_text'] for i, p in enumerate(pred)}
+        preds.append(p)
+    return preds
+
+def run_pipeline(
+        pipe: pipeline,
+        test_ds: Dataset,
+        batch_size: int,
+        is_causal_language_model: bool,
+        smiles_column: str = 'text',
+) -> List[Dict[str, str]]:
+    if is_causal_language_model:
+        return run_causal_pipeline(pipe, test_ds, batch_size, smiles_column)
+    else:
+        return run_seq2seq_pipeline(pipe, test_ds, batch_size, smiles_column)
