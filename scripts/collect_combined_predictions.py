@@ -13,7 +13,7 @@ from protac_splitter.protac_splitter import fix_prediction
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect combined predictions for PROTACs.")
     parser.add_argument("--input_csv", type=str, default=None, help="Path to input CSV file with PROTACs.")
-    parser.add_argument("--output_csv", type=str, required=True, help="Output CSV file for predictions.")
+    parser.add_argument("--output_csv", type=str, default="combined_models-preds.csv", help="Output CSV file for predictions.")
     parser.add_argument("--smiles_column", type=str, default="text", help="Column name for PROTAC SMILES.")
     parser.add_argument("--labels_column", type=str, default="labels", help="Column name for label SMILES.")
     parser.add_argument("--use_classifier", action='store_true', help="Use edge classifier model.")
@@ -116,4 +116,7 @@ if __name__ == "__main__":
     ).to_pandas()
     print(f"Finished splitting PROTACs. Output DataFrame saved to: {args.output_csv}")
 
+    # Save the output DataFrame to CSV
+    if args.output_csv is None:
+        print(f"No output CSV specified. Using default: {args.output_csv}")
     out_df.to_csv(args.output_csv, index=False)
