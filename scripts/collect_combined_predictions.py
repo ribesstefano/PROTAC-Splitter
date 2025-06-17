@@ -1,5 +1,6 @@
 import os
 import argparse
+import logging
 
 import pandas as pd
 from datasets import Dataset, load_dataset
@@ -9,6 +10,7 @@ from protac_splitter.graphs.e3_clustering import get_representative_e3s_fp
 from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
 from protac_splitter.llms.model_utils import get_pipeline, run_pipeline
 from protac_splitter.protac_splitter import fix_prediction
+from protac_splitter.evaluation import check_reassembly
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Collect combined predictions for PROTACs.")
@@ -31,6 +33,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_proc", type=int, default=1, help="Number of parallel jobs.")
 
     args = parser.parse_args()
+
+    # Set log level to ERROR
+    logging.basicConfig(level=logging.ERROR)
 
     # Check if hub_token is provided
     if args.hub_token is None:
@@ -69,6 +74,7 @@ if __name__ == "__main__":
 
     # Getting a list of predictions
     preds = run_pipeline(pipe, test_ds, args.batch_size, args.is_causal_language_model, args.smiles_column)
+    print(f"Generated predictions for {len(preds)} samples.")
 
     # Add the list of predictions to the dataset
     test_ds = test_ds.add_column("predictions", preds)
@@ -90,7 +96,7 @@ if __name__ == "__main__":
         pred_smiles = example["predictions"]["pred_n0"] # Take top-1 prediction
 
         fixed_smiles = fix_prediction(protac_smiles, pred_smiles)
-        if fixed_smiles is None:
+        if not check_reassembly(protac_smiles, fixed_smiles):
             ret = split_protac_graph_based(
                 protac_smiles=protac_smiles,
                 use_classifier=args.use_classifier,
@@ -109,6 +115,8 @@ if __name__ == "__main__":
             "model_name": model_name,
         }
 
+    # Apply the mapping function to the dataset
+    print("Calling XGBoost-based graph splitting algorithm for failed predictions...")
     out_df = test_ds.map(
         mapping_func,
         remove_columns=[args.smiles_column, args.labels_column, "predictions"],
