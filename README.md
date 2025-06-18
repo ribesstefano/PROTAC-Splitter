@@ -70,9 +70,12 @@ python -m scripts.protac_splitter_app
 
 ### Model Download
 
-Until the repository is private, please download the model locally from this Google Drive link: https://drive.google.com/file/d/18hq62csehlmQlzfQoAAgmiV_vMT0AcP0/view?usp=share_link
+Until the repository is private, please download the model locally from this Google Drive link: https://drive.google.com/file/d/18hq62csehlmQlzfQoAAgmiV_vMT0AcP0/view?usp=share_link  [RMO: update this link to Zenodo]
 
 After unzipping, set the `model_name` argument to the path of the unzipped directory. At this point, there is no need to set the `hf_token` argument when calling the `split_protac` function. Since the model is not open yet, the Gradio app works with local models only.
+
+### Data Download
+[RMO: add link to Zenodo]
 
 ## Score Predictions 📊
 
