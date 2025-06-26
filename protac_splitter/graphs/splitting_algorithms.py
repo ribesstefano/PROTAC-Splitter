@@ -232,18 +232,16 @@ def split_protac_with_edge_classifier(
         representative_e3s_fp: Optional[List[np.array]] = None,
         morgan_fp_generator: Optional[Any] = None,
 ) -> Dict[str, str]:
-    """
-    Split the PROTAC molecule into two parts using the NetworkX library.
+    """ Split the PROTAC molecule into two parts using the pretrained edge classifier.
     
     Parameters:
         protac_smiles (str): The SMILES string of the PROTAC molecule.
-        representative_e3s_fp (list): List of representative E3 ligands fingerprints.
-        morgan_fp_generator: RDKit Morgan fingerprint generator (should be the same as the one that generated the E3 fingerprints).
-        use_capacity_weight (bool): Whether to use bond capacity as weight for the graph.
-        betweenness_threshold (float): Threshold for betweenness centrality to consider a node as a candidate for splitting.
+        pipeline (Union[str, Path]): Path to the trained GraphEdgeClassifier model.
+        representative_e3s_fp (Optional[List[np.array]]): Precomputed fingerprints of representative E3 ligands.
+        morgan_fp_generator (Optional[Any]): RDKit Morgan fingerprint generator (should be the same as the one that generated the E3 fingerprints).
         
     Returns:
-        dict: A dictionary containing the E3 ligand, warhead, linker, top nodes, and max centrality score.
+        dict: A dictionary containing the E3 ligand, warhead, linker, and bonds_idx
     """
     if morgan_fp_generator is None:
         # Create a default Morgan fingerprint generator
@@ -439,7 +437,7 @@ def split_protac_with_graphs_wrapper(
     ]
 
 
-def split_protac_with_graphs(
+def split_protac_with_graphs_parallel(
     protac_smiles: List[str],
     use_classifier: bool = False,
     classifier: Optional['GraphEdgeClassifier'] = None,
@@ -451,7 +449,7 @@ def split_protac_with_graphs(
     n_jobs: int = 1,
     batch_size: int = 1,
 ) -> List[Dict[str, str]]:
-    """    Splits a list of PROTAC molecules using either ML classifier or deterministic betweenness centrality.
+    """ Splits a list of PROTAC molecules using either ML classifier or deterministic betweenness centrality.
     
     Parameters:
         protac_smiles (List[str]): List of SMILES strings of PROTAC molecules.

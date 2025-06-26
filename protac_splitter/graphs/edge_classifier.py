@@ -14,6 +14,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report
 from sklearn.metrics import confusion_matrix
 from xgboost import XGBClassifier
+import optuna
+from optuna.samplers import QMCSampler
+from sklearn.metrics import accuracy_score, f1_score
 
 try:
     import seaborn as sns
@@ -331,28 +334,23 @@ def train_edge_classifier(
     test_df: Optional[pd.DataFrame] = None,
     model_filename: Optional[Union[str, Path]] = None,
     edge_classifier_kwargs: Optional[Dict[str, Any]] = None,
+    cache_dir: Optional[Union[str, Path]] = None,
+    return_reports: bool = True,
 ) -> GraphEdgeClassifier:
     """
     Train an edge-level graph classifier for PROTACs.
     
-    Parameters:
-        train_df (pd.DataFrame): Training data with features and labels.
-        graph_features (List[str]): List of graph features to use.
-        categorical_features (Optional[List[str]]): Categorical features to encode.
-        descriptor_features (Optional[List[str]]): Descriptor features to use.
-        fingerprint_features (Optional[List[str]]): Fingerprint features to use.
-        use_descriptors (bool): Whether to use descriptors in the model.
-        use_fingerprints (bool): Whether to use fingerprints in the model.
-        scaler_graph (Literal["passthrough", "standard"]): Scaler for graph features.
-        scaler_desc (Literal["passthrough", "standard"]): Scaler for descriptor features.
-        use_svd_fp (bool): Whether to apply SVD on fingerprints.
-        n_svd_components (int): Number of SVD components if used.
-        binary (bool): Whether the task is binary classification.
-        smote_k_neighbors (Optional[int]): Number of neighbors for SMOTE oversampling.
-        xgb_params (Optional[dict]): Additional parameters for XGBClassifier.
-        n_bits (int): Number of bits for fingerprint generation.
-        radius (int): Radius for fingerprint generation.
-        descriptor_names (Optional[List[str]]): Names of molecular descriptors to compute.
+    Args:
+        train_df (pd.DataFrame): Training data with columns:
+            - 'PROTAC SMILES'
+            - 'POI Ligand SMILES with direction'
+            - 'Linker SMILES with direction'
+            - 'E3 Binder SMILES with direction'
+        val_df (Optional[pd.DataFrame]): Validation data, same format as train_df.
+        test_df (Optional[pd.DataFrame]): Test data, same format as train_df.
+        model_filename (Optional[Union[str, Path]]): Path to save the trained model.
+        edge_classifier_kwargs (Optional[Dict[str, Any]]): Additional parameters for GraphEdgeClassifier.
+        return_reports (bool): Whether to return classification reports for validation and test sets.
 
     Returns:
         GraphEdgeClassifier: Trained edge classifier instance.
@@ -363,8 +361,18 @@ def train_edge_classifier(
         ("val", val_df),
         ("test", test_df),
     ]:
+        if cache_dir is not None:
+            cache_path = Path(cache_dir) / f"{set_name}.csv"
+            if cache_path.exists():
+                print(f"Loading cached features for {set_name} from {cache_path}")
+                sets[set_name] = pd.read_csv(cache_path)
+                continue
+            else:
+                print(f"Cache not found for {set_name}, extracting features...")
+
         if df is None or df.empty:
             continue
+
         print(f"Set: {set_name}, size: {len(df):,}")
         if 'PROTAC SMILES' not in df.columns or \
            'POI Ligand SMILES with direction' not in df.columns or \
@@ -382,13 +390,17 @@ def train_edge_classifier(
         # Drop rows with label_e3_split + label_wh_split > 1
         sets[set_name] = sets[set_name][(sets[set_name]["label_e3_split"] + sets[set_name]["label_wh_split"]) <= 1]
         print(f"Set: {set_name}, size: {len(sets[set_name]):,}")
+        if cache_dir is not None:
+            cache_path = Path(cache_dir) / f"{set_name}.csv"
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            sets[set_name].to_csv(cache_path, index=False)
+            print(f"Saved {set_name} features to {cache_path}")
         
     train_set = sets["train"]
     label_cols = [c for c in train_set.columns if c.startswith("label_")]
     train_set = train_set.dropna(subset=label_cols)
     train_set = train_set[(train_set["label_e3_split"] + train_set["label_wh_split"]) <= 1]
     X_train = train_set.drop(columns=label_cols)
-    y_train = train_set["label_is_split"].astype("int32") if clf.binary else GraphEdgeClassifier.build_multiclass_target(train_set)
 
     # Instantiate and train
     clf = GraphEdgeClassifier(**edge_classifier_kwargs or {
@@ -409,7 +421,15 @@ def train_edge_classifier(
         },
     })
 
+    # Prepare target variable according to classification type
+    if clf.binary:
+        y_train = train_set["label_is_split"].astype("int32")
+    else:
+        y_train = GraphEdgeClassifier.build_multiclass_target(train_set)
+
+    print(f"Training set size: {len(X_train):,}, labels: {y_train.unique()}")
     clf.fit(X_train, y_train)
+    print("Training complete.")
     
     if model_filename is not None:
         clf.save(model_filename)
@@ -417,7 +437,8 @@ def train_edge_classifier(
 
     target_labels = ["No Split", "Split"] if clf.binary else ["No Split", "WH-Linker", "E3-Linker"]
 
-    if val_df is not None:
+    report = None
+    if "val" in sets:
         # Get validation data
         val_set = sets["val"].dropna(subset=label_cols)
         val_set = val_set[(val_set["label_e3_split"] + val_set["label_wh_split"]) <= 1]
@@ -427,7 +448,7 @@ def train_edge_classifier(
         report = get_classification_report_and_plot(y_val, y_pred, target_labels)
         print(f"Validation set classification report:\n{report.to_markdown(index=False)}")
 
-    if test_df is not None:
+    if "test" in sets:
         # Get test data
         test_set = sets["test"].dropna(subset=label_cols)
         test_set = test_set[(test_set["label_e3_split"] + test_set["label_wh_split"]) <= 1]
@@ -437,4 +458,118 @@ def train_edge_classifier(
         report = get_classification_report_and_plot(y_test, y_pred, target_labels)
         print(f"Test set classification report:\n{report.to_markdown(index=False)}")
 
-    return clf
+    if return_reports:
+        return clf, report
+    else:
+        return clf
+
+
+def objective(trial, train_df, val_df):
+    # HP space
+    max_depth = trial.suggest_int("max_depth", 3, 10)
+    learning_rate = trial.suggest_float("learning_rate", 0.01, 0.3, log=True)
+    alpha = trial.suggest_float("alpha", 0.0, 2.0)
+    reg_lambda = trial.suggest_float("lambda", 0.0, 2.0)
+    gamma = trial.suggest_float("gamma", 0.0, 1.0)
+    n_svd_components = trial.suggest_int("n_svd_components", 16, 128)
+    smote_k_neighbors = trial.suggest_int("smote_k_neighbors", 3, 15)
+    use_descriptors = trial.suggest_categorical("use_descriptors", [False, True])
+    use_fingerprints = trial.suggest_categorical("use_fingerprints", [True, False])
+
+    edge_classifier_kwargs = {
+        "graph_features": None,  # Will be set in train_edge_classifier
+        "categorical_features": None,
+        "fingerprint_features": None,
+        "use_descriptors": use_descriptors,
+        "use_fingerprints": use_fingerprints,
+        "n_svd_components": n_svd_components,
+        "binary": True,
+        "smote_k_neighbors": smote_k_neighbors,
+        "xgb_params": {
+            "max_depth": max_depth,
+            "learning_rate": learning_rate,
+            "alpha": alpha,
+            "lambda": reg_lambda,
+            "gamma": gamma,
+        },
+    }
+
+    _, val_report = train_edge_classifier(
+        train_df=train_df,
+        val_df=val_df,
+        edge_classifier_kwargs=edge_classifier_kwargs,
+        return_reports=True
+    )
+
+    # Evaluate metrics on validation set
+    # Assume val_report has columns: ['Label', 'precision', 'recall', 'f1-score', 'support']
+    # and that the binary positive class is "Split" or "1"
+    try:
+        f1_1 = float(val_report[val_report["Label"].isin(["Split", 1, "1"])]["f1-score"])
+    except Exception:
+        f1_1 = 0.0
+    try:
+        acc = float(val_report[val_report["Label"] == "accuracy"]["f1-score"])
+    except Exception:
+        acc = 0.0
+
+    # Multi-objective: prioritize F1 for minority class, but keep accuracy
+    # Adjust weight depending on task (here equal)
+    score = 0.5 * acc + 0.5 * f1_1
+    return score
+
+def run_optuna_search(
+    train_df: pd.DataFrame,
+    val_df: pd.DataFrame,
+    n_trials: int = 50,
+    study_name: str = "edge_classifier_hp_search",
+    study_dir: str = "./optuna_studies",
+    seed: int = 42,
+) -> Any:
+    import os
+    os.makedirs(study_dir, exist_ok=True)
+    study_path = f"sqlite:///{os.path.join(study_dir, study_name)}.db"
+
+    study = optuna.create_study(
+        study_name=study_name,
+        direction="maximize",
+        sampler=QMCSampler(seed=seed, qmc_type="sobol"),
+        storage=study_path,
+        load_if_exists=True,
+    )
+    func = lambda trial: objective(trial, train_df, val_df)
+    study.optimize(func, n_trials=n_trials, show_progress_bar=True)
+
+    print("Best trial:")
+    print(study.best_trial)
+
+    # Train classifier with best HP and return it
+    best_params = study.best_trial.params
+    edge_classifier_kwargs = {
+        "graph_features": None,
+        "categorical_features": None,
+        "fingerprint_features": None,
+        "use_descriptors": best_params["use_descriptors"],
+        "use_fingerprints": best_params["use_fingerprints"],
+        "n_svd_components": best_params["n_svd_components"],
+        "binary": True,
+        "smote_k_neighbors": best_params["smote_k_neighbors"],
+        "xgb_params": {
+            "max_depth": best_params["max_depth"],
+            "learning_rate": best_params["learning_rate"],
+            "alpha": best_params["alpha"],
+            "lambda": best_params["lambda"],
+            "gamma": best_params["gamma"],
+        },
+    }
+    clf, _ = train_edge_classifier(
+        train_df=train_df,
+        val_df=val_df,
+        edge_classifier_kwargs=edge_classifier_kwargs,
+        return_reports=True,
+    )
+    study_file = os.path.join(study_dir, f"{study_name}_study.pkl")
+    import joblib
+    joblib.dump(study, study_file)
+    print(f"Optuna study saved to {study_file}")
+    return clf, study
