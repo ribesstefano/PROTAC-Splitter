@@ -60,6 +60,7 @@ def get_mapped_protac_img(
         useSVG: bool = False,
         display_image: bool = False,
         legend: Optional[str] = None,
+        show_bond_indices: bool = False,
 ):
     """ Display a PROTAC molecule with the POI, linker, and E3 ligase highlighted.
     
@@ -76,6 +77,7 @@ def get_mapped_protac_img(
         useSVG: Whether to use SVG format.
         display_image: Whether to display the image.
         legend: The legend to display.
+        show_bond_indices: Whether to show bond indices in the image.
     """
     protac_smiles = canonize(protac_smiles)
     e3_smiles = canonize(e3_smiles)
@@ -147,7 +149,8 @@ def get_mapped_protac_img(
         options.fontFile = '/System/Library/Fonts/Supplemental/Arial.ttf'
 
         if legend is None:
-            legend = '.'.join([e3_smiles, linker_smiles, poi_smiles])
+            # legend = '.'.join([e3_smiles, linker_smiles, poi_smiles])
+            legend = ""
 
         drawer.DrawMolecule(
             protac_mol,
@@ -157,6 +160,20 @@ def get_mapped_protac_img(
             highlightAtomColors=atom_colors,
             highlightBondColors=bond_colors,
         )
+
+        # Add bond indices as text in the center of each bond
+        if show_bond_indices:
+            # Needs coordinates; ensure 2D coords present
+            Chem.rdDepictor.Compute2DCoords(protac_mol)
+            for bond in protac_mol.GetBonds():
+                idx = bond.GetIdx()
+                begin = bond.GetBeginAtomIdx()
+                end = bond.GetEndAtomIdx()
+                begin_pos = drawer.GetDrawCoords(begin)
+                end_pos = drawer.GetDrawCoords(end)
+                mid_y = (begin_pos.y + end_pos.y) / 2
+                mid_x = (begin_pos.x + end_pos.x) / 2
+                drawer.DrawString(f"{idx}", Chem.rdGeometry.Point2D(mid_x, mid_y), rawCoords=True)
 
         drawer.FinishDrawing()
         svg_text = drawer.GetDrawingText()
