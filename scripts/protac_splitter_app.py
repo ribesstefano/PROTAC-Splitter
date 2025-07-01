@@ -147,6 +147,8 @@ def process_csv(file, smiles_col: str, use_transformer: bool = False, use_xgboos
         # Use Gradio's error message instead of raising an exception
         raise gr.Error(f"Column \"{smiles_col}\" is not in the provided CSV file.", duration=5)
 
+    gr.Progress(track_tqdm=True)
+
     try:
         results = split_protac(
             df,
@@ -155,7 +157,7 @@ def process_csv(file, smiles_col: str, use_transformer: bool = False, use_xgboos
             protac_smiles_col=smiles_col,
             fix_predictions=True,
             batch_size=4,
-            num_proc=4,
+            num_proc=2,
             beam_size=beam_size,  # Use beam search width for Transformer model
             verbose=1
         )
@@ -166,12 +168,16 @@ def process_csv(file, smiles_col: str, use_transformer: bool = False, use_xgboos
         else:
             raise gr.Error(f"An error occurred while processing: {exception_message}", duration=10)
     
+    gr.Progress(track_tqdm=False)
+
     output_df = pd.DataFrame(results)
     
     # Create a temporary output file
-    output_file = Path(tempfile.gettempdir()) / "split_preds.csv"
+    output_file = str(Path(tempfile.gettempdir()) / "split_preds.csv")
+    logging.debug(f"Saving predictions to temporary file: {output_file}")
     output_df.to_csv(output_file, index=False)
-    
+    logging.debug(f"Output DataFrame saved to: {output_file}")
+
     return output_file
 
 def create_interface():
@@ -252,7 +258,11 @@ For fast splitting, we reccommend using the XGBoost model only, which is fast an
         with gr.Tab("Upload CSV"):
             # File upload area
             file_input = gr.File(label="Upload CSV File")
-            smiles_column = gr.Textbox(label="Column Name for PROTAC SMILES", placeholder="e.g., \"PROTAC SMILES\"")
+            smiles_column = gr.Textbox(
+                label="Column Name for PROTAC SMILES",
+                # placeholder="e.g., \"PROTAC SMILES\"",
+                value="PROTAC SMILES",
+            )
             submit_csv = gr.Button("Process CSV")
             
             # Output file download area

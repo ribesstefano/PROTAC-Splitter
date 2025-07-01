@@ -1,4 +1,5 @@
 from typing import List, Optional, Tuple, Any
+import functools
 
 import pandas as pd
 import numpy as np
@@ -258,6 +259,8 @@ DEFAULT_REPRESENTATIVE_E3S = [
     'CC(=O)NCC(C(=O)N1CC(O)CC1C(=O)NC(CC(=O)N1CCC(N2CCC([*:2])CC2)CC1)c1ccccc1)C(C)C',
 ]
 
+
+@functools.lru_cache(maxsize=1, typed=False)
 def get_representative_e3s_fp(
     e3_list: Optional[List[str]] = None,
     fp_generator: Optional[Any] = None,

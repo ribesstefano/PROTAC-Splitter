@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Union
 from datasets import Dataset
 from transformers import (
     AutoTokenizer,
@@ -112,6 +112,10 @@ GENERATION_STRATEGY_PARAMS = {
     "diverse_beam_search_decoding": {"num_beams": 5, "num_beam_groups": 5, "diversity_penalty": 1.0, "num_return_sequences": 5},
 }
 
+def avail_generation_strategies() -> List[str]:
+    """ Get the available generation strategies. """
+    return list(GENERATION_STRATEGY_PARAMS.keys())
+
 def get_generation_config(generation_strategy: str) -> GenerationConfig:
     """ Get the generation config for the given generation strategy. """
     return GenerationConfig(
@@ -125,7 +129,15 @@ def get_pipeline(
         token: str,
         is_causal_language_model: bool,
         generation_strategy: Optional[str] = None,
+        num_return_sequences: int = 1,
+        device: Optional[Union[int, str]] = None,
 ) -> pipeline:
+    """ Get the pipeline for the given model name and generation strategy.
+    
+    
+    
+    """
+    device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
     if is_causal_language_model and generation_strategy is None:
         print('Loading pipeline for causal language models...')
         tokenizer = AutoTokenizer.from_pretrained(model_name, token=token, padding_side='left')
@@ -134,8 +146,8 @@ def get_pipeline(
             model=model_name,
             tokenizer=tokenizer,
             token=token,
-            device='cuda' if torch.cuda.is_available() else 'cpu',
-            num_return_sequences=1,
+            device=device,
+            num_return_sequences=num_return_sequences,
         )
     if is_causal_language_model and generation_strategy is not None:
         print('Loading pipeline for causal language models...')
@@ -145,7 +157,7 @@ def get_pipeline(
             model=model_name,
             tokenizer=tokenizer,
             token=token,
-            device='cuda' if torch.cuda.is_available() else 'cpu',
+            device=device,
             generation_config=get_generation_config(generation_strategy),
         )
     if not is_causal_language_model and generation_strategy is None:
@@ -156,7 +168,7 @@ def get_pipeline(
             model=model_name,
             tokenizer=tokenizer,
             token=token,
-            device='cuda' if torch.cuda.is_available() else 'cpu',
+            device=device,
         )
     if not is_causal_language_model and generation_strategy is not None:
         print('Loading pipeline for sequence-to-sequence models...')
@@ -166,7 +178,7 @@ def get_pipeline(
             model=model_name,
             tokenizer=tokenizer,
             token=token,
-            device='cuda' if torch.cuda.is_available() else 'cpu',
+            device=device,
             generation_config=get_generation_config(generation_strategy),
         )
 
@@ -225,6 +237,18 @@ def run_pipeline(
         is_causal_language_model: bool,
         smiles_column: str = 'text',
 ) -> List[Dict[str, str]]:
+    """ Run the pipeline and return the predictions.
+    
+    Args:
+        pipe (pipeline): The pipeline object to use for generating predictions.
+        test_ds (Dataset): The test dataset to generate predictions for.
+        batch_size (int): The batch size to use for generating predictions.
+        is_causal_language_model (bool): Whether the model is a causal language model or not.
+        smiles_column (str): The column name in the dataset that contains the SMILES strings. Default: 'text'
+        
+    Returns:
+        List[Dict[str, str]]: A list of dictionaries containing the beam-size predictions in the format: [{'pred_n0': 'prediction_0', 'pred_n1': 'prediction_1', ...}, ...]
+    """
     if is_causal_language_model:
         return run_causal_pipeline(pipe, test_ds, batch_size, smiles_column)
     else:

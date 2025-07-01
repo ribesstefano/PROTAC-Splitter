@@ -3,7 +3,7 @@ import pytest
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
 
-from protac_splitter.graphs.splitting_algorithms import split_protac_with_graphs
+from protac_splitter.graphs.splitting_algorithms import split_protac_with_graphs_parallel
 
 @pytest.mark.parametrize("smiles,label", [
     [
@@ -84,7 +84,7 @@ from protac_splitter.graphs.splitting_algorithms import split_protac_with_graphs
 def test_split_protac_with_graphs(smiles, label):
     # The label is in the format: e3.linker.poi
     # We want to check that the split_protac_with_graphs output matches the label parts
-    result = split_protac_with_graphs([smiles], n_jobs=1)[0]
+    result = split_protac_with_graphs_parallel([smiles], n_jobs=1)[0]
     # The output is a dict with keys: 'e3', 'poi', 'linker'
     # The label is a string: e3.linker.poi
     label_e3, label_linker, label_poi = label.split(".")
@@ -106,7 +106,7 @@ def test_split_protac_with_graphs_parallel():
     ]
     # Duplicate to make a larger batch
     smiles_list = smiles_list * 9
-    results = split_protac_with_graphs(smiles_list, n_jobs=2, batch_size=2)
+    results = split_protac_with_graphs_parallel(smiles_list, n_jobs=2, batch_size=2)
     assert len(results) == len(smiles_list)
     for result in results:
         assert isinstance(result["e3"], str)

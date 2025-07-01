@@ -336,6 +336,7 @@ def train_edge_classifier(
     edge_classifier_kwargs: Optional[Dict[str, Any]] = None,
     cache_dir: Optional[Union[str, Path]] = None,
     return_reports: bool = True,
+    plot_confusion_matrix: bool = False,
 ) -> GraphEdgeClassifier:
     """
     Train an edge-level graph classifier for PROTACs.
@@ -445,7 +446,10 @@ def train_edge_classifier(
         X_val = val_set.drop(columns=label_cols)
         y_val = val_set["label_is_split"].astype("int32") if clf.binary else GraphEdgeClassifier.build_multiclass_target(val_set)
         y_pred = clf.predict(X_val)
-        report = get_classification_report_and_plot(y_val, y_pred, target_labels)
+        if plot_confusion_matrix:
+            report = get_classification_report_and_plot(y_val, y_pred, target_labels)
+        else:
+            report = get_classification_report(y_val, y_pred, target_labels)
         print(f"Validation set classification report:\n{report.to_markdown(index=False)}")
 
     if "test" in sets:
@@ -455,7 +459,10 @@ def train_edge_classifier(
         X_test = test_set.drop(columns=label_cols)
         y_test = test_set["label_is_split"].astype("int32") if clf.binary else GraphEdgeClassifier.build_multiclass_target(test_set)
         y_pred = clf.predict(X_test)
-        report = get_classification_report_and_plot(y_test, y_pred, target_labels)
+        if plot_confusion_matrix:
+            report = get_classification_report_and_plot(y_test, y_pred, target_labels)
+        else:
+            report = get_classification_report(y_test, y_pred, target_labels)
         print(f"Test set classification report:\n{report.to_markdown(index=False)}")
 
     if return_reports:
@@ -498,7 +505,7 @@ def objective(trial, train_df, val_df):
         train_df=train_df,
         val_df=val_df,
         edge_classifier_kwargs=edge_classifier_kwargs,
-        return_reports=True
+        return_reports=True,
     )
 
     # Evaluate metrics on validation set
