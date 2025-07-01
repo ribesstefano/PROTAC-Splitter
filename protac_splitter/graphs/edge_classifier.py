@@ -260,6 +260,8 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
         features["pred_label"] = pred_label
         features["pred_proba"] = pred_proba[:, 1] if pred_proba.shape[1] > 1 else pred_proba[:, 0]
 
+        # NOTE: The SMILES is repeated for each edge, so we can drop duplicates
+        # and group by SMILES to get the top_n edges per SMILES.
         unique_smiles = pd.Series(features["chem_mol_smiles"]).drop_duplicates().tolist()
         groupby = features.groupby("chem_mol_smiles")
 
@@ -269,14 +271,10 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
             if pred_proba.shape[1] == 2:  # Binary case
                 for mol_smiles in unique_smiles:
                     group = groupby.get_group(mol_smiles)
-                    # Only consider edges predicted as label 1
-                    edges_class1 = group[group["pred_label"] == 1]
-                    # If none, pad with -1
-                    if len(edges_class1) == 0:
-                        results.append(np.full(top_n, -1))
-                        continue
                     # Sort by proba, take top_n
-                    top_edges = edges_class1.nlargest(top_n, "pred_proba")
+                    if top_n < 0:
+                        top_n = len(group["graph_num_bridges"])
+                    top_edges = group.nlargest(top_n, "pred_proba")
                     idxs = top_edges["chem_bond_idx"].to_numpy()
                     if len(idxs) < top_n:
                         idxs = np.pad(idxs, (0, top_n - len(idxs)), constant_values=-1)

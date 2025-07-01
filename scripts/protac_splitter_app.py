@@ -289,6 +289,7 @@ For single SMILES processing, the default values should work well in most cases.
         gr.Markdown("## Specify Inputs")
         with gr.Tab("Single SMILES Input"):
             # Input area
+            # NOTE: A challenging SMILES to test the app is: CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O
             smiles_input = gr.Textbox(
                 label="Enter SMILES String", 
                 placeholder="E.g., CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O",

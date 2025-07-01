@@ -273,15 +273,6 @@ def split_protac_with_edge_classifier(
         top_n=2,
         return_array=True,
     ).flatten().tolist()
-    # print(f"Predicted bonds: {bonds_idx}")
-    
-    if -1 in bonds_idx:
-        bonds_idx = [bond for bond in bonds_idx if bond != -1]
-        # Randomly select a bond index from the PROTAC molecule
-        # that is not in the predicted bonds
-        for _ in range(2 - len(bonds_idx)):
-            bond = np.random.choice([bond.GetIdx() for bond in protac.GetBonds() if bond.GetIdx() not in bonds_idx and not bond.IsInRing()])
-            bonds_idx.append(int(bond))
 
     ligands = Chem.FragmentOnBonds(protac, bonds_idx, addDummies=True, dummyLabels=[(1, 1), (2, 2)])
 
