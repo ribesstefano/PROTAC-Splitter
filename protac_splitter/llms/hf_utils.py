@@ -1,11 +1,12 @@
+""" Hugging Face Hub utilities for repository management and file uploads. """
 from typing import Optional
 
 import huggingface_hub as hf
-from huggingface_hub import get_hf_file_metadata, hf_hub_url, repo_info
-from huggingface_hub.utils import EntryNotFoundError, RepositoryNotFoundError, RevisionNotFoundError
-
+from huggingface_hub import repo_info
+from huggingface_hub.utils import RepositoryNotFoundError
 
 def repo_exists(repo_id: str, token: Optional[str] = None) -> bool:
+    """ Checks if a Hugging Face repository exists. """
     try:
         print(repo_info(repo_id, token=token))
         return True

@@ -1,3 +1,4 @@
+""" Adjusts amide and ester bonds in PROTAC substructures. """
 from typing import Tuple, Dict
 
 from rdkit import Chem
@@ -20,22 +21,22 @@ def adjust_amide_bond(
     Adjust the amide bond between the substruct and linker substructure.
     Handles the case when neighboring atoms of the amide bond are dummy atoms, which represent attachment points.
     The linker will be modified with the required additional atoms.
-    
+
     Args:
         substruct: The substructure of the substruct (protein of interest) that contains the amide bond.
         linker: The linker molecule that connects substruct to the E3 ligase.
         substruct_attachment_id: The attachment point ID in the substruct substructure. E.g., 1 for the POI, as in "[*:1]".
-    
+
     Returns:
         Tuple[Chem.Mol, Chem.Mol]: The adjusted substruct and linker molecules, in that order.
     """
-    
+
     # Pseudo-code of the algorithm:
     """
     ```python
     # Check if the amide bond (N-C=O) is in the substructure
-    if "N-C(=O)" in substruct: 
-        if neighbor("N-C(=O)") == "[*:substruct]": 
+    if "N-C(=O)" in substruct:
+        if neighbor("N-C(=O)") == "[*:substruct]":
             # If the neighboring atom of the amide bond is a dummy atom, i.e., attachment point
             mark_protac_as_wrong("[PROTAC]")
 
@@ -43,10 +44,10 @@ def adjust_amide_bond(
             "[*:substruct]-[<optional neighboring atom>]-N-[*:tmp]", "[*:tmp]-C(=O)-[rest of the PROTAC]" = split_PROTAC_at("N-C")
 
             "[Linker]-N-[*:tmp]" = join("[Linker]-[*:substruct]", "[*:substruct]-N-[*:tmp]")
-            
+
             rename_attachment_point("[*:tmp]-C(=O)-[rest of the PROTAC]")
             rename_attachment_point("[Linker]-N-[*:tmp]")
-        
+
         elif neighbor(neighbor("N-C(=O)")) == "[*:substruct]":
             # If the second neighbor of athe amide bond is a dummy atom, i.e., attachment point
             mark_protac_as_wrong("[PROTAC]")
@@ -56,12 +57,12 @@ def adjust_amide_bond(
             "[*:substruct]-N-[*:tmp]", "[*:tmp]-C(=O)-[rest of the PROTAC]" = split_PROTAC_at("N-C")
 
             "[Linker]-N-[*:tmp]" = join("[Linker]-[*:substruct]", "[*:substruct]-N-[*:tmp]")
-            
+
             rename_attachment_point("[*:tmp]-C(=O)-[rest of the PROTAC]")
             rename_attachment_point("[Linker]-N-[*:tmp]")
     ```
     """
-    
+
     # Convert dummy atoms in substruct to query atoms for substructure search
     query_substruct = dummy2query(substruct)
 
@@ -71,7 +72,7 @@ def adjust_amide_bond(
 
     if not amide_matches:
         return substruct, linker  # No amide bond found, return the original substruct
-    
+
     side_atom = None
     nitrogen_idx_found, carbonyl_idx_found = None, None
     for match in amide_matches:
@@ -144,10 +145,10 @@ def adjust_amide_bond(
                 print('Substruct fragment:')
                 display_mol(frag)
             substruct_fixed = frag
-    
+
     if amide_fragment is None or substruct_fixed is None:
         return substruct, linker
-    
+
     # In order for the function to be used "on linkers", we need to make sure
     # that the amide fragment contains the attachment point of the substruct.
     # If not, there's nothing to do.
@@ -185,7 +186,7 @@ def adjust_amide_bonds_in_substructs(
         e3_attachment_id: int = 2,
 ) -> Dict[str, str]:
     """ Adjusts the amide bonds in the substructures of a PROTAC. Just a wrapper function to apply it to multiple substructures.
-    
+
     Args:
         substructs: The substructures of the PROTAC. A dictionary of SMILES with keys 'poi', 'linker', and 'e3'.
         protac_smiles: The SMILES of the PROTAC for checking reassembly.
@@ -211,14 +212,14 @@ def adjust_amide_bonds_in_substructs(
     linker_smiles = Chem.MolToSmiles(linker_mol, canonical=True)
     if not check_reassembly(protac_smiles, '.'.join([poi_smiles, linker_smiles, e3_smiles])):
         return substructs
-    
+
     # Fix the amide group on the linker, E3 side
     linker_mol, e3_mol = adjust_amide_bond(linker_mol, e3_mol, e3_attachment_id)
     e3_smiles = Chem.MolToSmiles(e3_mol, canonical=True)
     linker_smiles = Chem.MolToSmiles(linker_mol, canonical=True)
     if not check_reassembly(protac_smiles, '.'.join([poi_smiles, linker_smiles, e3_smiles])):
         return substructs
-    
+
     # Fix the amide group on the linker, POI side
     linker_mol, poi_mol = adjust_amide_bond(linker_mol, poi_mol, poi_attachment_id)
     poi_smiles = Chem.MolToSmiles(poi_mol, canonical=True)
@@ -241,12 +242,12 @@ def adjust_ester_bond(
     """
     Adjust the amide bond between the substruct and linker substructure.
     Handles the case when neighboring atoms of the amide bond are dummy atoms, which represent attachment points.
-    
+
     Args:
         substruct: The substructure of the substruct (protein of interest) that contains the amide bond.
         linker: The linker molecule that connects substruct to the E3 ligase.
         substruct_attachment_id: The attachment point ID in the substruct substructure. E.g., 1 for the POI, as in "[*:1]".
-    
+
     Returns:
         Tuple[Chem.Mol, Chem.Mol]: The adjusted substruct and linker molecules, in that order.
     """
@@ -260,7 +261,7 @@ def adjust_ester_bond(
 
     if not ester_matches:
         return substruct, linker  # No amide bond found, return the original substruct
-    
+
     side_atom = None
     oxygen_idx_found, carbonyl_idx_found = None, None
     for match in ester_matches:
@@ -321,10 +322,10 @@ def adjust_ester_bond(
             ester_fragment = frag
         else:
             substruct_fixed = frag
-    
+
     if ester_fragment is None or substruct_fixed is None:
         return substruct, linker
-    
+
     # In order for the function to be used "on linkers", we need to make sure
     # that the ester fragment contains the attachment point of the substruct.
     # If not, there's nothing to do.
@@ -359,7 +360,7 @@ def adjust_ester_bonds_in_substructs(
         e3_attachment_id: int = 2,
 ) -> Dict[str, str]:
     """ Adjusts the ester bonds in the substructures of a PROTAC. Just a wrapper function to apply it to multiple substructures.
-    
+
     Args:
         substructs: The substructures of the PROTAC. A dictionary of SMILES with keys 'poi', 'linker', and 'e3'.
         protac_smiles: The SMILES of the PROTAC for checking reassembly.
@@ -385,14 +386,14 @@ def adjust_ester_bonds_in_substructs(
     linker_smiles = Chem.MolToSmiles(linker_mol, canonical=True)
     if not check_reassembly(protac_smiles, '.'.join([poi_smiles, linker_smiles, e3_smiles])):
         return substructs
-    
+
     # Fix the amide group on the linker, E3 side
     linker_mol, e3_mol = adjust_ester_bond(linker_mol, e3_mol, e3_attachment_id)
     e3_smiles = Chem.MolToSmiles(e3_mol, canonical=True)
     linker_smiles = Chem.MolToSmiles(linker_mol, canonical=True)
     if not check_reassembly(protac_smiles, '.'.join([poi_smiles, linker_smiles, e3_smiles])):
         return substructs
-    
+
     # Fix the amide group on the linker, POI side
     linker_mol, poi_mol = adjust_ester_bond(linker_mol, poi_mol, poi_attachment_id)
     poi_smiles = Chem.MolToSmiles(poi_mol, canonical=True)

@@ -1,8 +1,8 @@
+""" Curation utilities for PROTAC Splitter. """
 import os
 import re
 from typing import Any, Dict, Optional, Union, Callable
 from joblib import Parallel, delayed
-from collections import Counter
 
 from rdkit import Chem
 from rdkit.Chem import DataStructs
@@ -18,18 +18,18 @@ from protac_splitter.chemoinformatics import (
     get_substr_match,
 )
 from protac_splitter.evaluation import check_reassembly
-from .substructure_extraction import (
+from protac_splitter.data.curation.substructure_extraction import (
     get_substructure_from_non_perfect_match,
     get_substructs_from_unmapped_e3_poi,
     get_substructs_from_substr_and_linker,
     get_substructs_from_mapped_linker,
     swap_attachment_points,
 )
-from .bond_adjustments import (
+from protac_splitter.data.curation.bond_adjustments import (
     adjust_amide_bonds_in_substructs,
     adjust_ester_bonds_in_substructs,
 )
-from .mapping_utils import update_dictionary
+from protac_splitter.data.curation.mapping_utils import update_dictionary
 
 
 def check_substructs_size(
@@ -38,11 +38,11 @@ def check_substructs_size(
         size_perc_threshold: float = 0.8,
 ) -> bool:
     """ Check the size of the substructures in the PROTAC. If any of them is too big, return False.
-    
+
     Args:
         protac_mol: The PROTAC molecule.
         substructs: The substructures to check against.
-    
+
     Returns:
         False if any of the substructures is too big. True otherwise.
     """
@@ -69,7 +69,7 @@ def check_linker_similarity(
         morgan_fp_generator: Optional[Callable] = None,
 ) -> bool:
     """ Check the similarity of the linker with all the matching POIs and E3s. If too similar to any of them, return False.
-    
+
     Args:
         linker_smiles: The linker SMILES.
         pois: The POI ligands. Must have a 'FP' column with the Morgan fingerprints.
@@ -119,7 +119,7 @@ def check_linker_similarity(
         # display_mol(linker)
         # display_mol(Chem.MolFromSmiles(pois[pois_similarities.argmax()]))
         return False
-    
+
     # Check if the linker is NOT similar to any of the linkers
     if linkers is not None:
         if isinstance(linkers, str):
@@ -152,7 +152,7 @@ def check_substructs_similarity(
         similarity_threshold: The similarity threshold.
         similarity_thresholds: The similarity thresholds for the substructures.
         morgan_fp_generator: The Morgan fingerprint generator.
-    
+
     Returns:
         False if the PROTAC is too similar to any of the substructures. True otherwise.
     """
@@ -164,7 +164,7 @@ def check_substructs_similarity(
             useBondTypes=True,
             includeChirality=True,
         )
-    
+
     if isinstance(protac, str):
         protac = Chem.MolFromSmiles(protac)
         protac_fp = morgan_fp_generator.GetFingerprint(protac)
@@ -172,7 +172,7 @@ def check_substructs_similarity(
         protac_fp = morgan_fp_generator.GetFingerprint(protac)
     else:
         protac_fp = protac
-    
+
     for key, smiles in substructs.items():
         substr_fp = morgan_fp_generator.GetFingerprint(Chem.MolFromSmiles(smiles))
         threshold = similarity_thresholds[key] if similarity_thresholds is not None else similarity_threshold
@@ -180,7 +180,7 @@ def check_substructs_similarity(
             print(f'WARNING: {key.upper()} is too similar to the PROTAC, similarity: {DataStructs.TanimotoSimilarity(protac_fp, substr_fp):.4f} > {threshold}')
             # display_mol(Chem.MolFromSmiles(smiles))
             return False
-    
+
     return True
 
 
@@ -365,7 +365,7 @@ def split_single_protac(
                             additional_notes += '(non_perfect_e3_match=True)'
                         else:
                             additional_notes += '(non_perfect_e3_match=False)'
-                        
+              
                         if Chem.MolToSmiles(fixed_poi) != poi['SMILES']:
                             additional_notes += '(non_perfect_poi_match=True)'
                         else:
@@ -408,7 +408,7 @@ def split_single_protac(
 
     # There were no matching POIs, but some E3s and linkers matched: try to
     # recover the E3 from an unmapped POI and a mapped Linker
-    if len(e3s) > 0 and split_with_substr_and_linker_matching: # len(pois) == 0 and 
+    if len(e3s) > 0 and split_with_substr_and_linker_matching: # len(pois) == 0 and
         # NOTE: Only take the largest linker(s) into account
         if max_iter_on_linkers:
             selected_linkers = linkers.iloc[:max_iter_on_linkers, :]
@@ -464,7 +464,7 @@ def split_single_protac(
                     mapped_row = get_split_row(row, substructs)
                     mapped_row['Notes'] = notes + additional_notes
                     return mapped_row
-                
+      
                 # Swap the attachment points on the linker and try again
                 linker_swapped = swap_attachment_points(linker['SMILES'])
                 substructs = get_substructs_from_substr_and_linker(
@@ -688,7 +688,7 @@ def split_protacs(
 
     #     with multiprocessing.Pool(processes=multiprocessing.cpu_count()) as pool:
     #         results = pool.map(partial(split_single_protac, dictionaries=dictionaries, biggest_matches_first=biggest_matches_first, max_iter_on_linkers=max_iter_on_linkers), protac_df.copy().to_dict(orient='records'))
-        
+
     #     mapped_protacs = pd.DataFrame(results)
     #     mapped_protacs = mapped_protacs.dropna(subset=['POI Ligand SMILES with direction', 'E3 Binder SMILES with direction', 'Linker SMILES with direction'])
     #     return mapped_protacs
@@ -722,13 +722,13 @@ def split_protacs(
 def parse_notes(notes: str) -> Dict[str, Any]:
     # Define the regex pattern to match key-value pairs within parentheses
     pattern = r'\(([^=]+)=([^\)]+)\)'
-    
+
     # Find all matches in the string
     matches = re.findall(pattern, notes)
-    
+
     # Initialize an empty dictionary to store the parsed key-value pairs
     parsed_dict = {}
-    
+
     # Iterate over the matches and add them to the dictionary
     for key, value in matches:
         # Convert the value to the appropriate type (int, bool, None, or str)
@@ -742,7 +742,7 @@ def parse_notes(notes: str) -> Dict[str, Any]:
             parsed_dict[key] = None
         else:
             parsed_dict[key] = value
-    
+
     return parsed_dict
 
 
@@ -751,15 +751,15 @@ def iterative_protac_splitting(
         data_dir: str,
 ) -> Dict[str, pd.DataFrame]:
     """ Map PROTACs to their substructures in an iterative way.
-    
+
     Args:
-        dictionaries: The input dictionaries. The same format as the output of the `update_dictionary` function. 
+        dictionaries: The input dictionaries. The same format as the output of the `update_dictionary` function.
         data_dir: The directory where the output data is stored.
 
     Returns:
         The final mapped PROTAC dataframe.
     """
-    
+
     final_df = None
     non_mapped_protacs = dictionaries['PROTAC'].copy()
 
@@ -844,7 +844,7 @@ def iterative_protac_splitting(
             # to map the PROTACs again with the newly found substructures.
             max_iter_on_linkers = 0
             split_with_substr_and_linker_matching = False
-    
+
         # Update all dictionaries with the substructures of the mapped PROTACs
         smiles_list = mapped_protacs['Linker SMILES with direction'].unique()
         smiles_list = [canonize(smiles) for smiles in smiles_list]
@@ -854,7 +854,7 @@ def iterative_protac_splitting(
         smiles_list = mapped_protacs['POI Ligand SMILES'].unique()
         smiles_list = [canonize(smiles) for smiles in smiles_list]
         smiles_list = [s for s in smiles_list if s not in dictionaries['E3 Binder']['SMILES'].values]
-        
+
         smiles_list = [remove_dummy_atoms(s) for s in smiles_list if s is not None]
 
         # Use Tanimoto similarity to prevent adding POIs too similar to E3s
@@ -890,5 +890,5 @@ def iterative_protac_splitting(
             filename = os.path.join(data_dir, f'dictionary_{key.lower().replace(" ", "_")}.csv')
             dictionary[['ID', 'SMILES']].to_csv(filename, index=False)
             print(f'Dictionary saved to: {filename}')
-        
+
         return dictionaries

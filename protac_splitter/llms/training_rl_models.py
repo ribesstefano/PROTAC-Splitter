@@ -1,4 +1,8 @@
-from typing import Optional, Literal, Dict
+""" Train a PPO and DPO model for PROTAC-Splitter using Hugging Face
+Transformers and TRL. This is a work in progress code, so it's not tested nor
+used in the package.
+"""
+from typing import Optional, Literal
 from functools import partial
 import os
 import subprocess
@@ -21,23 +25,23 @@ from trl import (
     PPOTrainer,
     DPOTrainer,
 )
-from accelerate.utils import LoggerType
 
-from .data_utils import (
+from protac_splitter.llms.data_utils import (
     load_trl_dataset,
     data_collator_for_trl,
 )
 
-from .hf_utils import (
+from protac_splitter.llms.hf_utils import (
     create_hf_repository,
     delete_hf_repository,
     repo_exists,
 )
-from .evaluation import decode_and_get_metrics
-from ..evaluation import check_substructs, split_prediction
+from protac_splitter.llms.evaluation import decode_and_get_metrics
+from protac_splitter.evaluation import check_substructs, split_prediction
 
 
 def clean_text(text: str) -> str:
+    """ Cleans the text by removing special tokens. """
     return text.replace("<s>", "").replace("</s>", "")
 
 

@@ -217,9 +217,13 @@ def split_protac(
                 classifier=xgboost_model,
                 representative_e3s_fp=representative_e3s_fp,
             )
+            if all(v is None for v in pred.values()):
+                split = None
+            else:
+                split = f"{pred['e3']}.{pred['linker']}.{pred['poi']}"
             return {
                 protac_smiles_col: protac,
-                "default_pred_n0": f"{pred['e3']}.{pred['linker']}.{pred['poi']}",
+                "default_pred_n0": split,
                 "model_name": "XGBoost",
             }
         preds_ds = ds.map(
@@ -237,9 +241,13 @@ def split_protac(
                 protac_smiles=protac,
                 use_classifier=False,
             )
+            if all(v is None for v in pred.values()):
+                split = None
+            else:
+                split = f"{pred['e3']}.{pred['linker']}.{pred['poi']}"
             return {
                 protac_smiles_col: protac,
-                "default_pred_n0": f"{pred['e3']}.{pred['linker']}.{pred['poi']}",
+                "default_pred_n0": split,
                 "model_name": "Heuristic",
             }
         preds_ds = ds.map(

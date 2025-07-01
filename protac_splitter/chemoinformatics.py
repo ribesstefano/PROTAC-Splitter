@@ -1,3 +1,4 @@
+""" Chemoinformatics utilities for PROTAC Splitter. """
 import logging
 from typing import List, Union, Optional, Literal
 from multiprocessing import Process, Queue
@@ -8,7 +9,12 @@ from rdkit.Chem import rdFingerprintGenerator
 
 
 def GetSubstructMatchesWorker(q, mol, substruct, useChirality, maxMatches):
-    q.put(list(mol.GetSubstructMatches(substruct, useChirality=useChirality, maxMatches=maxMatches)))
+    """ Worker function to get substructure matches in a separate process. """
+    q.put(list(mol.GetSubstructMatches(
+        substruct,
+        useChirality=useChirality,
+        maxMatches=maxMatches,
+    )))
 
 
 def GetSubstructMatchesWithTimeout(
@@ -26,7 +32,7 @@ def GetSubstructMatchesWithTimeout(
         useChirality (bool, optional): Whether to use chirality in the substructure search. Defaults to True.
         maxMatches (int, optional): The maximum number of matches to return. Defaults to 50.
         timeout (int | float, optional): The timeout in seconds. Defaults to 10.
-    
+
     Returns:
         Optional[List[List[int]]]: A list of lists containing the atom indices of the substructure matches. Returns None if the search times out or failed.
     """
@@ -42,8 +48,7 @@ def GetSubstructMatchesWithTimeout(
         p.terminate()
         p.join()
         return None
-    else:
-        return q.get()
+    return q.get()
 
 
 def remove_stereo(smiles: str) -> str:
@@ -60,7 +65,8 @@ def remove_stereo(smiles: str) -> str:
         mol = Chem.MolFromSmiles(smiles)
         Chem.rdmolops.RemoveStereochemistry(mol)
         return Chem.MolToSmiles(mol)
-    except:
+    except Exception as e:
+        logging.warning(f"Error removing stereochemistry: {e}")
         return None
 
 
@@ -126,7 +132,7 @@ def mol2smiles(mol: Chem.Mol) -> str:
 
 def canonize_smiles(smiles: str) -> str:
     """ Canonizes a SMILES string by converting it to canonical SMILES representation.
-    
+
     Args:
         smiles (str): The input SMILES string.
 
@@ -194,7 +200,7 @@ def compute_RDKitFP(
 def remove_dummy_atoms(mol: Union[str, Chem.Mol], canonical=True) -> Union[str, Chem.Mol]:
     """
     Removes all dummy atoms (attachment points) from a molecule.
-    
+
     Args:
         mol: RDKit Mol object with dummy atoms.
 
@@ -205,10 +211,10 @@ def remove_dummy_atoms(mol: Union[str, Chem.Mol], canonical=True) -> Union[str, 
     if isinstance(mol, str):
         return_smiles = True
         mol = Chem.MolFromSmiles(mol)
-    
+
     if mol is None:
         return None
-    
+
     # Remove all dummy atoms with a query
     mol_no_dummy = Chem.DeleteSubstructs(mol, Chem.MolFromSmarts('[#0]'))
 
@@ -218,14 +224,14 @@ def remove_dummy_atoms(mol: Union[str, Chem.Mol], canonical=True) -> Union[str, 
         # --------------------------------------------------------------------------
         # Create an editable molecule to remove atoms
         editable_mol = Chem.EditableMol(mol)
-        
+
         # List of atoms to remove (dummy atoms have atomic number 0)
         dummy_atoms = [atom.GetIdx() for atom in mol.GetAtoms() if atom.GetAtomicNum() == 0]
-        
+
         # Remove dummy atoms
         for atom_idx in sorted(dummy_atoms, reverse=True):  # Remove from the highest index to avoid index shifts
             editable_mol.RemoveAtom(atom_idx)
-        
+
         if editable_mol is None:
             return None
 
@@ -268,7 +274,7 @@ def get_substr_match(
 ) -> bool:
     """ Check if a molecule contains a substructure match with a given molecule.
     Compared to RDKit HasSubstructMatch, this function also checks the number of fragments when replacing the substr in the PROTAC.
-    
+
     Args:
         protac_mol (Chem.Mol): The PROTAC molecule.
         substr (Chem.Mol): The substructure molecule.
@@ -299,7 +305,7 @@ def remove_attach_atom(mol: Chem.Mol, attach_id: int, sanitize: bool = False) ->
     """ Removes the atom with the specified attachment id from the molecule.
 
     Example:
-    
+
     >>> remove_attach_atom(Chem.MolFromSmiles('CC[*:1]'), 1)
     CC
 
@@ -361,32 +367,28 @@ def get_bond_idx(smi: str, bonds_start_end_atoms: List[List[int]]) -> List[int]:
 
 def get_mol_id(smiles: str) -> str | None:
     """ Get the Hash of a given SMILES string.
-    
+
     Args:
         smiles (str): The SMILES string to hash.
 
     Returns:
         str | None: The Hash of the SMILES string. None if the function failed.
     """
-    if smiles is None:
-        print("Error: SMILES is None.")
-        return None
     try:
         mol = Chem.MolFromSmiles(smiles)
-    except Exception as e:
-        print(f"Error: {e}")
-        print(f"SMILES: {smiles}")
-        return None
-    if mol is None:
-        return None
-    # Remove stereochemistry from the molecule
-    try:
+        if mol is None:
+            return None
         Chem.RemoveStereochemistry(mol)
-    except:
+    except Exception as e:
+        logging.warning(f"Error while removing stereochemistry: {e}")
+        logging.warning(f"SMILES: {smiles}")
         return None
+
     # Get the InChIKey for the molecule
     inchi_key = Chem.MolToInchiKey(mol)
     smiles = Chem.MolToSmiles(mol, canonical=True)
+
+    # Encode the InChIKey and SMILES to create a unique identifier
     return sha256((inchi_key + smiles).encode()).hexdigest()
 
 
@@ -405,7 +407,7 @@ def get_atom_idx_at_attachment(
         substruct: The substructure of the PROTAC that contains the attachment point, e.g., the POI or E3 ligase.
         linker: The linker molecule.
         verbose: Verbosity level.
-    
+
     Returns:
         List[int]: The two atom indices at the attachment point.
     """
@@ -419,7 +421,7 @@ def get_atom_idx_at_attachment(
     substruct_match = set(protac.GetSubstructMatch(dummy2query(substruct), useChirality=True))
     if verbose:
         print(f'Substruct match: {substruct_match}')
-    
+
     linker_no_dummy = remove_dummy_atoms(linker)
     if verbose:
         print(f'Linker without dummy atoms found.')
@@ -477,7 +479,7 @@ def get_atom_idx_at_attachment(
             attachment_idx.append(neighbor.GetIdx())
             attachments['linker'] = neighbor.GetIdx()
             break
-    
+
     if return_dict:
         return attachments
     return attachment_idx

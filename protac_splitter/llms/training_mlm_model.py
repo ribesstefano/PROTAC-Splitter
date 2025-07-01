@@ -1,9 +1,9 @@
+""" Train a masked language model (MLM) using an encoder-decoder architecture. """
 import os
-from typing import Optional, Dict, Any, Callable, Union
+from typing import Optional, Dict, Any, Union
 import subprocess
 
 import torch
-import numpy as np
 import huggingface_hub as hf
 from transformers import (
     Trainer,
@@ -12,13 +12,13 @@ from transformers import (
     AutoTokenizer,
 )
 
-from .data_utils import load_tokenized_dataset
-from .hf_utils import (
+from protac_splitter.llms.data_utils import load_tokenized_dataset
+from protac_splitter.llms.hf_utils import (
     create_hf_repository,
     delete_hf_repository,
     repo_exists,
 )
-from .model_utils import get_encoder_decoder_model
+from protac_splitter.llms.model_utils import get_encoder_decoder_model
 
 
 def compute_metrics_for_mlm(pred) -> Dict[str, float]:
@@ -63,7 +63,6 @@ def train_mlm_model(
         delete_local_repo_if_exists: bool = False,
         training_args: Optional[Dict[str, Any]] = None,
         resume_from_checkpoint: Optional[str] = None,
-        num_optuna_trials: int = 0,
         num_proc_map: int = 1,
         per_device_batch_size: Optional[int] = None,
         lr_scheduler_type: Optional[str] = None,

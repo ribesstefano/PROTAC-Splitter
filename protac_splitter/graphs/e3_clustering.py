@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Any
+from typing import List, Optional, Tuple, Any, Dict
 import functools
 
 import pandas as pd
@@ -11,7 +11,7 @@ from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_har
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
 
-from .utils import get_fp, numpy_to_rdkit_fp
+from protac_splitter.graphs.utils import get_fp, numpy_to_rdkit_fp
 from protac_splitter.chemoinformatics import remove_dummy_atoms
 
 
@@ -21,9 +21,12 @@ def get_umap_clusters_fp(fp_list: List[str], n_clusters: int = 7) -> np.ndarray:
     From Scaffold Splits Overestimate Virtual Screening Performance
     https://arxiv.org/abs/2406.00873
 
-    :param fp_list: List of SMILES strings
-    :param n_clusters: The number of clusters to use for clustering
-    :return: Array of cluster labels corresponding to each SMILES string in the input list.
+    Args:
+        fp_list (List[str]): List of SMILES strings.
+        n_clusters (int): The number of clusters to use for clustering.
+
+    Returns:
+        np.ndarray: Array of cluster labels corresponding to each SMILES string in the input list.
     """
     ac = AgglomerativeClustering(n_clusters=n_clusters)
     ac.fit_predict(np.stack(fp_list))
@@ -33,9 +36,13 @@ def get_kmeans_clusters_fp(fp_list: List[str], n_clusters: int = 10, return_cent
     """
     Cluster a list of SMILES strings using the KMeans clustering algorithm.
 
-    :param fp_list: List of SMILES strings
-    :param n_clusters: The number of clusters to use for clustering
-    :return: Array of cluster labels corresponding to each SMILES string in the input list.
+    Args:
+        fp_list (List[str]): List of SMILES strings.
+        n_clusters (int): The number of clusters to use for clustering.
+        return_centroids (bool): If True, return the cluster centroids as well.
+
+    Returns:
+        np.ndarray: Array of cluster labels corresponding to each SMILES string in the input list.
     """
     km = KMeans(n_clusters=n_clusters, n_init='auto', random_state=42, max_iter=1000)
     if return_centroids:
@@ -43,8 +50,27 @@ def get_kmeans_clusters_fp(fp_list: List[str], n_clusters: int = 10, return_cent
         return km.labels_, km.cluster_centers_
     return km.fit_predict(np.stack(fp_list))
 
-def evaluate_clusters(X, clusters):
-    """Compute clustering metrics and assess cluster size distribution."""
+def evaluate_clusters(X: np.array, clusters: np.ndarray) -> Dict[str, float]:
+    """ Compute clustering metrics and assess cluster size distribution.
+    
+    Args:
+        X (np.array): The input data used for clustering.
+        clusters (np.ndarray): The cluster labels for each data point in X.
+        
+    Returns:
+        Dict[str, float]: A dictionary containing various clustering metrics:
+            - silhouette: Silhouette score of the clustering.
+            - davies_bouldin: Davies-Bouldin index of the clustering.
+            - calinski_harabasz: Calinski-Harabasz index of the clustering.
+            - avg_cluster_size: Average size of clusters.
+            - avg_cluster_data_ratio: Ratio of average cluster size to total data size.
+            - std_cluster_size: Standard deviation of cluster sizes.
+            - min_cluster_size: Minimum size of clusters.
+            - median_cluster_size: Median size of clusters.
+            - max_cluster_size: Maximum size of clusters.
+            - cluster_size_skewness: Skewness of cluster sizes indicating imbalance.
+            - num_clusters: Number of unique clusters found.
+    """
     
     unique_clusters = list(set(clusters))
     

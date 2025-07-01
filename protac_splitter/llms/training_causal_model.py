@@ -6,10 +6,8 @@ from transformers import TrainerCallback
 from trl import SFTTrainer
 from rdkit import Chem
 
-from .data_utils import load_tokenized_dataset
-from .evaluation import decode_and_get_metrics
-from .hf_utils import create_hf_repository, delete_hf_repository, repo_exists
-from .model_utils import get_model
+from protac_splitter.llms.data_utils import load_tokenized_dataset
+from protac_splitter.llms.model_utils import get_model
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Use GPU if available
 

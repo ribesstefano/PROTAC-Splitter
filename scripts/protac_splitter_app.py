@@ -129,7 +129,18 @@ def process_single_smiles(protac_smiles: str, use_transformer: bool = False, use
     
     return input_img, list(images), smiles_texts
 
-def process_csv(file, smiles_col: str, use_transformer: bool = False, use_xgboost: bool = True, beam_size: int = 5) -> Path:
+def process_csv(
+        file: gr.File,
+        smiles_col: str,
+        use_transformer: bool = False,
+        use_xgboost: bool = True,
+        beam_size: int = 5,
+        batch_size: int = 4,
+        num_proc: int = 2,
+        # NOTE: `pr` is a progress tracker, it is used to track the progress but
+        # it is not used in this function. Do not remove it.
+        pr: gr.Progress = gr.Progress(track_tqdm=True),
+) -> Path:
     """
     Process a CSV file containing PROTAC SMILES
     
@@ -147,8 +158,6 @@ def process_csv(file, smiles_col: str, use_transformer: bool = False, use_xgboos
         # Use Gradio's error message instead of raising an exception
         raise gr.Error(f"Column \"{smiles_col}\" is not in the provided CSV file.", duration=5)
 
-    gr.Progress(track_tqdm=True)
-
     try:
         results = split_protac(
             df,
@@ -156,8 +165,8 @@ def process_csv(file, smiles_col: str, use_transformer: bool = False, use_xgboos
             use_xgboost=use_xgboost,
             protac_smiles_col=smiles_col,
             fix_predictions=True,
-            batch_size=4,
-            num_proc=2,
+            batch_size=batch_size,
+            num_proc=num_proc,
             beam_size=beam_size,  # Use beam search width for Transformer model
             verbose=1
         )
@@ -167,8 +176,6 @@ def process_csv(file, smiles_col: str, use_transformer: bool = False, use_xgboos
             raise gr.Error("One or more of the input SMILES are not valid (couldn't be parsed by RDKit).", duration=5)
         else:
             raise gr.Error(f"An error occurred while processing: {exception_message}", duration=10)
-    
-    gr.Progress(track_tqdm=False)
 
     output_df = pd.DataFrame(results)
     
@@ -191,13 +198,7 @@ def create_interface():
     Returns:
         gr.Blocks: The Gradio interface
     """
-    with gr.Blocks() as demo:
-        # gr.Markdown("# PROTAC-Splitter: A Machine Learning Framework for Automated Identification of PROTAC Substructures")
-        # gr.Markdown("Upload a CSV file or enter a single SMILES string to predict PROTAC substructures.")
-        # gr.Markdown("Warheads and E3 ligase ligands connections to the linker are marked with dummy atoms, _i.e._, attachment points, as follows:")
-        # gr.Markdown("- Warhead: `[*:1]`")
-        # gr.Markdown("- E3 Ligase ligand: `[*:2]`")
-        
+    with gr.Blocks() as demo:        
         header = """# PROTAC-Splitter Web Application
 
 Upload a CSV file or enter a single SMILES string to predict PROTAC substructures.
@@ -228,16 +229,70 @@ For fast splitting, we reccommend using the XGBoost model only, which is fast an
                 with gr.Row():
                     use_xgboost = gr.Checkbox(label="Use XGBoost model", value=True)
                     use_transformer = gr.Checkbox(label="Use Transformer model", value=False)
-                    # gr.Markdown("**Note:** If no model is selected, splitting will be done using graph-based heuristics, with no AI model involved.")
-        beam_size = gr.Number(label="Beam Search Width", value=5, minimum=1, maximum=10, step=1, info="Width of the beam search for the Transformer model. Higher values may improve accuracy but increase processing time. Default is 5, only used with the Transformer model.")        
+        
+        # Performance configuration section
+        performance_configs = """### Performance Configurations
 
+Change the following parameters to optimize performance based on your machine's capabilities. Particularly useful when processing large CSV files or when using the Transformer model.
+For single SMILES processing, the default values should work well in most cases.
+"""
+        gr.Markdown(performance_configs)
+        with gr.Column(scale=1):
+            # Add a num_proc input
+            with gr.Row():
+                num_proc = gr.Number(
+                    label="Number of Processes",
+                    value=2,
+                    minimum=1,
+                    maximum=8,
+                    step=1,
+                    info="Number of processes to use for parallel processing. Higher values may improve performance but require more memory."
+                )
+
+            # Add a number input for beam_size if Transformer model is selected
+            with gr.Row():
+                # Only show beam size input if Transformer model is selected
+                beam_size = gr.Number(
+                    label="Beam Search Width",
+                    value=5,
+                    minimum=1,
+                    maximum=10,
+                    step=1,
+                    info="Width of the beam search for the Transformer model. Higher values may improve accuracy but increase processing time.",
+                    visible=use_transformer.value  # Initially hidden, will be shown if Transformer is selected
+                )
+                # Add a dynamic visibility condition to show/hide beam_size based on Transformer model selection
+                use_transformer.change(
+                    lambda x: gr.update(visible=x),
+                    inputs=[use_transformer],
+                    outputs=[beam_size]
+                )
+
+            # Add a batch size input for Transformer model if selected
+            with gr.Row():
+                batch_size = gr.Number(
+                    label="Batch Size",
+                    value=4,
+                    minimum=1,
+                    maximum=64,
+                    step=1,
+                    info="Batch size for processing. Higher values may improve performance, especially on GPU machines, but require more memory.",
+                    visible=use_transformer.value  # Initially hidden, will be shown if Transformer is selected
+                )
+                use_transformer.change(
+                    lambda x: gr.update(visible=x),
+                    inputs=[use_transformer],
+                    outputs=[batch_size]
+                )
+
+        # Single SMILES Input tab
         gr.Markdown("## Specify Inputs")
         with gr.Tab("Single SMILES Input"):
             # Input area
             smiles_input = gr.Textbox(
                 label="Enter SMILES String", 
-                # placeholder="E.g., CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O",
-                value="CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O",
+                placeholder="E.g., CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O",
+                # value="CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O",
             )
 
             submit_smiles = gr.Button("Process SMILES")
@@ -254,14 +309,14 @@ For fast splitting, we reccommend using the XGBoost model only, which is fast an
                 outputs=[smiles_input_image, smiles_output_images, smiles_output_texts]
             )
 
-        # End of Single SMILES Input tab        
+        # CSV file processing tab
         with gr.Tab("Upload CSV"):
             # File upload area
             file_input = gr.File(label="Upload CSV File")
             smiles_column = gr.Textbox(
                 label="Column Name for PROTAC SMILES",
-                # placeholder="e.g., \"PROTAC SMILES\"",
-                value="PROTAC SMILES",
+                placeholder="E.g., \"PROTAC SMILES\"",
+                # value="PROTAC SMILES",
             )
             submit_csv = gr.Button("Process CSV")
             
@@ -271,19 +326,17 @@ For fast splitting, we reccommend using the XGBoost model only, which is fast an
             # Connect the button click event to the processing function
             submit_csv.click(
                 process_csv, 
-                inputs=[file_input, smiles_column, use_transformer, use_xgboost, beam_size],
+                inputs=[file_input, smiles_column, use_transformer, use_xgboost, beam_size, batch_size, num_proc],
                 outputs=[download_output]
             )
             
-            csv_notes = """**Note:** The output CSV will contain the following columns:
+            csv_notes = f"""**Note:** The output CSV will contain the following columns:
 
-- `input_smiles`: The original PROTAC SMILES string
+- `{smiles_column}`: The original PROTAC SMILES string
 - `default_pred_n0`: The predicted SMILES strings for the splits
 - `model_name`: The model used for the prediction
 """
             gr.Markdown(csv_notes)
-        
-
 
     return demo
 
