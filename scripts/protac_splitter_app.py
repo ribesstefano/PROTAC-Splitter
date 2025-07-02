@@ -79,55 +79,61 @@ def process_single_smiles(protac_smiles: str, use_transformer: bool = False, use
             raise gr.Error(f"An error occurred while processing the input SMILES: {exception_message}", duration=10)
 
     valid_molecules = []
-    pred_key = f'default_pred_n0'
+    pred_key = f"default_pred_n0"
     valid_molecules.append(results[pred_key])
 
     # Generate images and corresponding SMILES text
     images = []
-    smiles_texts = []
     input_mol = Chem.MolFromSmiles(protac_smiles)
     
     if input_mol is not None:
         input_img = Draw.MolToImage(input_mol, legend="", size=(1000, 200))
     else:
-        input_img = Image.new('RGB', (1000, 1000))
+        input_img = Image.new("RGB", (1000, 1000))
     
+    smiles_texts = []
     splits = {}
     for smiles in results[pred_key].split("."):
         mol = Chem.MolFromSmiles(smiles)
         if mol:
             if "[*:1]" in smiles and "[*:2]" in smiles:
                 legend = "Linker"
-                splits['linker'] = smiles
+                splits["linker"] = smiles
             elif "[*:1]" in smiles:
                 legend = "Warhead"
-                splits['poi'] = smiles
+                splits["poi"] = smiles
             elif "[*:2]" in smiles:
                 legend = "E3 Ligase Ligand"
-                splits['e3'] = smiles
+                splits["e3"] = smiles
 
             img = Draw.MolToImage(mol, legend="", size=(1000, 1000))
             images.append(img)
-            smiles_texts.append(f"{legend}: {smiles}")
-    smiles_texts = "\n".join(smiles_texts)
-    
-    use_svg = False
-    input_img = get_mapped_protac_img(
-        protac_smiles=protac_smiles,
-        poi_smiles=splits.get('poi', ''),
-        linker_smiles=splits.get('linker', ''),
-        e3_smiles=splits.get('e3', ''),
-        w=1000,
-        h=500,
-        legend=None,
-        useSVG=use_svg,
-    )
+            # smiles_texts.append(f"{legend}: {smiles}")
+            smiles_texts.append(smiles)
 
-    if use_svg:
-        input_img = save_svg_to_tempfile(input_img)
-        logging.debug(f"Returning processed image path: {input_img}")
-    
-    return input_img, list(images), smiles_texts
+    smiles_texts = ".".join(smiles_texts)
+    smiles_df = pd.DataFrame({
+        "Substructure": ["E3 Ligase Ligand", "Linker", "Warhead"],
+        "SMILES": [splits.get("e3", ""), splits.get("linker", ""), splits.get("poi", "")]
+    })
+
+    # use_svg = False
+    # input_img = get_mapped_protac_img(
+    #     protac_smiles=protac_smiles,
+    #     poi_smiles=splits.get('poi', ''),
+    #     linker_smiles=splits.get('linker', ''),
+    #     e3_smiles=splits.get('e3', ''),
+    #     w=1000,
+    #     h=500,
+    #     legend=None,
+    #     useSVG=use_svg,
+    # )
+    # 
+    # if use_svg:
+    #     input_img = save_svg_to_tempfile(input_img)
+    #     logging.debug(f"Returning processed image path: {input_img}")
+
+    return input_img, list(images), smiles_texts, smiles_df
 
 def process_csv(
         file: gr.File,
@@ -198,8 +204,17 @@ def create_interface():
     Returns:
         gr.Blocks: The Gradio interface
     """
-    with gr.Blocks() as demo:        
-        header = """# PROTAC-Splitter Web Application
+    css = """
+h1 {
+    text-align: center;
+    display:block;
+}
+"""
+    with gr.Blocks(css=css) as demo:
+        # ----------------------------------------------------------------------
+        # Application title and description
+        # ----------------------------------------------------------------------
+        gr.Markdown("""# ✂️ PROTAC-Splitter Web Application ✂️
 
 Upload a CSV file or enter a single SMILES string to predict PROTAC substructures.
 
@@ -208,35 +223,49 @@ Warheads and E3 ligase ligands connections to the linker are marked with dummy a
 - Warhead: `[*:1]`
 - E3 Ligase ligand: `[*:2]`
 
-"""
-        gr.Markdown(header)
+If you find this tool useful, please consider citing the following paper:
+
+```
+@article{ribes2025protac,
+    title={PROTAC-Splitter...},
+    author={Ribes, Stefano and others},
+    journal={Journal of...},
+    year={2025},
+    publisher={...}
+}
+```
+""")
         
+        # ----------------------------------------------------------------------
         # Model selection section - common to both tabs
-        model_selection = """## Model Selection
+        # ----------------------------------------------------------------------
+        gr.Markdown("""## Model Selection
         
 You can choose which model to use for splitting PROTAC molecules:
 
 - **XGBoost model** (default): Fast graph-based edge classification model
-- **Transformer model**: More accurate but slower deep learning model
+- **Transformer model**: Often more accurate, but slower deep learning model
 - If both are selected, the Transformer model will be used first, then if it fails, the XGBoost model will be used.
 - If no model is selected, splitting will be done using graph-based heuristics, with no AI model involved.
 
-For fast splitting, we reccommend using the XGBoost model only, which is fast and efficient for most cases. The Transformer model might be more accurate but it is slower, especially for processing large CSV files.
-"""
-        gr.Markdown(model_selection)
+For fast splitting, we reccommend using the XGBoost model only, which is fast and efficient for most cases.
+
+The Transformer model runs on CPU, so it is slower, especially for processing large CSV files.
+""")
         with gr.Row():
             with gr.Column(scale=2):
                 with gr.Row():
                     use_xgboost = gr.Checkbox(label="Use XGBoost model", value=True)
                     use_transformer = gr.Checkbox(label="Use Transformer model", value=False)
         
+        # ----------------------------------------------------------------------
         # Performance configuration section
-        performance_configs = """### Performance Configurations
+        # ----------------------------------------------------------------------
+        gr.Markdown("""### Performance Configurations
 
 Change the following parameters to optimize performance based on your machine's capabilities. Particularly useful when processing large CSV files or when using the Transformer model.
 For single SMILES processing, the default values should work well in most cases.
-"""
-        gr.Markdown(performance_configs)
+""")
         with gr.Column(scale=1):
             # Add a num_proc input
             with gr.Row():
@@ -285,32 +314,68 @@ For single SMILES processing, the default values should work well in most cases.
                     outputs=[batch_size]
                 )
 
+        # ----------------------------------------------------------------------
         # Single SMILES Input tab
-        gr.Markdown("## Specify Inputs")
+        # ----------------------------------------------------------------------
+        gr.Markdown("""## Specify Inputs
+
+**Disclaimer**: The input SMILES is checked for validity before processing. There is no check on whether the SMILES is a PROTAC-like molecule or not.
+For example, attempting to split the SMILES `c1ccccc` (benzene) with the XGBoost or heuristic strategies will return an error, as ring bonds are ignored for splitting.
+On the other end, `c1ccccc1CCC1CCCC1` will return a plausible split, even though it is not a PROTAC molecule.
+""")
         with gr.Tab("Single SMILES Input"):
             # Input area
             # NOTE: A challenging SMILES to test the app is: CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O
             smiles_input = gr.Textbox(
-                label="Enter SMILES String", 
+                label="Enter SMILES String",
                 placeholder="E.g., CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O",
-                # value="CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O",
             )
-
             submit_smiles = gr.Button("Process SMILES")
 
             # Output area
-            smiles_input_image = gr.Image(label="Input PROTAC", type="filepath")  # Use None to allow SVG input
-            smiles_output_images = gr.Gallery(label="Valid Splits", columns=3)
-            smiles_output_texts = gr.Textbox(label="SMILES of the Splits", interactive=False, lines=3)
+            smiles_input_image = gr.Image(label="Input PROTAC")
+            smiles_output_images = gr.Gallery(
+                label="Predicted Splits",
+                columns=3,
+            )
+            smiles_output_df = gr.DataFrame(
+                label="Substructure Predictions",
+                interactive=False,
+                headers=["Substructure", "SMILES"],
+                show_copy_button=True,
+            )
+            smiles_output_texts = gr.Textbox(
+                label="SMILES of the Splits",
+                interactive=False,
+                lines=1,
+                show_copy_button=True,
+            )
+
+            # Add this Examples component
+            gr.Examples(
+                examples=[
+                    # SMILES, use_transformer, use_xgboost, beam_size
+                    ["CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O", False, True, 5],
+                    ["Cc1nnc2n1-c1sc(C#Cc3cnn(-c4cccc5c4C(=O)N(C4CCC(=O)NC4=O)C5=O)c3)c(Cc3ccccc3)c1COC2", False, True, 5],
+                    ["c1ccccc1CCC1CCCC1", False, False, 5],
+                    ["O=C(NCCOCCOCCN1CCCC1)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O", False, False, 5],
+                ],
+                inputs=[smiles_input, use_transformer, use_xgboost, beam_size],
+                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts, smiles_output_df],
+                fn=process_single_smiles,
+                cache_examples=True,
+            )
 
             # Connect the button click event to the processing function
             submit_smiles.click(
                 process_single_smiles, 
                 inputs=[smiles_input, use_transformer, use_xgboost, beam_size], 
-                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts]
+                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts, smiles_output_df]
             )
 
+        # ----------------------------------------------------------------------
         # CSV file processing tab
+        # ----------------------------------------------------------------------
         with gr.Tab("Upload CSV"):
             # File upload area
             file_input = gr.File(label="Upload CSV File")
@@ -331,13 +396,12 @@ For single SMILES processing, the default values should work well in most cases.
                 outputs=[download_output]
             )
             
-            csv_notes = f"""**Note:** The output CSV will contain the following columns:
+            gr.Markdown(f"""**Note:** The output CSV will contain the following columns:
 
-- `{smiles_column}`: The original PROTAC SMILES string
+- `smiles_column`: The original PROTAC SMILES string
 - `default_pred_n0`: The predicted SMILES strings for the splits
 - `model_name`: The model used for the prediction
-"""
-            gr.Markdown(csv_notes)
+""")
 
     return demo
 
