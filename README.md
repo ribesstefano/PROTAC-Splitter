@@ -41,12 +41,11 @@ To use the package, please refer to the function `split_protac` in the [protac_s
 Here is an example of how to use the function:
 
 ```python
+import pandas as pd
 from protac_splitter import split_protac
 
-# Split a PROTAC molecule
+# Split a PROTAC molecule reported as a SMILES string
 protac_smiles = "CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O"
-
-# Split the PROTAC molecule
 ligands = split_protac(protac_smiles)
 print(ligands)
 
