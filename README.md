@@ -1,4 +1,4 @@
-# PROTAC-Splitter
+# PROTAC-Splitter: A Machine Learning Framework for Automated Identification of PROTAC Substructures
 
 This repository contains the program code to split PROTAC molecules into their constituent substructures.
 
@@ -14,7 +14,7 @@ A Gradio app is available to split PROTAC molecules and visualize the results at
 
 ## Installation 🛠️
 
-The package was tested in Python 3.10.8. Always use a virtual environment to install the package.
+The package was developed and tested in Python 3.10.8. Always use a virtual environment to install the package.
 
 For using the code under the [scripts](scripts) directory in this repository, run the following commands:
 
