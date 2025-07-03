@@ -222,19 +222,19 @@ Warheads and E3 ligase ligands connections to the linker are marked with dummy a
 
 - Warhead: `[*:1]`
 - E3 Ligase ligand: `[*:2]`
-
-If you find this tool useful, please consider citing the following paper:
-
-```
-@article{ribes2025protac,
-    title={PROTAC-Splitter...},
-    author={Ribes, Stefano and others},
-    journal={Journal of...},
-    year={2025},
-    publisher={...}
-}
-```
 """)
+
+# If you find this tool useful, please consider citing the following paper:
+
+# ```
+# @article{ribes2025protac,
+#     title={PROTAC-Splitter...},
+#     author={Ribes, Stefano and others},
+#     journal={Journal of...},
+#     year={2025},
+#     publisher={...}
+# }
+# ```
         
         # ----------------------------------------------------------------------
         # Model selection section - common to both tabs
