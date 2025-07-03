@@ -1,12 +1,15 @@
 # PROTAC-Splitter
 
-This repository contains a program to split PROTAC molecules into their substructures.
+This repository contains the program code to split PROTAC molecules into their constituent substructures.
 
-<!-- Add some emojies to the subsections -->
+A Gradio app is available to split PROTAC molecules and visualize the results at this link: [https://huggingface.co/spaces/ailab-bio/PROTAC-Splitter-App](https://huggingface.co/spaces/ailab-bio/PROTAC-Splitter-App).
+
 ## Table of Contents 📜
 
 - [Installation](#installation)
 - [Usage](#usage)
+- [Data Availability](#data-availability)
+- [Contributing](#contributing)
 - [License](#license)
 
 ## Installation 🛠️
@@ -44,63 +47,29 @@ from protac_splitter import split_protac
 protac_smiles = "CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O"
 
 # Split the PROTAC molecule
-ligands = split_protac(
-    protac_smiles,
-    model_name="change_to_local_model_path_if_required",
-    hf_token="your_awsome_hf_token_or_os.environ['HF_TOKEN']",
-)
+ligands = split_protac(protac_smiles)
 print(ligands)
 
 # One can also feed a DataFrame to the function
 df = pd.read_csv("my/local/file.csv")
-split_df = split_protac(
-    df,          
-    model_name="change_to_local_model_path_if_required",
-    hf_token="your_awsome_hf_token_or_os.environ['HF_TOKEN']",
-    protac_smiles_col="PROTAC SMILES",
-)
+split_df = split_protac(df, protac_smiles_col="PROTAC SMILES")
 print(split_df.head())
 ```
 
 Alternatively, you can use the Gradio app at [scripts/protac_splitter_app.py](scripts/protac_splitter_app.py) have a GUI to split PROTAC molecules.
 
 ```sh
-python -m scripts.protac_splitter_app
+gradio scripts/protac_splitter_app.py
 ```
 
-### Model Download
+## Data Availability 📥
 
-Until the repository is private, please download the model locally from this Google Drive link: https://drive.google.com/file/d/18hq62csehlmQlzfQoAAgmiV_vMT0AcP0/view?usp=share_link  [RMO: update this link to Zenodo]
+Curated public data, the synthetic PROTACs dataset, and trained models are available
+for download from Zenodo at: [https://doi.org/10.5281/zenodo.15797309](https://doi.org/10.5281/zenodo.15797309).
 
-After unzipping, set the `model_name` argument to the path of the unzipped directory. At this point, there is no need to set the `hf_token` argument when calling the `split_protac` function. Since the model is not open yet, the Gradio app works with local models only.
+## Contributing 🤝
 
-### Data Download
-[RMO: add link to Zenodo]
-
-## Score Predictions 📊
-
-If using the Gradio app, the predictions can be scored using the [scripts/score_predictions.py](scripts/score_predictions.py) script. The script requires that the predictions are saved in a CSV file that ends with "*preds.csv" under a directory named [logs](logs). The CSV shall have the following columns:
-
-- protac_smiles
-- label_smiles
-- default_pred_n0
-- default_pred_n1
-- default_pred_n2
-- default_pred_n3
-- default_pred_n4
-
-NOTE: The label_smiles can be obtained by the Pandas `merge` function with the original DataFrame and the DataFrame returned by the `split_protac` function.
-
-To run the script, execute the following command:
-
-```sh
-# Get help on the script
-python -m scripts.score_predictions --help
-# Run the scoring script with 4 processes
-python -m scripts.score_predictions --num_proc=4
-```
-
-The scores will be saved in the [logs](logs) directory as "\[the_original_filename\]scores.csv".
+We welcome contributions to this project! If you have suggestions for improvements, bug fixes, or new features, please open an issue or submit a pull request.
 
 ## License 📝
 
