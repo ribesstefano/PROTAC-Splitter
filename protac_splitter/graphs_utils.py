@@ -1,3 +1,5 @@
+""" Graph utilities for working with molecules and SMILES strings. This module
+is mainly used by the evaluation module to compute graph edit distances. """
 from numba import njit
 import numpy as np
 import networkx as nx
