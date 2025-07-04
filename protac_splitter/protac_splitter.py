@@ -133,7 +133,7 @@ def split_protac(
     
     if use_transformer:
         pipe = get_pipeline(
-            model_name="ailab-bio/PROTAC-Splitter-EncoderDecoder-lr_reduce-rand-smiles",
+            model_name="ailab-bio/PROTAC-Splitter",
             token=os.environ.get("HF_TOKEN", None),
             is_causal_language_model=False,
             num_return_sequences=beam_size,
@@ -265,106 +265,3 @@ def split_protac(
     elif isinstance(protac_smiles, list):
         # Convert the Dataset to a list of dictionaries
         return [row for row in preds_ds]
-
-    # if tokenizer is None:
-    #     if verbose:
-    #         print(f"Loading tokenizer...")
-    #     tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
-
-    # if pipe is None:
-    #     if verbose:
-    #         print("Loading pipeline for \"default\" predictions...")
-    #     pipe = pipeline(
-    #         "text2text-generation",
-    #         model=model_name,
-    #         tokenizer=tokenizer,
-    #         device="cuda" if torch.cuda.is_available() else "cpu",
-    #         token=hf_token,
-    #         num_return_sequences=beam_size,
-    #     )
-
-    # if isinstance(protac_smiles, str):
-    #     protac_smiles_canon = canonize(protac_smiles)
-    #     if protac_smiles_canon is None:
-    #         raise ValueError(f"Invalid PROTAC SMILES: {protac_smiles}")
-    #     pred = pipe(protac_smiles_canon)
-    #     pred = {f"default_pred_n{i}": pred[i]["generated_text"] for i in range(len(pred))}
-    #     if fix_predictions:
-    #         p_fixed = {k: fix_prediction(protac_smiles_canon, v, verbose=verbose) for k, v in pred.items()}
-    #         # For each prediction, if the fixed prediction is not None, we
-    #         # replace the original prediction with the fixed one.
-    #         for k, v in p_fixed.items():
-    #             if v is not None:
-    #                 pred[k] = v
-    #     preds = [pred]
-
-    # if isinstance(protac_smiles, list):
-    #     # Canonize and check if all PROTAC SMILES are valid
-    #     protac_smiles_canon = [canonize(protac) for protac in protac_smiles]
-    #     if None in protac_smiles_canon:
-    #         wrong_protacs = [protac for protac, canon in zip(protac_smiles, protac_smiles_canon) if canon is None]
-    #         raise ValueError(f"Invalid PROTAC SMILES in list: {wrong_protacs}")
-
-    #     # Get the predictions for all PROTAC SMILES
-    #     preds = pipe(protac_smiles_canon, batch_size=batch_size)
-    #     preds = [{f"default_pred_n{i}": p["generated_text"] for i, p in enumerate(pred)} for pred in preds]
-
-    #     if fix_predictions:
-    #         for i, (protac, pred) in enumerate(zip(protac_smiles_canon, preds)):
-    #             p_fixed = {k: fix_prediction(protac, v, verbose=verbose) for k, v in pred.items()}
-    #             # For each prediction, if the fixed prediction is not None, we
-    #             # replace the original prediction with the fixed one.
-    #             for k, v in p_fixed.items():
-    #                 if v is not None:
-    #                     preds[i][k] = v
-
-    # if isinstance(protac_smiles, pd.DataFrame):
-    #     # Check if the DataFrame contains a columns named `protac_smiles_col`
-    #     if protac_smiles_col not in protac_smiles.columns:
-    #         raise ValueError(f"DataFrame must contain a column named \"{protac_smiles_col}\".")
-        
-    #     # Canonize and check if all PROTAC SMILES are valid
-    #     protac_smiles_canon = protac_smiles.apply(lambda x: canonize(x[protac_smiles_col]), axis=1)
-
-    #     # Check if there are invalid PROTAC SMILES
-    #     if protac_smiles_canon.isnull().any():
-    #         wrong_protacs = protac_smiles[protac_smiles_canon.isnull()]
-    #         raise ValueError(f"Invalid PROTAC SMILES in DataFrame: {wrong_protacs}")
-
-    #     # Convert the Series to a DataFrame
-    #     protac_smiles_canon = pd.DataFrame(protac_smiles_canon, columns=[protac_smiles_col])
-        
-    #     # Convert the DataFrame to a Dataset
-    #     dataset = Dataset.from_pandas(protac_smiles_canon)
-    #     preds = []
-    #     for pred in tqdm(pipe(KeyDataset(dataset, protac_smiles_col), batch_size=batch_size), total=len(dataset) // batch_size, desc="Generating predictions"):
-    #         p = {f"default_pred_n{i}": pred[i]["generated_text"] for i in range(len(pred))}
-    #         preds.append(p)
-
-    #     if fix_predictions:
-    #         for i, (protac, pred) in tqdm(enumerate(zip(protac_smiles_canon, preds)), desc="Fixing predictions", total=len(preds)):
-    #             p_fixed = {k: fix_prediction(protac, v, verbose=verbose) for k, v in pred.items()}
-    #             # For each prediction, if the fixed prediction is not None, we
-    #             # replace the original prediction with the fixed one.
-    #             for k, v in p_fixed.items():
-    #                 if v is not None:
-    #                     pred[k] = v
-
-    # if return_check_reassembly:
-    #     if isinstance(protac_smiles_canon, str):
-    #         protac_smiles_list = [protac_smiles_canon]
-    #     elif isinstance(protac_smiles_canon, list):
-    #         protac_smiles_list = protac_smiles_canon
-    #     elif isinstance(protac_smiles_canon, pd.DataFrame):
-    #         protac_smiles_list = protac_smiles_canon[protac_smiles_col].tolist()
-        
-    #     print("Checking re-assembly...")
-    #     for protac, pred in zip(protac_smiles_list, preds):
-    #         for i in range(beam_size):
-    #             pred[f"reassembly_correct_n{i}"] = check_reassembly(protac, pred[f"default_pred_n{i}"])
-
-    #     # Just take the first prediction if the input was a string
-    #     if isinstance(protac_smiles, str):
-    #         preds = preds[0]
-
-    # return preds

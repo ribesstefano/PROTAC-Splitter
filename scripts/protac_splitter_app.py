@@ -78,9 +78,6 @@ def process_single_smiles(protac_smiles: str, use_transformer: bool = False, use
         else:
             raise gr.Error(f"An error occurred while processing the input SMILES: {exception_message}", duration=10)
 
-    valid_molecules = []
-    pred_key = f"default_pred_n0"
-    valid_molecules.append(results[pred_key])
 
     # Generate images and corresponding SMILES text
     images = []
@@ -91,47 +88,35 @@ def process_single_smiles(protac_smiles: str, use_transformer: bool = False, use
     else:
         input_img = Image.new("RGB", (1000, 1000))
     
+    pred_string = results.get("default_pred_n0", "")
+    pred_string = "" if pred_string is None else pred_string
+
     smiles_texts = []
     splits = {}
-    for smiles in results[pred_key].split("."):
+    for smiles in pred_string.split("."):
         mol = Chem.MolFromSmiles(smiles)
-        if mol:
+        if mol is not None:
             if "[*:1]" in smiles and "[*:2]" in smiles:
-                legend = "Linker"
                 splits["linker"] = smiles
             elif "[*:1]" in smiles:
-                legend = "Warhead"
-                splits["poi"] = smiles
+                splits["warhead"] = smiles
             elif "[*:2]" in smiles:
-                legend = "E3 Ligase Ligand"
                 splits["e3"] = smiles
 
             img = Draw.MolToImage(mol, legend="", size=(1000, 1000))
             images.append(img)
-            # smiles_texts.append(f"{legend}: {smiles}")
             smiles_texts.append(smiles)
 
-    smiles_texts = ".".join(smiles_texts)
+    # If not all "e3", "linker", or "warhead" are found, set them to "FAILED"
+    if "e3" not in splits or "linker" not in splits or "warhead" not in splits:
+        smiles_texts = "Prediction failed for one or more substructures. Please try again with a different model combination."
+    else:
+        smiles_texts = ".".join(smiles_texts)
+
     smiles_df = pd.DataFrame({
         "Substructure": ["E3 Ligase Ligand", "Linker", "Warhead"],
-        "SMILES": [splits.get("e3", ""), splits.get("linker", ""), splits.get("poi", "")]
+        "SMILES": [splits.get("e3", "FAILED"), splits.get("linker", "FAILED"), splits.get("warhead", "FAILED")]
     })
-
-    # use_svg = False
-    # input_img = get_mapped_protac_img(
-    #     protac_smiles=protac_smiles,
-    #     poi_smiles=splits.get('poi', ''),
-    #     linker_smiles=splits.get('linker', ''),
-    #     e3_smiles=splits.get('e3', ''),
-    #     w=1000,
-    #     h=500,
-    #     legend=None,
-    #     useSVG=use_svg,
-    # )
-    # 
-    # if use_svg:
-    #     input_img = save_svg_to_tempfile(input_img)
-    #     logging.debug(f"Returning processed image path: {input_img}")
 
     return input_img, list(images), smiles_texts, smiles_df
 
@@ -301,7 +286,7 @@ For single SMILES processing, the default values should work well in most cases.
             with gr.Row():
                 batch_size = gr.Number(
                     label="Batch Size",
-                    value=4,
+                    value=1,
                     minimum=1,
                     maximum=64,
                     step=1,
