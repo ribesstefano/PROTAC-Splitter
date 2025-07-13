@@ -11,6 +11,7 @@ A Gradio app is available to split PROTAC molecules and visualize the results at
 - [Data Availability](#data-availability)
 - [Contributing](#contributing)
 - [License](#license)
+- [Reference](#reference)
 
 ## Installation 🛠️
 
@@ -70,6 +71,24 @@ for download from Zenodo at: [https://doi.org/10.5281/zenodo.15797309](https://d
 
 We welcome contributions to this project! If you have suggestions for improvements, bug fixes, or new features, please open an issue or submit a pull request.
 
-## License 📝
+## License 📄
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Reference 📝
+
+If you find this work useful, please consider citing it via:
+
+```
+@article{Ribes2025PROTACSplitter,
+  title   = {PROTAC‐Splitter: A Machine Learning Framework for Automated Identification of PROTAC Substructures},
+  author  = {Stefano Ribes and Ranxuan Zhang and Télio Cropsal and Anders Källberg and Christian Tyrchan and Eva Nittinger and Rocío Mercado},
+  journal = {ChemRxiv},
+  year    = {2025},
+  month   = {Jul},
+  day     = {08},
+  doi     = {10.26434/chemrxiv-2025-bn1nv},
+  url     = {https://chemrxiv.org/engage/chemrxiv/article-details/686670983ba0887c33677fc8},
+  license = {CC BY 4.0}
+}
+```
