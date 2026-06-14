@@ -5,10 +5,8 @@ from typing import Dict, List, Union, Optional, Literal
 from multiprocessing import Process, Queue
 from hashlib import sha256
 
-import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
-from rdkit.Chem.MolStandardize import rdMolStandardize
 
 
 def GetSubstructMatchesWorker(q, mol, substruct, useChirality, maxMatches):
@@ -134,60 +132,43 @@ def mol2smiles(mol: Chem.Mol) -> str:
     return Chem.MolToSmiles(mol)
 
 
-def canonicalize_smiles(
-    smiles: str,
-    unique_inchikeys: Optional[Dict[str, Chem.Mol]] = None,
-) -> Optional[str]:
-    """Convert SMILES to canonical form, stripping salts and formal charges.
+def canonize_smiles(smiles: str) -> str:
+    """ Canonizes a SMILES string by converting it to canonical SMILES representation.
 
     Args:
-        smiles: Input SMILES string.
-        unique_inchikeys: If provided, tracks seen InChIKeys and returns None
-            for duplicates (updated in-place).
+        smiles (str): The input SMILES string.
 
     Returns:
-        Canonical SMILES, or None if the input is invalid or a duplicate.
+        str: The canonized SMILES string.
     """
-    if pd.isna(smiles) or not smiles:
+    if smiles is None:
         return None
-    mol = Chem.MolFromSmiles(str(smiles), sanitize=False)
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
     if mol is None:
         return None
     try:
-        Chem.SanitizeMol(mol)
-    except Exception:
+        return Chem.MolToSmiles(mol, canonical=True)
+    except:
         return None
-    try:
-        mol = rdMolStandardize.FragmentParent(mol)
-        mol = rdMolStandardize.Uncharger().uncharge(mol)
-        if unique_inchikeys is not None:
-            inchikey = Chem.MolToInchiKey(mol)
-            if inchikey in unique_inchikeys:
-                return None
-            unique_inchikeys[inchikey] = mol
-        return Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True)
-    except Exception:
-        return None
-
-
-# Backward-compatible alias
-canonize_smiles = canonicalize_smiles
 
 
 def canonize(x: Union[str, Chem.Mol]) -> Union[str, Chem.Mol]:
-    """Canonize a SMILES string or RDKit molecule.
+    """ Canonizes a SMILES string or RDKit molecule object.
 
     Args:
-        x: Input SMILES string or RDKit molecule object.
+        x: The input SMILES string or RDKit molecule object.
 
     Returns:
-        Canonical SMILES string (if input was str) or canonical Mol (if input was Mol),
-        or None if the input is invalid.
+        str | Chem.Mol: The canonized SMILES string or RDKit molecule object, according to the input type.
     """
     if x is None:
         return None
     if isinstance(x, str):
-        return canonicalize_smiles(x)
+        return canonize_smiles(x)
     return Chem.MolFromSmiles(Chem.MolToSmiles(x, canonical=True))
 
 
