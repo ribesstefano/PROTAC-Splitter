@@ -1,11 +1,14 @@
 import hashlib
 import logging
+import os
 import requests
 from pathlib import Path
 from typing import Union, Optional, Dict, List
 
 from datasets import Dataset
 import pandas as pd
+from rdkit import Chem
+from tqdm import tqdm
 
 from protac_splitter.config import get_cache_dir, get_hf_token
 from protac_splitter.chemoinformatics import canonize
@@ -13,7 +16,10 @@ from protac_splitter.fixing_functions import fix_prediction
 from protac_splitter.llms.model_utils import get_pipeline, run_pipeline
 from protac_splitter.graphs.e3_clustering import get_representative_e3s_fp
 from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
-from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
+from protac_splitter.graphs.splitting_algorithms import (
+    split_protac_graph_based,
+    split_protac_with_graphs_parallel,
+)
 
 _XGBOOST_MODEL_FILENAME = "PROTAC-Splitter-XGBoost.joblib"
 _XGBOOST_DOWNLOAD_URL = (
@@ -84,9 +90,11 @@ def split_protac(
         beam_size: int = 5,
         device: Optional[Union[int, str]] = None,
         num_proc: int = 1,
+        n_jobs: int = 1,
         verbose: int = 0,
         betweenness_threshold: float = 0.4,
         use_capacity_weight: bool = False,
+        betweenness_approx_frac: float = None,
 ) -> Union[Dict[str, str], List[Dict[str, str]]]:
     """ Split a PROTAC SMILES into the two ligands and the linker.
 
@@ -105,11 +113,12 @@ def split_protac(
         batch_size (int): Batch size for processing. Only used if `use_transformer` is True.
         beam_size (int): Number of beam search predictions to generate. Only used if `use_transformer` is True. Higher values may yield better results but increase computation time.
         device (int or str, optional): Device to run the Transformer model on. Defaults to None will attempt to run on GPU if available, otherwise CPU.
-        num_proc (int): Number of processes to use for parallel processing. Useful for large datasets of PROTACs to split.
+        num_proc (int): Number of processes for the Transformer and heuristic paths. Not used for XGBoost (use n_jobs instead).
+        n_jobs (int): Number of parallel worker processes for the XGBoost and heuristic paths. -1 uses all available CPUs. Default 1 (sequential). Uses joblib loky backend.
         verbose (int): Verbosity level.
         betweenness_threshold (float): Betweenness-centrality threshold used by the heuristic algorithm to identify split points. Higher values are more conservative (fewer cuts). Default 0.4.
         use_capacity_weight (bool): Whether to weight edges by bond capacity when computing betweenness centrality (heuristic algorithm only). Default False.
-    
+
     Returns:
         Union[Dict[str, str], List[Dict[str, str]]]: Depending on the input type, returns:
             - If a single string is provided, returns a dictionary with format: `{protac_smiles_col: protac_smiles, "default_pred_n0": e3l.linker.warhead, "model_name": Transformer|XGBoost|Heuristic}`.
@@ -222,58 +231,85 @@ def split_protac(
             )
 
     elif use_xgboost:
-        # Use the XGBoost model only
-        def mapping_func(row: Dict[str, str]) -> Dict[str, str]:
-            """Split the PROTAC SMILES using the XGBoost model."""
-            protac = row[protac_smiles_col]
-            pred = split_protac_graph_based(
-                protac_smiles=protac,
-                use_classifier=True,
-                classifier=xgboost_model,
-                representative_e3s_fp=representative_e3s_fp,
-                betweenness_threshold=betweenness_threshold,
-                use_capacity_weight=use_capacity_weight,
-            )
-            if all(v is None for v in pred.values()):
-                split = None
-            else:
-                split = f"{pred['e3']}.{pred['linker']}.{pred['poi']}"
-            return {
-                protac_smiles_col: protac,
-                "default_pred_n0": split,
-                "model_name": "XGBoost",
-            }
-        preds_ds = ds.map(
-            mapping_func,
-            num_proc=1,
-            desc="Splitting PROTAC SMILES using XGBoost model",
+        from protac_splitter.data.curation.bond_adjustments import (
+            adjust_amide_bonds_in_substructs,
+            adjust_ester_bonds_in_substructs,
         )
+        from protac_splitter.graphs.splitting_algorithms import extract_attachment_point
+        from protac_splitter.graphs.utils import average_tanimoto_distance
+
+        smiles_list = ds[protac_smiles_col]
+
+        # Step 1: extract features in parallel (only tiny SMILES strings cross IPC,
+        # not the XGBoost model), then Step 2: ONE XGBoost inference call.
+        all_bonds_idx = xgboost_model.predict_bonds_batch(smiles_list, n_jobs=n_jobs, top_n=2, betweenness_approx_frac=betweenness_approx_frac)
+
+        rows = []
+        for smi, bonds_idx in tqdm(zip(smiles_list, all_bonds_idx), total=len(smiles_list), desc="Processing PROTACs with XGBoost"):
+            protac = Chem.MolFromSmiles(smi)
+            try:
+                ligands = Chem.FragmentOnBonds(
+                    protac, bonds_idx.tolist(), addDummies=True, dummyLabels=[(1, 1), (2, 2)]
+                )
+                substructures, linker_smiles = [], None
+                for ligand in Chem.GetMolFrags(ligands, asMols=True):
+                    lig_smi = Chem.MolToSmiles(ligand, canonical=True)
+                    if lig_smi.count("*") == 2:
+                        linker_smiles = lig_smi
+                    else:
+                        substructures.append(lig_smi)
+
+                if not xgboost_model.binary:
+                    e3_smi = substructures[0]
+                    wh_smi = substructures[1]
+                    e3_attach = 1
+                    wh_attach = 2
+                else:
+                    d1 = average_tanimoto_distance(substructures[0], representative_e3s_fp, None)
+                    d2 = average_tanimoto_distance(substructures[1], representative_e3s_fp, None)
+                    if d1 < d2:
+                        e3_smi, wh_smi = substructures[0], substructures[1]
+                    else:
+                        e3_smi, wh_smi = substructures[1], substructures[0]
+                    e3_attach = extract_attachment_point(e3_smi)
+                    wh_attach = extract_attachment_point(wh_smi)
+
+                e3_smi = e3_smi.replace(f"[{e3_attach}*]", "[*:2]")
+                linker_smiles = linker_smiles.replace(f"[{e3_attach}*]", "[*:2]")
+                wh_smi = wh_smi.replace(f"[{wh_attach}*]", "[*:1]")
+                linker_smiles = linker_smiles.replace(f"[{wh_attach}*]", "[*:1]")
+
+                substructs = {"e3": e3_smi, "poi": wh_smi, "linker": linker_smiles}
+                substructs = adjust_amide_bonds_in_substructs(substructs, smi)
+                substructs = adjust_ester_bonds_in_substructs(substructs, smi)
+                split = f"{substructs['e3']}.{substructs['linker']}.{substructs['poi']}"
+            except Exception:
+                split = None
+
+            rows.append({protac_smiles_col: smi, "default_pred_n0": split, "model_name": "XGBoost"})
+        preds_ds = Dataset.from_list(rows)
     else:
-        # If neither transformer nor XGBoost is used, we use the heuristic-based
-        # algorithm, that does not require any model.
-        def mapping_func(row: Dict[str, str]) -> Dict[str, str]:
-            """Split the PROTAC SMILES using the heuristic-based algorithm."""
-            protac = row[protac_smiles_col]
-            pred = split_protac_graph_based(
-                protac_smiles=protac,
-                use_classifier=False,
-                betweenness_threshold=betweenness_threshold,
-                use_capacity_weight=use_capacity_weight,
-            )
-            if all(v is None for v in pred.values()):
-                split = None
-            else:
-                split = f"{pred['e3']}.{pred['linker']}.{pred['poi']}"
-            return {
-                protac_smiles_col: protac,
-                "default_pred_n0": split,
-                "model_name": "Heuristic",
-            }
-        preds_ds = ds.map(
-            mapping_func,
-            num_proc=num_proc,
-            desc="Splitting PROTAC SMILES using heuristic-based algorithm",
+        smiles_list = ds[protac_smiles_col]
+        _n = len(smiles_list)
+        _effective_jobs = max(1, os.cpu_count() if n_jobs == -1 else n_jobs)
+        _chunk = max(1, _n // (_effective_jobs * 4)) if _effective_jobs > 1 else _n
+        raw_preds = split_protac_with_graphs_parallel(
+            protac_smiles=smiles_list,
+            use_classifier=False,
+            betweenness_threshold=betweenness_threshold,
+            use_capacity_weight=use_capacity_weight,
+            betweenness_approx_frac=betweenness_approx_frac,
+            n_jobs=_effective_jobs,
+            batch_size=_chunk,
         )
+        rows = []
+        for smi, pred in zip(smiles_list, raw_preds):
+            split = (
+                None if all(v is None for v in pred.values())
+                else f"{pred['e3']}.{pred['linker']}.{pred['poi']}"
+            )
+            rows.append({protac_smiles_col: smi, "default_pred_n0": split, "model_name": "Heuristic"})
+        preds_ds = Dataset.from_list(rows)
 
     if isinstance(protac_smiles, str):
         # If the input was a single string, we return the first prediction

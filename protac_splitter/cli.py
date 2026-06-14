@@ -83,9 +83,18 @@ class SplitArgs:
     centrality (heuristic algorithm only). May improve results for molecules
     with many aromatic rings."""
 
+    betweenness_approx_frac: float = None
+    """Fraction of nodes (0.0–1.0) to sample when approximating betweenness
+    centrality. None (default) uses the exact algorithm. Lower values are
+    faster but less accurate — e.g. 0.5 samples half the nodes."""
+
     # --- General ---
+    n_jobs: int = 1
+    """Number of parallel worker processes for XGBoost and heuristic splitting.
+    Set to -1 to use all available CPUs. Default 1 (sequential)."""
+
     num_proc: int = 1
-    """Number of parallel worker processes."""
+    """Number of parallel worker processes for the Transformer path."""
 
     verbose: int = 0
     """Verbosity level (0 = silent, 1 = info, 2 = debug)."""
@@ -131,10 +140,12 @@ def main() -> None:
         batch_size=args.batch_size,
         beam_size=args.beam_size,
         device=args.device,
+        n_jobs=args.n_jobs,
         num_proc=args.num_proc,
         verbose=args.verbose,
         betweenness_threshold=args.betweenness_threshold,
         use_capacity_weight=args.use_capacity_weight,
+        betweenness_approx_frac=args.betweenness_approx_frac,
     )
 
     if args.input_csv is not None:

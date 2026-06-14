@@ -3,10 +3,7 @@ from typing import Tuple, Dict
 
 from rdkit import Chem
 
-from protac_splitter.chemoinformatics import (
-    dummy2query,
-    canonize,
-)
+from protac_splitter.chemoinformatics import dummy2query
 from protac_splitter.display_utils import display_mol
 from protac_splitter.evaluation import check_reassembly
 
@@ -158,7 +155,6 @@ def adjust_amide_bond(
     # Rename the "[3*]" attachment point on the amide fragment to "[*:3]"
     amide_fragment_smiles = Chem.MolToSmiles(amide_fragment, canonical=True)
     amide_fragment_smiles = amide_fragment_smiles.replace(f'[{dummy_label}*]', f'[*:{dummy_label}]')
-    amide_fragment_smiles = canonize(amide_fragment_smiles)
     amide_fragment = Chem.MolFromSmiles(amide_fragment_smiles)
 
     # Use molzip to join the linker and the fragment at the original attachment point
@@ -167,13 +163,11 @@ def adjust_amide_bond(
     # Rename the "[*:3]" attachment point back to the original attachment point on the linker
     linker_fixed_smiles = Chem.MolToSmiles(linker_fixed, canonical=True)
     linker_fixed_smiles = linker_fixed_smiles.replace(f'[*:{dummy_label}]', f'[*:{substruct_attachment_id}]')
-    linker_fixed_smiles = canonize(linker_fixed_smiles)
     linker_fixed = Chem.MolFromSmiles(linker_fixed_smiles)
 
     # Rename the "[3*]" attachment point back to the original attachment point on the substruct
     substruct_fixed_smiles = Chem.MolToSmiles(substruct_fixed, canonical=True)
     substruct_fixed_smiles = substruct_fixed_smiles.replace(f'[{dummy_label}*]', f'[*:{substruct_attachment_id}]')
-    substruct_fixed_smiles = canonize(substruct_fixed_smiles)
     substruct_fixed = Chem.MolFromSmiles(substruct_fixed_smiles)
 
     return substruct_fixed, linker_fixed

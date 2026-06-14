@@ -155,11 +155,12 @@ def check_reassembly(
     Returns:
         bool: True if the reassembled PROTAC matches the original PROTAC SMILES, False otherwise. None if it failed.
     """
-    ligands_smiles = canonize_smiles(ligands_smiles)
-    if ligands_smiles is None:
+    _lig_mol = Chem.MolFromSmiles(ligands_smiles)
+    if _lig_mol is None:
         if verbose:
             logging.error('Ligand could be canonicalized.')
         return (False, None) if return_reassembled_smiles else False
+    ligands_smiles = Chem.MolToSmiles(_lig_mol, canonical=True)
 
     null_linker_e3 = f'[*:{e3_attachment_id}][*:{poi_attachment_id}]'
     null_linker_poi = f'[*:{poi_attachment_id}][*:{e3_attachment_id}]'

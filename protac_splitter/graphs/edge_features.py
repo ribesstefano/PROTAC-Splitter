@@ -1,4 +1,4 @@
-from typing import Tuple, List
+from typing import Tuple, List, Union
 
 from rdkit import Chem
 from rdkit.Chem import AllChem, Descriptors, Draw
@@ -31,24 +31,26 @@ def bond_capacity(bond: Chem.Bond) -> int:
         return 50    # fallback for unknown/rare types
 
 def smiles_to_nx(
-    smiles: str,
+    smiles_or_mol: Union[str, Chem.Mol],
     use_capacity: bool = False,
 ) -> nx.Graph:
-    """ Convert a SMILES string to a NetworkX graph.
+    """ Convert a SMILES string (or pre-parsed RDKit Mol) to a NetworkX graph.
     Parameters:
-        smiles (str): The SMILES string to convert.
+        smiles_or_mol: SMILES string or already-parsed RDKit Mol.
         use_capacity (bool): Whether to use bond capacity as edge weights.
     Returns:
         nx.Graph: The NetworkX graph representation of the molecule.
     """
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        raise ValueError(f"Input SMILES could not be parsed: {smiles}")
-    # Canonicalize the SMILES
-    mol = Chem.MolFromSmiles(Chem.MolToSmiles(mol, canonical=True))
-    if mol is None:
-        raise ValueError(f"Input SMILES could not be canonicalized: {smiles}")
-    # Convert SMILES to NetworkX graph
+    if isinstance(smiles_or_mol, str):
+        mol = Chem.MolFromSmiles(smiles_or_mol)
+        if mol is None:
+            raise ValueError(f"Input SMILES could not be parsed: {smiles_or_mol}")
+        mol = Chem.MolFromSmiles(Chem.MolToSmiles(mol, canonical=True))
+        if mol is None:
+            raise ValueError(f"Input SMILES could not be canonicalized: {smiles_or_mol}")
+    else:
+        mol = smiles_or_mol
+
     G = nx.Graph()
     if use_capacity:
         for bond in mol.GetBonds():
@@ -56,7 +58,7 @@ def smiles_to_nx(
             G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx(), capacity=capacity)
     else:
         for bond in mol.GetBonds():
-            G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())    
+            G.add_edge(bond.GetBeginAtomIdx(), bond.GetEndAtomIdx())
     return G
 
 def extract_edge_features(
@@ -67,9 +69,10 @@ def extract_edge_features(
     radius: int = 6,
     descriptor_names: List[str] = None,
     fp_as_string: bool = False,
+    betweenness_approx_frac: float = None,
 ) -> pd.DataFrame:
     """Extract features from the edges of a PROTAC molecule represented as a SMILES string.
-    
+
     Parameters:
         protac_smiles (str): SMILES representation of the PROTAC molecule.
         e3_split_pair (Tuple[int, int]): Indices of the E3 split pair.
@@ -77,64 +80,56 @@ def extract_edge_features(
         n_bits (int): Number of bits for Morgan fingerprints.
         radius (int): Radius for Morgan fingerprints.
         descriptor_names (List[str]): List of RDKit descriptor names to compute.
-        
+
     Returns:
         pd.DataFrame: DataFrame containing edge features.
     """
+    # Parse and canonicalize mol ONCE — re-used for graph and fingerprint
     mol = Chem.MolFromSmiles(protac_smiles)
     if mol is None:
         raise ValueError(f"Input SMILES could not be parsed: {protac_smiles}")
-    # Canonicalize the SMILES
     mol = Chem.MolFromSmiles(Chem.MolToSmiles(mol, canonical=True))
     if mol is None:
         raise ValueError(f"Input SMILES could not be canonicalized: {protac_smiles}")
 
-    # Step 1: Convert SMILES to NetworkX
-    G = smiles_to_nx(protac_smiles, use_capacity=False)
+    # Build graph directly from mol (no extra SMILES parsing)
+    G = smiles_to_nx(mol, use_capacity=False)
 
     num_nodes = G.number_of_nodes()
     num_edges = G.number_of_edges()
 
-    # Step 2: Create line graph and compute betweenness + degree
+    # Line graph and betweenness centrality
     LG = nx.line_graph(G)
-    line_betweenness = nx.betweenness_centrality(LG, endpoints=True)
-    betweenness = nx.betweenness_centrality(G, endpoints=True)
-
-    # Compute k-hop degrees (number of nodes within 2, 3 hops)
-    # TODO: Shall I get the degree of the node in the line graph or the original graph?
+    lg_k = max(1, round(betweenness_approx_frac * LG.number_of_nodes())) if betweenness_approx_frac is not None else None
+    g_k  = max(1, round(betweenness_approx_frac * G.number_of_nodes()))  if betweenness_approx_frac is not None else None
+    line_betweenness = nx.betweenness_centrality(LG, endpoints=True, k=lg_k)
+    betweenness = nx.betweenness_centrality(G, endpoints=True, k=g_k)
     line_degree = dict(LG.degree())
+    degree = dict(G.degree())
+
+    # k-hop degrees via all_pairs_shortest_path_length (one BFS pass each, faster
+    # than calling single_source_shortest_path_length per node)
     line_degree_r2 = {}
     line_degree_r3 = {}
-    for node in LG.nodes():
-        # Nodes within radius 2 and 3 (excluding the center node)
-        neighbors_r2 = nx.single_source_shortest_path_length(LG, node, cutoff=2)
-        neighbors_r3 = nx.single_source_shortest_path_length(LG, node, cutoff=3)
-        line_degree_r2[node] = len([n for n, d in neighbors_r2.items() if d == 2])
-        line_degree_r3[node] = len([n for n, d in neighbors_r3.items() if d == 3])
+    for node, paths in nx.all_pairs_shortest_path_length(LG, cutoff=3):
+        line_degree_r2[node] = sum(1 for d in paths.values() if d == 2)
+        line_degree_r3[node] = sum(1 for d in paths.values() if d == 3)
 
-    degree = dict(G.degree())
     degree_r2 = {}
     degree_r3 = {}
-    for node in G.nodes():
-        # Nodes within radius 2 and 3 (excluding the center node)
-        neighbors_r2 = nx.single_source_shortest_path_length(G, node, cutoff=2)
-        neighbors_r3 = nx.single_source_shortest_path_length(G, node, cutoff=3)
-        degree_r2[node] = len([n for n, d in neighbors_r2.items() if d == 2])
-        degree_r3[node] = len([n for n, d in neighbors_r3.items() if d == 3])
+    for node, paths in nx.all_pairs_shortest_path_length(G, cutoff=3):
+        degree_r2[node] = sum(1 for d in paths.values() if d == 2)
+        degree_r3[node] = sum(1 for d in paths.values() if d == 3)
 
     if e3_split_pair is not None and wh_split_pair is not None:
         true_split_edges = {frozenset(e3_split_pair), frozenset(wh_split_pair)}
 
-    # Get molecular characteristics, i.e., Morgan fingerprints and descriptors
-    # Generate Morgan fingerprint
+    # Molecular fingerprint — computed once, shared across all bridge-bond rows
     fp_bitvec = AllChem.GetMorganFingerprintAsBitVect(mol, radius, nBits=n_bits)
-    fp = np.zeros((n_bits,), dtype=np.float32)
-    AllChem.DataStructs.ConvertToNumpyArray(fp_bitvec, fp)
-    if fp_as_string:
-        fp = {"chem_mol_fp": "".join([str(int(bit)) for bit in fp])}
-    else:
-        fp = {f"chem_mol_fp_{i}": bool(fp[i]) for i in range(n_bits)}
-    # Generate RDKit descriptors
+    fp_arr = np.zeros((n_bits,), dtype=np.uint8)
+    AllChem.DataStructs.ConvertToNumpyArray(fp_bitvec, fp_arr)
+
+    # RDKit descriptors — also molecular-level, computed once
     descriptor_func_names = descriptor_names or [
         "MolWt", "HeavyAtomCount", "NumHAcceptors", "NumHDonors",
         "TPSA", "NumRotatableBonds", "RingCount", "MolLogP"
@@ -142,18 +137,17 @@ def extract_edge_features(
     functions = [getattr(Descriptors, name) for name in descriptor_func_names]
     descriptors = {f"chem_mol_desc_{name}": func(mol) for name, func in zip(descriptor_func_names, functions)}
 
-    # Step 3: Gather edge features
-    # NOTE: Only consider bridge nodes
-    edge_features = []
-    for (u, v) in nx.bridges(G):
-        bond = mol.GetBondBetweenAtoms(u, v)
+    # Per-bridge-bond scalar features (no fingerprint — added below as numpy block)
+    bridges = list(nx.bridges(G))
+    n_bridges = len(bridges)
 
-        # Avoid reporting the same edge twice (i.e., swap u and v if needed) and
-        # ensure to find the node pair in the line graph
+    scalar_rows = []
+    for (u, v) in bridges:
+        bond = mol.GetBondBetweenAtoms(u, v)
         node = (u, v) if (u, v) in LG else (v, u)
         node_key = node if node in line_betweenness else (v, u)
 
-        features = {
+        row = {
             "graph_num_nodes": num_nodes,
             "graph_num_edges": num_edges,
             "graph_betweenness": line_betweenness.get(node_key, 0.0),
@@ -178,33 +172,39 @@ def extract_edge_features(
             "chem_mol_n_bits": n_bits,
             "chem_mol_radius": radius,
         }
-        # Add RDKit descriptors and Morgan fingerprint
-        features.update(fp)
-        features.update(descriptors)
+        row.update(descriptors)
 
-        # Add E3 and warhead split labels
         if e3_split_pair is not None and wh_split_pair is not None:
-            features.update({
-                "label_is_split": frozenset([u, v]) in true_split_edges,
-                "label_e3_split": frozenset([u, v]) == frozenset(e3_split_pair),
-                "label_wh_split": frozenset([u, v]) == frozenset(wh_split_pair),
-            })
+            row["label_is_split"] = frozenset([u, v]) in true_split_edges
+            row["label_e3_split"] = frozenset([u, v]) == frozenset(e3_split_pair)
+            row["label_wh_split"] = frozenset([u, v]) == frozenset(wh_split_pair)
 
-        # Append the features to the list of edge features
-        edge_features.append(features)
+        scalar_rows.append(row)
 
-    df = pd.DataFrame(edge_features)
+    if not scalar_rows:
+        return pd.DataFrame()
 
-    # Identify columns with int64 dtype
-    int64_cols = df.select_dtypes(include=['int64']).columns
+    scalar_df = pd.DataFrame(scalar_rows)
 
-    # Create a dictionary mapping these columns to int32
-    dtype_mapping = {col: np.int32 for col in int64_cols}
+    # Add fingerprint as a contiguous numpy block — much faster than per-row dicts
+    # with 512 individual bool entries
+    if fp_as_string:
+        scalar_df["chem_mol_fp"] = "".join(str(int(b)) for b in fp_arr)
+    else:
+        fp_cols = [f"chem_mol_fp_{i}" for i in range(n_bits)]
+        fp_bool = fp_arr.astype(bool)
+        # np.tile avoids n_bridges copies of a Python list; concat is cheaper than
+        # updating 512-key dicts per row
+        fp_df = pd.DataFrame(
+            np.tile(fp_bool, (n_bridges, 1)),
+            columns=fp_cols,
+        )
+        scalar_df = pd.concat([scalar_df.reset_index(drop=True), fp_df], axis=1)
 
-    # Apply the type conversion
-    df = df.astype(dtype_mapping)
-    
-    return df
+    int64_cols = scalar_df.select_dtypes(include=["int64"]).columns
+    scalar_df = scalar_df.astype({col: np.int32 for col in int64_cols})
+
+    return scalar_df
 
 def get_edge_features(
     protac_smiles: str | List[str],

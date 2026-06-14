@@ -1,4 +1,5 @@
 import joblib
+import os
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Any, Literal
 
@@ -300,6 +301,92 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
                 return np.array(results, dtype=int)
         else:
             return features
+
+    @staticmethod
+    def _top_bonds_from_group(
+        group: pd.DataFrame,
+        binary: bool,
+        top_n: int = 2,
+    ) -> np.ndarray:
+        """Return top-n bond indices from a per-molecule annotated feature group."""
+        if binary:
+            top_edges = group.nlargest(top_n, "pred_proba")
+            idxs = top_edges["chem_bond_idx"].to_numpy()
+            if len(idxs) < top_n:
+                idxs = np.pad(idxs, (0, top_n - len(idxs)), constant_values=-1)
+            return idxs[:top_n]
+        else:
+            class1_idx = -1
+            if (group["pred_label"] == 1).any():
+                mask = group["pred_label"] == 1
+                class1_idx = group.loc[group.loc[mask, "pred_proba"].idxmax(), "chem_bond_idx"]
+            class2_idx = -1
+            if (group["pred_label"] == 2).any():
+                mask = group["pred_label"] == 2
+                class2_idx = group.loc[group.loc[mask, "pred_proba"].idxmax(), "chem_bond_idx"]
+            return np.array([class1_idx, class2_idx], dtype=int)
+
+    def predict_bonds_batch(
+        self,
+        smiles_list: List[str],
+        n_jobs: int = 1,
+        top_n: int = 2,
+        betweenness_approx_frac: float = None,
+    ) -> List[np.ndarray]:
+        """Extract features for all SMILES, run ONE XGBoost call, return per-mol bond indices.
+
+        This is substantially faster than calling predict_from_smiles() once per molecule
+        for large batches, because XGBoost inference overhead is amortized over all rows.
+
+        Parameters:
+            smiles_list: List of canonical PROTAC SMILES.
+            n_jobs: Number of parallel workers for feature extraction. -1 uses all CPUs.
+                    Features are extracted in worker processes (only tiny SMILES strings
+                    are sent over IPC; no model needed in workers).
+            top_n: Number of top bond indices to return per molecule.
+            betweenness_approx_frac: If not None, proportion of nodes (0.0–1.0) to sample
+                when approximating betweenness centrality. Smaller values are faster but
+                less accurate.
+
+        Returns:
+            List of 1-D numpy arrays (length top_n) with bond indices per molecule.
+        """
+        from tqdm import tqdm
+        from protac_splitter.graphs.edge_features import extract_edge_features
+
+        # Resolve -1 to actual CPU count
+        effective_jobs = os.cpu_count() if n_jobs == -1 else n_jobs
+
+        n = len(smiles_list)
+        if effective_jobs == 1:
+            feature_dfs = [
+                extract_edge_features(smi, betweenness_approx_frac=betweenness_approx_frac)
+                for smi in tqdm(smiles_list, desc="Extracting graph features", unit="mol", total=n)
+            ]
+        else:
+            feature_dfs = joblib.Parallel(n_jobs=effective_jobs, prefer="processes")(
+                joblib.delayed(extract_edge_features)(smi, betweenness_approx_frac=betweenness_approx_frac)
+                for smi in tqdm(smiles_list, desc="Extracting graph features", unit="mol", total=n)
+            )
+
+        # One big XGBoost inference call in the main process (no model IPC)
+        all_features = pd.concat(feature_dfs, ignore_index=True)
+        Xf = self._ensure_features(all_features)
+        pred_proba = self.pipeline.predict_proba(Xf)
+        pred_label = self.pipeline.predict(Xf)
+
+        all_features = all_features.copy()
+        all_features["pred_label"] = pred_label
+        all_features["pred_proba"] = (
+            pred_proba[:, 1] if pred_proba.shape[1] > 1 else pred_proba[:, 0]
+        )
+
+        groupby = all_features.groupby("chem_mol_smiles", sort=False)
+        return [
+            self._top_bonds_from_group(groupby.get_group(smi), self.binary, top_n)
+            for smi in smiles_list
+        ]
+
 
 def get_classification_report(y_true, y_pred, labels):
     report = classification_report(y_true, y_pred, target_names=labels, output_dict=True)
