@@ -157,3 +157,4 @@ logs/
 **/**/slurm-*
 **/**/sbatch-*
 **/**/*.pdf
+CLAUDE.md
