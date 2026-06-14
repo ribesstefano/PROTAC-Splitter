@@ -87,6 +87,7 @@ def split_protac(
         verbose: int = 0,
         betweenness_threshold: float = 0.4,
         use_capacity_weight: bool = False,
+        betweenness_approx_frac: float = None,
 ) -> Union[Dict[str, str], List[Dict[str, str]]]:
     """ Split a PROTAC SMILES into the two ligands and the linker.
 
@@ -186,6 +187,7 @@ def split_protac(
                         representative_e3s_fp=representative_e3s_fp,
                         betweenness_threshold=betweenness_threshold,
                         use_capacity_weight=use_capacity_weight,
+                        betweenness_approx_frac=betweenness_approx_frac,
                     )
                     return {
                         protac_smiles_col: protac,
@@ -233,6 +235,7 @@ def split_protac(
                 representative_e3s_fp=representative_e3s_fp,
                 betweenness_threshold=betweenness_threshold,
                 use_capacity_weight=use_capacity_weight,
+                betweenness_approx_frac=betweenness_approx_frac,
             )
             if all(v is None for v in pred.values()):
                 split = None
@@ -259,6 +262,7 @@ def split_protac(
                 use_classifier=False,
                 betweenness_threshold=betweenness_threshold,
                 use_capacity_weight=use_capacity_weight,
+                betweenness_approx_frac=betweenness_approx_frac,
             )
             if all(v is None for v in pred.values()):
                 split = None

@@ -55,6 +55,7 @@ def split_protac_with_betweenness_centrality(
     morgan_fp_generator: Optional[Any] = None,
     use_capacity_weight: bool = False,
     betweenness_threshold: float = 0.4,
+    betweenness_approx_frac: float = None,
 ) -> Dict[str, str]:
     """
     Split the PROTAC molecule into two parts using the NetworkX library.
@@ -93,7 +94,8 @@ def split_protac_with_betweenness_centrality(
 
     # Compute betweenness centrality
     weight = 'capacity' if use_capacity_weight else None
-    centrality = nx.betweenness_centrality(G, normalized=True, endpoints=True, weight=weight)
+    k = max(1, round(betweenness_approx_frac * G.number_of_nodes())) if betweenness_approx_frac is not None else None
+    centrality = nx.betweenness_centrality(G, normalized=True, endpoints=True, weight=weight, k=k)
 
     # Get the two nodes with the highest betweenness centrality
     sorted_nodes = sorted(centrality.items(), key=lambda x: x[1], reverse=True)
@@ -321,6 +323,7 @@ def split_protac_graph_based(
     morgan_fp_generator: Optional[Any] = None,
     use_capacity_weight: bool = False,
     betweenness_threshold: float = 0.4,
+    betweenness_approx_frac: float = None,
 ) -> Dict[str, str]:
     """
     Splits a PROTAC molecule using either ML classifier or deterministic betweenness centrality.
@@ -353,6 +356,7 @@ def split_protac_graph_based(
             morgan_fp_generator=morgan_fp_generator,
             use_capacity_weight=use_capacity_weight,
             betweenness_threshold=betweenness_threshold,
+            betweenness_approx_frac=betweenness_approx_frac,
         )
 
     substructs = {
@@ -380,6 +384,7 @@ def split_protac_with_graphs_wrapper(
     morgan_fp_generator: Optional[Any] = None,
     use_capacity_weight: bool = False,
     betweenness_threshold: float = 0.4,
+    betweenness_approx_frac: float = None,
 ) -> List[Dict[str, str]]:
     """ Wrapper function to apply split_protac_graph_based over a list of PROTAC SMILES.
     
@@ -424,6 +429,7 @@ def split_protac_with_graphs_wrapper(
             morgan_fp_generator=morgan_fp_generator,
             use_capacity_weight=use_capacity_weight,
             betweenness_threshold=betweenness_threshold,
+            betweenness_approx_frac=betweenness_approx_frac,
         ) for smi in protac_smiles
     ]
 
@@ -437,6 +443,7 @@ def split_protac_with_graphs_parallel(
     morgan_fp_generator: Optional[Any] = None,
     use_capacity_weight: bool = False,
     betweenness_threshold: float = 0.4,
+    betweenness_approx_frac: float = None,
     n_jobs: int = 1,
     batch_size: int = 1,
 ) -> List[Dict[str, str]]:
@@ -471,6 +478,7 @@ def split_protac_with_graphs_parallel(
             morgan_fp_generator=morgan_fp_generator,
             use_capacity_weight=use_capacity_weight,
             betweenness_threshold=betweenness_threshold,
+            betweenness_approx_frac=betweenness_approx_frac,
         )
 
     # Raise a warning if the n_jobs > 1 and the fingerprint generator is provided
@@ -496,6 +504,7 @@ def split_protac_with_graphs_parallel(
             morgan_fp_generator=morgan_fp_generator,
             use_capacity_weight=use_capacity_weight,
             betweenness_threshold=betweenness_threshold,
+            betweenness_approx_frac=betweenness_approx_frac,
         ) for batch in smiles_batches
     )
 
