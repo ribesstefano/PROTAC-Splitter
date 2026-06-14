@@ -1,314 +1,216 @@
-import os
-import argparse
+"""Plot the chemical space of PROTACs using PCA on Morgan fingerprints.
+
+Usage:
+    python scripts/plot_chemical_space.py --help
+    python scripts/plot_chemical_space.py --protac-db-path data/protacdb.csv --protac-pedia-path data/protacpedia.csv
+"""
+from __future__ import annotations
+
+import dataclasses
 from collections import defaultdict
+from pathlib import Path
+from typing import Optional
 
-import pandas as pd
-import numpy as np
-from tqdm import tqdm
-from sklearn.decomposition import PCA
-
-from rdkit import Chem
-from matplotlib import pyplot as plt
 import matplotlib
-import seaborn as sns
-from datasets import load_dataset
+import numpy as np
+import pandas as pd
+import tyro
+from rdkit import Chem
+from sklearn.decomposition import PCA
+from tqdm import tqdm
 
 from protac_splitter.chemoinformatics import canonize
+from scripts.common import ensure_output_dir
 
-matplotlib.rcParams.update({
-    'font.size': 12,
-    'font.family': 'serif',
-})
+matplotlib.rcParams.update({"font.size": 12, "font.family": "serif"})
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Plot chemical space of PROTACs based on their SMILES strings."
-    )
-    parser.add_argument(
-        "--protac_db_path",
-        type=str,
-        required=True,
-        help="Path to the PROTAC-DB v3.0 CSV file.",
-    )
-    parser.add_argument(
-        "--protac_pedia_path",
-        type=str,
-        required=True,
-        help="Path to the PROTAC-Pedia CSV file.",
-    )
-    parser.add_argument(
-        "--internal_data_path",
-        type=str,
-        default=None,
-        help="Path to the internal PROTAC-Splitter dataset (optional).",
-    )
-    parser.add_argument(
-        "--output_dir",
-        type=str,
-        default="chemical_space_plots",
-        help="Directory to save the output plots.",
-    )
-    parser.add_argument(
-        "--num_proc",
-        type=int,
-        default=2,
-        help="Number of processes to use for parallel processing.",
-    )
-    parser.add_argument(
-        "--num_proc_fp_gen",
-        type=int,
-        default=8,
-        help="Number of processes to use for fingerprint generation.",
-    )
-    parser.add_argument(
-        "--test_internal_data",
-        action='store_true',
-        help="If set, will test plotting for internal PROTAC-Splitter dataset.",
-    )
-    args = parser.parse_args()
-    
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir, exist_ok=True)
-        print(f"Created output directory: {args.output_dir}")
+
+@dataclasses.dataclass
+class Args:
+    """Plot PCA of PROTAC chemical space from PROTAC-DB and PROTAC-Pedia."""
+
+    protac_db_path: str
+    """Path to the PROTAC-DB v3.0 CSV file."""
+
+    protac_pedia_path: str
+    """Path to the PROTAC-Pedia CSV file."""
+
+    output_dir: str = "chemical_space_plots"
+    """Directory to save output plots."""
+
+    internal_data_path: Optional[str] = None
+    """Optional path to internal PROTAC-Splitter dataset CSV."""
+
+    num_proc: int = 2
+    """Processes for HuggingFace dataset mapping."""
+
+    num_proc_fp_gen: int = 8
+    """Threads for fingerprint generation."""
+
+    test_internal_data: bool = False
+    """Add noise to internal data fingerprints (for testing)."""
+
+
+def main(args: Args) -> None:
+    import seaborn as sns
+    from datasets import load_dataset
+    from matplotlib import pyplot as plt
+
+    out_dir = ensure_output_dir(args.output_dir)
 
     def get_substructs(row):
-        text = row['text']
-        labels = row['labels']
         return {
-            'PROTAC SMILES': text,
-            'POI Ligand SMILES with direction': labels.split('.')[2],
-            'Linker SMILES with direction': labels.split('.')[1],
-            'E3 Binder SMILES with direction': labels.split('.')[0],
+            "PROTAC SMILES": row["text"],
+            "POI Ligand SMILES with direction": row["labels"].split(".")[2],
+            "Linker SMILES with direction": row["labels"].split(".")[1],
+            "E3 Binder SMILES with direction": row["labels"].split(".")[0],
         }
 
-    ds = load_dataset(
-        'ailab-bio/PROTAC-Splitter-Dataset',
-        'clustered',
-        hf_token=os.getenv('HF_TOKEN', None),
-    )
-    ds = ds.map(get_substructs, num_proc=args.num_proc, remove_columns=['text', 'labels'])
-    train_df = ds['train'].to_pandas()
-    val_df = ds['validation'].to_pandas()
-    test_df = ds['test'].to_pandas()
-    held_out_df = ds['held_out'].to_pandas()
+    import os
+    ds = load_dataset("ailab-bio/PROTAC-Splitter-Dataset", "clustered",
+                      token=os.getenv("HF_TOKEN"))
+    ds = ds.map(get_substructs, num_proc=args.num_proc, remove_columns=["text", "labels"])
+    train_df = ds["train"].to_pandas()
+    val_df = ds["validation"].to_pandas()
+    test_df = ds["test"].to_pandas()
+    held_out_df = ds["held_out"].to_pandas()
 
-    # Load PROTAC-DB v3.0 and PROTAC-Pedia datasets
-    protacdb_df = pd.read_csv(args.protac_db_path, low_memory=False).dropna(subset=['Smiles'])
-    protacpedia_df = pd.read_csv(args.protac_pedia_path, low_memory=False).dropna(subset=['PROTAC SMILES'])
+    protacdb_df = pd.read_csv(args.protac_db_path, low_memory=False).dropna(subset=["Smiles"])
+    protacpedia_df = pd.read_csv(args.protac_pedia_path, low_memory=False).dropna(subset=["PROTAC SMILES"])
+    protacdb_df = protacdb_df.rename(columns={"Smiles": "PROTAC SMILES"}).drop_duplicates(subset=["PROTAC SMILES"])
+    protacpedia_df = protacpedia_df.drop_duplicates(subset=["PROTAC SMILES"])
 
-    # Rename the 'Smiles' column in protacdb_df to 'PROTAC SMILES'
-    protacdb_df = protacdb_df.rename(columns={'Smiles': 'PROTAC SMILES'})
+    tqdm.pandas(desc="Canonizing PROTAC-DB")
+    protacdb_df["PROTAC SMILES"] = protacdb_df["PROTAC SMILES"].progress_apply(canonize)
+    tqdm.pandas(desc="Canonizing PROTAC-Pedia")
+    protacpedia_df["PROTAC SMILES"] = protacpedia_df["PROTAC SMILES"].progress_apply(canonize)
 
-    # Drop duplicate rows in protacdb_df and protacpedia_df based on 'PROTAC SMILES'
-    protacdb_df = protacdb_df.drop_duplicates(subset=['PROTAC SMILES'])
-    protacpedia_df = protacpedia_df.drop_duplicates(subset=['PROTAC SMILES'])
-
-    # Canonize the SMILES in the protacdb and protacpedia dataframes
-    tqdm.pandas(desc="Canonizing PROTAC SMILES")
-    protacdb_df['PROTAC SMILES'] = protacdb_df['PROTAC SMILES'].progress_apply(lambda x: canonize(x))
-    protacpedia_df['PROTAC SMILES'] = protacpedia_df['PROTAC SMILES'].progress_apply(lambda x: canonize(x))
-
-    # Map the "PROTAC SMILES" of protacdb and protacpedia to the columns of held_out_df: 'POI Ligand SMILES with direction', 'Linker SMILES with direction', 'E3 Binder SMILES with direction'
     def map_protac_smiles(row):
-        protac_smiles = row['PROTAC SMILES']
-        if protac_smiles in held_out_df['PROTAC SMILES'].values:
-            return held_out_df[held_out_df['PROTAC SMILES'] == protac_smiles].iloc[0].to_dict()
-        
-        # If not found, return the original row
-        return {
-            'PROTAC SMILES': protac_smiles,
-            'POI Ligand SMILES with direction': None,
-            'Linker SMILES with direction': None,
-            'E3 Binder SMILES with direction': None,
-        }
+        smi = row["PROTAC SMILES"]
+        match = held_out_df[held_out_df["PROTAC SMILES"] == smi]
+        if len(match):
+            return match.iloc[0].to_dict()
+        return {"PROTAC SMILES": smi, "POI Ligand SMILES with direction": None,
+                "Linker SMILES with direction": None, "E3 Binder SMILES with direction": None}
 
-    tqdm.pandas(desc="Mapping PROTAC SMILES to substructures")
-    protacdb_df = protacdb_df.progress_apply(map_protac_smiles, axis=1, result_type='expand')
-    protacpedia_df = protacpedia_df.progress_apply(map_protac_smiles, axis=1, result_type='expand')
+    tqdm.pandas(desc="Mapping PROTAC-DB")
+    protacdb_df = protacdb_df.progress_apply(map_protac_smiles, axis=1, result_type="expand")
+    tqdm.pandas(desc="Mapping PROTAC-Pedia")
+    protacpedia_df = protacpedia_df.progress_apply(map_protac_smiles, axis=1, result_type="expand")
 
-    # Drop rows with NaN values in the SMILES columns
-    protacdb_df = protacdb_df.dropna(subset=['POI Ligand SMILES with direction', 'Linker SMILES with direction', 'E3 Binder SMILES with direction'])
-    protacpedia_df = protacpedia_df.dropna(subset=['POI Ligand SMILES with direction', 'Linker SMILES with direction', 'E3 Binder SMILES with direction'])
+    cols = ["POI Ligand SMILES with direction", "Linker SMILES with direction", "E3 Binder SMILES with direction"]
+    protacdb_df = protacdb_df.dropna(subset=cols)
+    protacpedia_df = protacpedia_df.dropna(subset=cols)
 
     if args.internal_data_path is not None:
         internal_df = pd.read_csv(args.internal_data_path, low_memory=False)
-        if 'labels' in internal_df.columns and 'text' in internal_df.columns:
-            # If the internal dataset has 'text' and 'labels', we need to extract the substructures
-            tqdm.pandas(desc="Extracting substructures from internal dataset")
-            internal_df = internal_df.progress_apply(get_substructs, axis=1, result_type='expand')
+        if "labels" in internal_df.columns and "text" in internal_df.columns:
+            tqdm.pandas(desc="Extracting internal substructures")
+            internal_df = internal_df.progress_apply(get_substructs, axis=1, result_type="expand")
 
-    # Get PROTAC-DB v3.0 and PROTAC-Pedia SMILES data
-    ligands = {
-        'train': defaultdict(list),
-        'val': defaultdict(list),
-        'test': defaultdict(list),
-        'held_out': defaultdict(list),
-        'protacdb': defaultdict(list),
-        'protacpedia': defaultdict(list),
-    }
+    ligands: dict = {s: defaultdict(list) for s in ["train", "val", "test", "held_out", "protacdb", "protacpedia"]}
     if args.internal_data_path is not None:
-        ligands['internal'] = defaultdict(list)
-    for ligand_name in ['PROTAC SMILES', 'E3 Binder SMILES with direction', 'POI Ligand SMILES with direction', 'Linker SMILES with direction']:
-        for ligand in train_df[ligand_name].unique():
-            ligands['train'][ligand_name].append(ligand)
+        ligands["internal"] = defaultdict(list)
 
-        for ligand in val_df[ligand_name].unique():
-            ligands['val'][ligand_name].append(ligand)
+    split_dfs = {"train": train_df, "val": val_df, "test": test_df, "held_out": held_out_df,
+                 "protacdb": protacdb_df, "protacpedia": protacpedia_df}
+    if args.internal_data_path is not None:
+        split_dfs["internal"] = internal_df
 
-        for ligand in test_df[ligand_name].unique():
-            ligands['test'][ligand_name].append(ligand)
-        
-        for ligand in held_out_df[ligand_name].unique():
-            ligands['held_out'][ligand_name].append(ligand)
-            
-        for ligand in protacdb_df[ligand_name].unique():
-            ligands['protacdb'][ligand_name].append(ligand)
-        
-        for ligand in protacpedia_df[ligand_name].unique():
-            ligands['protacpedia'][ligand_name].append(ligand)
-        
-        if args.internal_data_path is not None:
-            for ligand in internal_df[ligand_name].unique():
-                ligands['internal'][ligand_name].append(ligand)
+    column_names = ["PROTAC SMILES", "E3 Binder SMILES with direction", "POI Ligand SMILES with direction", "Linker SMILES with direction"]
+    for col in column_names:
+        for split, df in split_dfs.items():
+            for smi in df[col].unique():
+                ligands[split][col].append(smi)
 
-    morgan_fp_generator = Chem.rdFingerprintGenerator.GetMorganGenerator(
-        radius=2, # 16
-        fpSize=512, # 1024
-        useBondTypes=True,
-        includeChirality=True,
-    )
+    fp_gen = Chem.rdFingerprintGenerator.GetMorganGenerator(radius=2, fpSize=512, useBondTypes=True, includeChirality=True)
 
-    def bitvect_to_numpy(bitvect):
-        return np.frombuffer(bitvect.ToBitString().encode(), 'u1') - ord('0')
+    def bitvect_to_numpy(bv):
+        return np.frombuffer(bv.ToBitString().encode(), "u1") - ord("0")
 
-    ligands_fp = {}
+    ligands_fp: dict = {}
     for split, ligand_dict in ligands.items():
         ligands_fp[split] = defaultdict(list)
-        for ligand_name, ligand_list in ligand_dict.items():
-            filename = os.path.join(args.output_dir, f'{split}_{ligand_name.split(" ")[0].lower()}_fp.npy')
-            # Load the FP if it exists
-            if os.path.exists(filename):
-                print(f"Loading {split} {ligand_name} FP from file: {filename}")
-                ligands_fp[split][ligand_name] = np.load(filename)
+        for col, ligand_list in ligand_dict.items():
+            fname = out_dir / f"{split}_{col.split(' ')[0].lower()}_fp.npy"
+            if fname.exists():
+                print(f"Loading cached FP: {fname}")
+                ligands_fp[split][col] = np.load(fname)
                 continue
-
-            print(f"Generating {split} {ligand_name} FPs...")
-            fp_list = morgan_fp_generator.GetFingerprints([Chem.MolFromSmiles(smiles) for smiles in ligand_list], numThreads=args.num_proc_fp_gen)
-            fp_list = [bitvect_to_numpy(fp) for fp in fp_list]
-            ligands_fp[split][ligand_name] = fp_list
-
-            print(f"Saving {split} {ligand_name} FP to file: {filename}")
-            np.save(filename, np.array(fp_list))
+            print(f"Generating {split} {col} FPs...")
+            fps = fp_gen.GetFingerprints([Chem.MolFromSmiles(s) for s in ligand_list], numThreads=args.num_proc_fp_gen)
+            arr = [bitvect_to_numpy(fp) for fp in fps]
+            ligands_fp[split][col] = arr
+            np.save(fname, np.array(arr))
         print()
 
-    column_names = [
-        'PROTAC SMILES',
-        'E3 Binder SMILES with direction',
-        'POI Ligand SMILES with direction',
-        'Linker SMILES with direction',
-    ]
-    for column_name in column_names:
-        ligand_name = column_name.split(" ")[0].lower()
-        ligand_name_ext = ' '.join(column_name.split(" ")[:(1 if 'linker' in ligand_name else 2)])
-        
-        # Stack all the embeddings together for visualization
-        if column_name == 'PROTAC SMILES':
-            fp_list = [
-                ligands_fp['train'][column_name],
-                ligands_fp['val'][column_name],
-                ligands_fp['test'][column_name],
-                ligands_fp['protacdb'][column_name],
-                ligands_fp['protacpedia'][column_name],
-            ]
-        else:
-            fp_list = [
-                ligands_fp['protacdb'][column_name],
-                ligands_fp['protacpedia'][column_name],
-            ]
-        if args.internal_data_path is not None:
-            if args.test_internal_data:
-                # Add a small noise to the internal data for testing
-                fps = np.array(ligands_fp['internal'][column_name])
-                internal_fp = fps + np.random.normal(0, 0.5, size=fps.shape)
-                fp_list.append(internal_fp.tolist())
-            else:    
-                fp_list.append(ligands_fp['internal'][column_name])
-        all_embeddings = np.vstack(fp_list)
+    colors = {
+        "Train (Synthetic)": "#FFD700", "Validation (Synthetic)": "#EE82EE",
+        "Test (Synthetic)": "#94ED67", "PROTAC-DB v3.0": "#83B8FE",
+        "PROTAC-Pedia": "#FF7F50", "Internal Data": "#8A2BE2",
+    }
 
-        # Save the PCA embeddings for visualization
-        filename = os.path.join(args.output_dir, f'all_{ligand_name}_embeddings_pca.npy')
-        if os.path.exists(filename):
-            print(f"Loading all {ligand_name.title()} embeddings PCA from file: {filename}")
-            all_embeddings_pca = np.load(filename)
+    for col in column_names:
+        ligand_name = col.split(" ")[0].lower()
+        ligand_name_ext = " ".join(col.split(" ")[:1 if "linker" in ligand_name else 2])
+
+        if col == "PROTAC SMILES":
+            fp_list = [ligands_fp[s][col] for s in ("train", "val", "test", "protacdb", "protacpedia")]
         else:
-            # Run PCA on all embeddings for visualization
+            fp_list = [ligands_fp["protacdb"][col], ligands_fp["protacpedia"][col]]
+        if args.internal_data_path is not None:
+            fps = np.array(ligands_fp["internal"][col])
+            if args.test_internal_data:
+                fps = fps + np.random.normal(0, 0.5, fps.shape)
+            fp_list.append(fps.tolist())
+
+        all_embeddings = np.vstack(fp_list)
+        pca_file = out_dir / f"all_{ligand_name}_embeddings_pca.npy"
+        if pca_file.exists():
+            print(f"Loading cached PCA: {pca_file}")
+            all_embeddings_pca = np.load(pca_file)
+        else:
             pca = PCA(n_components=2, random_state=42)
             all_embeddings_pca = pca.fit_transform(all_embeddings)
-            print(f"Saving all {ligand_name.title()} embeddings PCA to file: {filename}")
-            np.save(filename, all_embeddings_pca)
+            np.save(pca_file, all_embeddings_pca)
 
-        # Create a DataFrame for visualization
-        df_embeddings = pd.DataFrame(all_embeddings_pca, columns=['x', 'y'])
-        split_labels = []
-        if column_name == 'PROTAC SMILES':
-            split_labels = ['Train (Synthetic)'] * len(ligands_fp['train'][column_name]) + \
-                           ['Validation (Synthetic)'] * len(ligands_fp['val'][column_name]) + \
-                           ['Test (Synthetic)'] * len(ligands_fp['test'][column_name]) + \
-                           ['PROTAC-DB v3.0'] * len(ligands_fp['protacdb'][column_name]) + \
-                           ['PROTAC-Pedia'] * len(ligands_fp['protacpedia'][column_name])
+        df_embeddings = pd.DataFrame(all_embeddings_pca, columns=["x", "y"])
+        split_labels: list = []
+        if col == "PROTAC SMILES":
+            for split, label in [("train", "Train (Synthetic)"), ("val", "Validation (Synthetic)"),
+                                  ("test", "Test (Synthetic)"), ("protacdb", "PROTAC-DB v3.0"), ("protacpedia", "PROTAC-Pedia")]:
+                split_labels += [label] * len(ligands_fp[split][col])
             if args.internal_data_path is not None:
-                split_labels += ['Internal Data'] * len(ligands_fp['internal'][column_name])
+                split_labels += ["Internal Data"] * len(ligands_fp["internal"][col])
         else:
-            split_labels = [f'{ligand_name_ext}s - PROTAC-DB v3.0'] * len(ligands_fp['protacdb'][column_name]) + \
-                           [f'{ligand_name_ext}s - PROTAC-Pedia'] * len(ligands_fp['protacpedia'][column_name])
+            split_labels = [f"{ligand_name_ext}s - PROTAC-DB v3.0"] * len(ligands_fp["protacdb"][col]) + \
+                           [f"{ligand_name_ext}s - PROTAC-Pedia"] * len(ligands_fp["protacpedia"][col])
             if args.internal_data_path is not None:
-                split_labels += [f'{ligand_name_ext}s - Internal'] * len(ligands_fp['internal'][column_name])
-        df_embeddings['split'] = split_labels
+                split_labels += [f"{ligand_name_ext}s - Internal"] * len(ligands_fp["internal"][col])
+        df_embeddings["split"] = split_labels
 
-        # Plot the PCA embeddings using seaborn
-        palette = ['#83B8FE', '#FFA54C', '#94ED67', '#FF7FFF']
-        colors = {
-            'Train (Synthetic)': '#FFD700',       # Gold (yellowish)
-            'Validation (Synthetic)': '#EE82EE',      # Violet
-            'Test (Synthetic)': '#94ED67',    # Green (from palette)
-            'PROTAC-DB v3.0': '#83B8FE',              # Blue (from palette)
-            'PROTAC-Pedia': '#FF7F50',       # Coral (closer to orange)
-            'Internal Data': '#8A2BE2', # Blue Violet
-            'Orange': '#FFA54C',
-            'Gray': '#D3D3D3',
-            'Medium Slate Blue (indigo)': '#7B68EE',
-            'Orchid (violet)': '#DA70D6',
-            'Dark Turquoise (blueish)': '#00CED1',
-            'Pale Green': '#98FB98',
-            'Hot Pink (closer to violet)': '#FF69B4',
-        }
-        if column_name == 'PROTAC SMILES':
-            palette = list(colors.values())[:df_embeddings['split'].nunique()]
+        if col == "PROTAC SMILES":
+            palette = list(colors.values())[:df_embeddings["split"].nunique()]
             plt.figure(figsize=(8, 8))
-            sns.scatterplot(data=df_embeddings, x='x', y='y', hue='split', alpha=0.6, palette=palette, s=12, edgecolor='black', linewidth=0.1, rasterized=True)
+            sns.scatterplot(data=df_embeddings, x="x", y="y", hue="split", alpha=0.6, palette=palette, s=12, edgecolor="black", linewidth=0.1, rasterized=True)
+            plt.legend(title="", loc="upper left", fontsize=12, markerscale=2.2)
         else:
-            palette = ['#83B8FE', '#FF7FFF']
-            if args.internal_data_path is not None:
-                palette.append('#94ED67')
+            palette = ["#83B8FE", "#FF7FFF"] + (["#94ED67"] if args.internal_data_path else [])
             plt.figure(figsize=(6, 6))
-            sns.scatterplot(data=df_embeddings, x='x', y='y', hue='split', alpha=0.6, palette=palette, edgecolor='black')
-        # Add legend and labels
-        plt.xlabel('PCA Component 1', fontdict={'fontsize': 12})
-        plt.ylabel('PCA Component 2', fontdict={'fontsize': 12})
-        print('-' * 80)
-        print(f"Plotting PCA for {column_name} with {len(df_embeddings)} points")
-        print('-' * 80)
-        plt.title(f'') # PCA of PROTAC SMILES Fingerprints')
-        if column_name == 'PROTAC SMILES':
-            plt.legend(title='', loc='upper left', fontsize=12, markerscale=2.2)
-        else:
-            plt.legend(title='', loc='lower left', fontsize=12, markerscale=2.2)
+            sns.scatterplot(data=df_embeddings, x="x", y="y", hue="split", alpha=0.6, palette=palette, edgecolor="black")
+            plt.legend(title="", loc="lower left", fontsize=12, markerscale=2.2)
+
+        plt.xlabel("PCA Component 1", fontdict={"fontsize": 12})
+        plt.ylabel("PCA Component 2", fontdict={"fontsize": 12})
+        plt.title("")
         plt.grid(alpha=0.5)
         plt.tight_layout()
-        # Save the plot
-        plot_filename = os.path.join(args.output_dir, f'pca_{ligand_name}.pdf')
-        plt.savefig(plot_filename, bbox_inches='tight')
+        plot_path = out_dir / f"pca_{ligand_name}.pdf"
+        plt.savefig(plot_path, bbox_inches="tight")
+        plt.clf()
+        plt.close()
+        print(f"Saved: {plot_path}")
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(Args))

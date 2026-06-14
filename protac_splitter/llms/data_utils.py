@@ -1,6 +1,7 @@
 import os
 import random
 import logging
+from pathlib import Path
 from typing import Optional, Union
 
 import torch
@@ -154,7 +155,7 @@ def load_tokenized_dataset(
     """
     if isinstance(tokenizer, str):
         tokenizer = AutoTokenizer.from_pretrained(tokenizer)
-    if os.path.exists(dataset_dir):
+    if Path(dataset_dir).exists():
         # NOTE: We need a different argument to load a dataset from disk:
         dataset = load_dataset(
             dataset_dir,

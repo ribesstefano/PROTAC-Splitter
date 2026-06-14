@@ -1,12 +1,13 @@
-import os
-import requests
-from typing import Union, Optional, Dict, List
-from pathlib import Path
+import hashlib
 import logging
+import requests
+from pathlib import Path
+from typing import Union, Optional, Dict, List
 
 from datasets import Dataset
 import pandas as pd
 
+from protac_splitter.config import get_cache_dir, get_hf_token
 from protac_splitter.chemoinformatics import canonize
 from protac_splitter.fixing_functions import fix_prediction
 from protac_splitter.llms.model_utils import get_pipeline, run_pipeline
@@ -14,53 +15,61 @@ from protac_splitter.graphs.e3_clustering import get_representative_e3s_fp
 from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
 from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
 
+_XGBOOST_MODEL_FILENAME = "PROTAC-Splitter-XGBoost.joblib"
+_XGBOOST_DOWNLOAD_URL = (
+    "https://zenodo.org/records/15797310/files/"
+    "PROTAC-Splitter-XGBoost.joblib?download=1"
+)
+_XGBOOST_SHA256 = "513621f4dc2ff7ec819a222bc7311afb8b6e6e89d6d694dd2906e695a50086dd"
+
 
 def load_graph_edge_classifier_from_cache(
-    cache_dir: Union[str, Path] = "~/.cache/protac_splitter",
-    model_filename: str = "PROTAC-Splitter-XGBoost.joblib",
-    download_url: str = "https://docs.google.com/uc?export=download&id=1bb9i5_L_-re3QYPc7tSiCtVNEEbNIzAC",
+    cache_dir: Union[str, Path, None] = None,
+    model_filename: str = _XGBOOST_MODEL_FILENAME,
+    download_url: str = _XGBOOST_DOWNLOAD_URL,
 ) -> GraphEdgeClassifier:
-    """
-    Loads the GraphEdgeClassifier model from a local cache directory.
-    If the model file is not found, downloads it from the specified URL.
+    """Load the XGBoost GraphEdgeClassifier, downloading from Zenodo on first use.
 
     Args:
-        cache_dir (str or Path): Directory to cache the model file.
-        model_filename (str): Name of the model file.
-        download_url (str): URL to download the model if not present.
+        cache_dir: Directory to cache the model. Defaults to ``get_cache_dir()``
+            (controlled by ``PROTAC_SPLITTER_CACHE_DIR`` env var / .env file).
+        model_filename: Filename to use inside ``cache_dir``.
+        download_url: URL to download the model from if not already cached.
 
     Returns:
         GraphEdgeClassifier: Loaded classifier.
     """
-    cache_dir = Path(os.path.expanduser(cache_dir))
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    model_path = cache_dir / model_filename
+    cache_path = Path(cache_dir).expanduser() if cache_dir is not None else get_cache_dir()
+    cache_path.mkdir(parents=True, exist_ok=True)
+    model_path = cache_path / model_filename
 
     if not model_path.exists():
+        logging.info(f"Downloading XGBoost model → {model_path} ...")
         response = requests.get(download_url, stream=True)
         response.raise_for_status()
         expected_size = int(response.headers.get("Content-Length", -1))
 
-        with open(model_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=1024*1024):
+        with model_path.open("wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if chunk:
                     f.write(chunk)
 
         if expected_size != -1:
             actual = model_path.stat().st_size
             if actual != expected_size:
-                raise RuntimeError(f"Download incomplete: got {actual}, expected {expected_size}")
+                model_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"Download incomplete: got {actual} bytes, expected {expected_size}."
+                )
 
-        # Optional checksum:
-        # NOTE: Uncomment the following for debugging
-        import hashlib
         h = hashlib.sha256(model_path.read_bytes()).hexdigest()
-        h_orig = "513621f4dc2ff7ec819a222bc7311afb8b6e6e89d6d694dd2906e695a50086dd"
-        if h != h_orig:
+        if h != _XGBOOST_SHA256:
+            model_path.unlink(missing_ok=True)
             raise RuntimeError(
-                f"Downloaded model checksum mismatch: got {h}, expected {h_orig}. "
-                "Please delete the model file and try again."
+                f"Downloaded model checksum mismatch: got {h}, expected {_XGBOOST_SHA256}. "
+                "The file has been removed — please try again."
             )
+        logging.info("XGBoost model downloaded and verified.")
 
     return GraphEdgeClassifier.load(model_path)
 
@@ -76,6 +85,8 @@ def split_protac(
         device: Optional[Union[int, str]] = None,
         num_proc: int = 1,
         verbose: int = 0,
+        betweenness_threshold: float = 0.4,
+        use_capacity_weight: bool = False,
 ) -> Union[Dict[str, str], List[Dict[str, str]]]:
     """ Split a PROTAC SMILES into the two ligands and the linker.
 
@@ -96,6 +107,8 @@ def split_protac(
         device (int or str, optional): Device to run the Transformer model on. Defaults to None will attempt to run on GPU if available, otherwise CPU.
         num_proc (int): Number of processes to use for parallel processing. Useful for large datasets of PROTACs to split.
         verbose (int): Verbosity level.
+        betweenness_threshold (float): Betweenness-centrality threshold used by the heuristic algorithm to identify split points. Higher values are more conservative (fewer cuts). Default 0.4.
+        use_capacity_weight (bool): Whether to weight edges by bond capacity when computing betweenness centrality (heuristic algorithm only). Default False.
     
     Returns:
         Union[Dict[str, str], List[Dict[str, str]]]: Depending on the input type, returns:
@@ -134,7 +147,7 @@ def split_protac(
     if use_transformer:
         pipe = get_pipeline(
             model_name="ailab-bio/PROTAC-Splitter",
-            token=os.environ.get("HF_TOKEN", None),
+            token=get_hf_token(),
             is_causal_language_model=False,
             num_return_sequences=beam_size,
             device=device,
@@ -171,6 +184,8 @@ def split_protac(
                         use_classifier=True,
                         classifier=xgboost_model,
                         representative_e3s_fp=representative_e3s_fp,
+                        betweenness_threshold=betweenness_threshold,
+                        use_capacity_weight=use_capacity_weight,
                     )
                     return {
                         protac_smiles_col: protac,
@@ -216,6 +231,8 @@ def split_protac(
                 use_classifier=True,
                 classifier=xgboost_model,
                 representative_e3s_fp=representative_e3s_fp,
+                betweenness_threshold=betweenness_threshold,
+                use_capacity_weight=use_capacity_weight,
             )
             if all(v is None for v in pred.values()):
                 split = None
@@ -240,6 +257,8 @@ def split_protac(
             pred = split_protac_graph_based(
                 protac_smiles=protac,
                 use_classifier=False,
+                betweenness_threshold=betweenness_threshold,
+                use_capacity_weight=use_capacity_weight,
             )
             if all(v is None for v in pred.values()):
                 split = None

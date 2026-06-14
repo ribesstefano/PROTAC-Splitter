@@ -1,6 +1,7 @@
 """ Curation utilities for PROTAC Splitter. """
 import os
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional, Union, Callable
 from joblib import Parallel, delayed
 
@@ -782,11 +783,12 @@ def iterative_protac_splitting(
         print(f'Map with substr and linker matching: {split_with_substr_and_linker_matching}')
         print('-' * 50)
 
-        step_filename = os.path.join(data_dir, f'mapped_protacs_{step=}.csv')
-        final_filename = os.path.join(data_dir, 'mapped_protacs.csv')
-        non_mapped_filename = os.path.join(data_dir, 'non_mapped_protacs.csv')
+        data_path = Path(data_dir)
+        step_filename = data_path / f'mapped_protacs_{step=}.csv'
+        final_filename = data_path / 'mapped_protacs.csv'
+        non_mapped_filename = data_path / 'non_mapped_protacs.csv'
 
-        if os.path.exists(step_filename) and not start_from_beginning:
+        if step_filename.exists() and not start_from_beginning:
             # Check if all lines of the file are empty
             with open(step_filename, 'r') as f:
                 lines = f.readlines()
@@ -887,7 +889,7 @@ def iterative_protac_splitting(
 
         # Save all dictionaries to file
         for key, dictionary in dictionaries.items():
-            filename = os.path.join(data_dir, f'dictionary_{key.lower().replace(" ", "_")}.csv')
+            filename = Path(data_dir) / f'dictionary_{key.lower().replace(" ", "_")}.csv'
             dictionary[['ID', 'SMILES']].to_csv(filename, index=False)
             print(f'Dictionary saved to: {filename}')
 

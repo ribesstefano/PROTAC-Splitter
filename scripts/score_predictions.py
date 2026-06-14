@@ -1,140 +1,118 @@
-import os
-from pathlib import Path
+"""Score PROTAC-Splitter predictions stored as CSV files in a logs directory.
+
+Reads all ``*preds.csv`` files in the log directory, scores each prediction
+column, and writes matching ``*scores.csv`` files.
+
+Usage:
+    python scripts/score_predictions.py --help
+    python scripts/score_predictions.py --log-dir logs
+"""
+from __future__ import annotations
+
+import dataclasses
 import logging
-import argparse
+from pathlib import Path
 
 import pandas as pd
-from tqdm import tqdm
+import tyro
 from datasets import Dataset
 
+from protac_splitter.chemoinformatics import canonize
 from protac_splitter.evaluation import score_prediction
 from protac_splitter.protac_splitter import fix_prediction
-from protac_splitter.chemoinformatics import canonize
 
-def main(
-    num_proc: int = 16,
-    skip_if_log_exists: bool = False,
-    log_dir: str = "logs",
-):
-    # Set logging level to error
-    logging.basicConfig(level=logging.ERROR) # , force=True)
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.ERROR)
 
-    # Get all files with "*preds.csv" in the logs directory
-    logs_dir = Path(log_dir)
+@dataclasses.dataclass
+class Args:
+    """Score all ``*preds.csv`` files found in a logs directory."""
+
+    log_dir: str = "logs"
+    """Directory containing ``*preds.csv`` prediction files."""
+
+    num_proc: int = 16
+    skip_if_log_exists: bool = False
+    """Skip scoring when the corresponding ``*scores.csv`` already exists."""
+
+
+def main(args: Args) -> None:
+    logging.basicConfig(level=logging.ERROR)
+
+    logs_dir = Path(args.log_dir)
     if not logs_dir.exists():
-        raise FileNotFoundError("logs directory not found")
-    
-    # Get all predictions CSV files
+        raise FileNotFoundError(f"Log directory not found: {logs_dir}")
+
     predictions_files = list(logs_dir.glob("*preds.csv"))
     if not predictions_files:
-        raise FileNotFoundError("No predictions CSV files found in logs directory")
-    
-    print(f"Found {len(predictions_files)} predictions CSV files in logs directory:")
+        raise FileNotFoundError(f"No predictions CSV files found in {logs_dir}")
+
+    print(f"Found {len(predictions_files)} predictions CSV files:")
     for f in predictions_files:
-        print(f" - {f}")
+        print(f"  - {f}")
     print()
 
     for predictions_path in predictions_files:
-        print('-' * 80)
-        print(f"Model name: {predictions_path.stem}")
-        print('-' * 80)
-        print(f"Scoring predictions in {predictions_path}")
+        print("-" * 80)
+        print(f"Model: {predictions_path.stem}")
+        print("-" * 80)
         scores_path = predictions_path.with_name(predictions_path.stem.replace("preds", "scores") + ".csv")
 
-        if skip_if_log_exists and os.path.exists(scores_path):
-            print(f"Scores already exist for {predictions_path.stem}, skipping...")
+        if args.skip_if_log_exists and scores_path.exists():
+            print(f"Skipping — scores already exist: {scores_path}")
             continue
-        print(f"Scores will be saved in {scores_path}")
+        print(f"Scoring {predictions_path} → {scores_path}")
 
-        # Read predictions CSV
         df = pd.read_csv(predictions_path)
+        df = df[~df["label_smiles"].str.contains(r"\.\[Cl-\]\.")]
+        df["protac_smiles"] = df["protac_smiles"].apply(canonize)
+        df["label_smiles"] = df["label_smiles"].apply(canonize)
 
-        # Remove rows in which the label_smiles has more than two dots
-        df = df[~df['label_smiles'].str.contains("\.\[Cl-\]\.")]
-
-        # Canonize the SMILES strings
-        df['protac_smiles'] = df['protac_smiles'].apply(canonize)
-        df['label_smiles'] = df['label_smiles'].apply(canonize)
-
-        # Convert the pandas DataFrame to a Hugging Face Dataset
         ds = Dataset.from_pandas(df, preserve_index=False)
-        
-        def score_multiple_predictions(row: dict):
-            # Columns: protac_smiles,label_smiles,default_pred_n0,greedy_pred_n0,contrastive_search_pred_n0,multinomial_sampling_pred_n0,beam_search_decoding_pred_n0,beam_search_decoding_pred_n1,beam_search_decoding_pred_n2,beam_search_decoding_pred_n3,beam_search_decoding_pred_n4,beam_search_multinomial_sampling_pred_n0,beam_search_multinomial_sampling_pred_n1,beam_search_multinomial_sampling_pred_n2,beam_search_multinomial_sampling_pred_n3,beam_search_multinomial_sampling_pred_n4,diverse_beam_search_decoding_pred_n0,diverse_beam_search_decoding_pred_n1,diverse_beam_search_decoding_pred_n2,diverse_beam_search_decoding_pred_n3,diverse_beam_search_decoding_pred_n4,model_name
-            scores = {}
-            scores['protac_smiles'] = protac_smiles = row['protac_smiles']
-            scores['label_smiles'] = label_smiles = row['label_smiles']
-            
+
+        def score_multiple_predictions(row: dict) -> dict:
+            scores = {"protac_smiles": row["protac_smiles"], "label_smiles": row["label_smiles"]}
+            protac_smiles = row["protac_smiles"]
+            label_smiles = row["label_smiles"]
             for pred_name, pred_smiles in row.items():
-                if pred_name in ['protac_smiles', 'label_smiles', 'model_name'] or 'pred_n' not in pred_name:
+                if pred_name in ("protac_smiles", "label_smiles", "model_name") or "pred_n" not in pred_name:
                     continue
-                
-                curr_scores = score_prediction(
+                curr = score_prediction(
                     protac_smiles=protac_smiles,
                     label_smiles=label_smiles,
                     pred_smiles=pred_smiles,
                     compute_graph_metrics=True,
-                    graph_edit_kwargs={'timeout': 0.1}
+                    graph_edit_kwargs={"timeout": 0.1},
                 )
-                metric_names = list(curr_scores.keys()) # Save them for later
-                curr_scores = {f"{pred_name}_{metric}": v for metric, v in curr_scores.items()}
-                
+                metric_names = list(curr.keys())
+                curr = {f"{pred_name}_{m}": v for m, v in curr.items()}
                 if pred_smiles == label_smiles:
-                    # If the prediction is already correct, skip fixing the
-                    # prediction and copy the scores to the "fixed" scores.
-                    curr_scores.update({f"{pred_name_metric}_fixed": v for pred_name_metric, v in curr_scores.items()})
-                    curr_scores[f"{pred_name}_is_fixed"] = True
-                    scores.update(curr_scores)
+                    curr.update({f"{k}_fixed": v for k, v in curr.items()})
+                    curr[f"{pred_name}_is_fixed"] = True
+                    scores.update(curr)
                     continue
-                
-                fixed_smiles = fix_prediction(protac_smiles, pred_smiles)
-                curr_scores.update({f"{pred_name}_{metric}_fixed": curr_scores[f"{pred_name}_{metric}"] for metric in metric_names})
-
-                if fixed_smiles is None:
-                    curr_scores[f"{pred_name}_is_fixed"] = False
-                elif fixed_smiles == pred_smiles:
-                    curr_scores[f"{pred_name}_is_fixed"] = True
+                fixed = fix_prediction(protac_smiles, pred_smiles)
+                curr.update({f"{pred_name}_{m}_fixed": curr[f"{pred_name}_{m}"] for m in metric_names})
+                if fixed is None:
+                    curr[f"{pred_name}_is_fixed"] = False
+                elif fixed == pred_smiles:
+                    curr[f"{pred_name}_is_fixed"] = True
                 else:
                     fixed_scores = score_prediction(
                         protac_smiles=protac_smiles,
                         label_smiles=label_smiles,
-                        pred_smiles=fixed_smiles,
+                        pred_smiles=fixed,
                         compute_graph_metrics=True,
-                        graph_edit_kwargs={'timeout': 0.1}
+                        graph_edit_kwargs={"timeout": 0.1},
                     )
-                    curr_scores.update({f"{pred_name}_{metric}_fixed": v for metric, v in fixed_scores.items()})
-                    curr_scores[f"{pred_name}_is_fixed"] = True
+                    curr.update({f"{pred_name}_{m}_fixed": v for m, v in fixed_scores.items()})
+                    curr[f"{pred_name}_is_fixed"] = True
+                curr["model_name"] = row["model_name"]
+                scores.update(curr)
+            return {k: v for k, v in scores.items() if "tanimoto" not in k}
 
-                curr_scores['model_name'] = row['model_name']
-                scores.update(curr_scores)
-
-            # Remove unused score metrics: tanimoto
-            scores = {k: v for k, v in scores.items() if 'tanimoto' not in k}
-            return scores
-
-        # Use the map function to apply the scoring function to each row
-        scores = ds.map(
-            score_multiple_predictions,
-            num_proc=num_proc,
-        )
-
-        # Convert the scores to a pandas DataFrame and save it to file
+        scores = ds.map(score_multiple_predictions, num_proc=args.num_proc)
         pd.DataFrame(scores).to_csv(scores_path, index=False)
-        print(f"Scores saved in {scores_path}")
-        print()
+        print(f"Scores saved: {scores_path}\n")
 
 
 if __name__ == "__main__":
-    # Setup the argparser
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--num_proc", type=int, default=16, help="Number of processes to use for scoring predictions")
-    parser.add_argument("--skip_if_log_exists", action="store_true", help="Skip scoring if the scores file already exists")
-    parser.add_argument("--log_dir", type=str, default="logs", help="Directory to retrieve predictions and save the scores")
-    args = parser.parse_args()
-    main(
-        num_proc=args.num_proc,
-        skip_if_log_exists=args.skip_if_log_exists,
-        log_dir=args.log_dir,
-    )
+    main(tyro.cli(Args))

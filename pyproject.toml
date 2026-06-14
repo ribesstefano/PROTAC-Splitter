@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "protac-splitter"
+version = "1.0.0"
+description = "A package to split PROTAC SMILES into their substructures."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Stefano Ribes", email = "ribes.stefano@gmail.com" },
+  { name = "Anders Källberg" },
+]
+dependencies = [
+  # Core: everything for split_protac() with XGBoost or heuristic (no torch required)
+  "rdkit>=2024.9.4",
+  "numpy>=1.26,<3",
+  "pandas>=2.2",
+  "networkx>=3.1",
+  "scikit-learn>=1.6,<1.7",
+  "imbalanced-learn>=0.13",
+  "xgboost>=2.0,<3.0",
+  "joblib>=1.5",
+  "requests>=2.32",
+  "datasets>=3.0",
+  "huggingface-hub>=0.27",
+  "tyro>=0.9",
+  "tqdm>=4.67",
+  "pillow>=11.3",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+transformer = [
+  # Opt-in: enables model="transformer". Separated because torch is 2+ GB.
+  "torch>=2.6",
+  "transformers>=4.44",
+  "tokenizers>=0.19",
+  "accelerate>=1.3",
+  "safetensors>=0.5",
+]
+training = [
+  "protac-splitter[transformer]",
+  "trl>=0.10",
+  "optuna>=4.2",
+  "scipy>=1.14",
+  "numba>=0.61",
+  "evaluate>=0.4",
+]
+scripts = [
+  "protac-splitter[transformer]",
+  "gradio>=5.35",
+  "matplotlib>=3.10",
+  "seaborn>=0.13",
+]
+dev = [
+  "protac-splitter[transformer,training,scripts]",
+  "pytest>=8.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/ribesstefano/PROTAC-Splitter"
+
+[project.scripts]
+protac-splitter = "protac_splitter.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["protac_splitter"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

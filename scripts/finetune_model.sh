@@ -44,19 +44,19 @@ max_steps=1000
 # NOTE: Either max_steps or num_train_epochs should be set, not both, i.e., one of them must be -1.
 num_train_epochs=-1
 
-scripts/train_model.py train_model \\
-    ${model_name} \\
-    ${ds_name} \\
-    --output_dir=${output_dir} \\
-    --ds_config=${ds_config} \\
-    --batch_size_tokenizer=1024 \\
-    --per_device_train_batch_size=${per_device_train_batch_size} \\
-    --per_device_eval_batch_size=${per_device_eval_batch_size} \\
-    --gradient_accumulation_steps=${gradient_accumulation_steps} \\
-    --max_steps=${max_steps} \\
-    --num_train_epochs=${num_train_epochs} \\
-    --resume_from_checkpoint=${checkpoint} \\
-    --num_proc_map=6 \\
-    --delete_local_repo_if_exists=${delete_repos} \\
-    --randomize_smiles=${randomize_smiles} \\
-    --randomize_smiles_prob=${randomize_smiles_prob}
+python scripts/train_transformer_model.py \
+    --model_id="${model_name}" \
+    --ds_name="${ds_name}" \
+    --output_dir="${output_dir}" \
+    --ds_config="${ds_config}" \
+    --batch_size_tokenizer=1024 \
+    --per_device_train_batch_size="${per_device_train_batch_size}" \
+    --per_device_eval_batch_size="${per_device_eval_batch_size}" \
+    --gradient_accumulation_steps="${gradient_accumulation_steps}" \
+    --max_steps="${max_steps}" \
+    --num_train_epochs="${num_train_epochs}" \
+    --resume_from_checkpoint="${checkpoint}" \
+    --num_proc_map=6 \
+    --delete_local_repo_if_exists="${delete_repos}" \
+    --randomize_smiles="${randomize_smiles}" \
+    --randomize_smiles_prob="${randomize_smiles_prob}"

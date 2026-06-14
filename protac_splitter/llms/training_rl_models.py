@@ -2,6 +2,7 @@
 Transformers and TRL. This is a work in progress code, so it's not tested nor
 used in the package.
 """
+from pathlib import Path
 from typing import Optional, Literal
 from functools import partial
 import os
@@ -122,9 +123,9 @@ def train_ppo_model(
             else:
                 print(f"Repository '{hub_model_id}' could not be deleted.")
                 return
-        if delete_local_repo_if_exists and os.path.exists(output_dir):
+        if delete_local_repo_if_exists and Path(output_dir).exists():
             subprocess.run(["rm", "-rf", output_dir])
-            if not os.path.exists(output_dir):
+            if not Path(output_dir).exists():
                 print(f"Local repository '{output_dir}' deleted.")
             else:
                 print(f"Local repository '{output_dir}' could not be deleted.")
