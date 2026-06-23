@@ -145,10 +145,10 @@ protac-splitter --smiles "..." --model heuristic --use-capacity-weight
 protac-splitter --smiles "..." --model transformer
 
 # Transformer with XGBoost fallback
-protac-splitter --smiles "..." --model transformer->xgboost
+protac-splitter --smiles "..." --model "transformer->xgboost"
 
 # XGBoost with heuristic fallback
-protac-splitter --smiles "..." --model xgboost->heuristic
+protac-splitter --smiles "..." --model "xgboost->heuristic"
 
 # Batch processing from CSV
 protac-splitter --input-csv protacs.csv --smiles-col "SMILES" \
