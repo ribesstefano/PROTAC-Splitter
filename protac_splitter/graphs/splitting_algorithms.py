@@ -10,7 +10,7 @@ from rdkit.Chem import rdFingerprintGenerator
 
 from .edge_classifier import GraphEdgeClassifier
 from .e3_clustering import get_representative_e3s_fp
-from .utils import average_tanimoto_distance
+from .utils import max_tanimoto_similarity
 from protac_splitter.data.curation.bond_adjustments import (
     adjust_amide_bonds_in_substructs,
     adjust_ester_bonds_in_substructs
@@ -56,6 +56,7 @@ def split_protac_with_betweenness_centrality(
     use_capacity_weight: bool = False,
     betweenness_threshold: float = 0.4,
     betweenness_approx_frac: float = None,
+    verbose: int = 0,
 ) -> Dict[str, str]:
     """
     Split the PROTAC molecule into two parts using the NetworkX library.
@@ -191,12 +192,14 @@ def split_protac_with_betweenness_centrality(
         try:
             ligands = Chem.FragmentOnBonds(protac, bonds_idx, addDummies=True, dummyLabels=[(1, 1), (2, 2)])
         except Exception as e:
-            print(f"Error fragmenting the molecule: {e}")
+            if verbose > 0:
+                print(f"Error fragmenting the molecule: {e}")
             candidate_bonds.pop(0)
 
     # If no candidate bonds were found, return None
     if ligands is None:
-        print(f"No candidate bonds found for splitting PROTAC: {protac_smiles}")
+        if verbose > 0:
+            print(f"No candidate bonds found for splitting PROTAC: {protac_smiles}")
         return {'e3': None, 'poi': None, 'linker': None, 'top_nodes': None, 'centrality': None}
 
     # Get the linker
@@ -208,9 +211,9 @@ def split_protac_with_betweenness_centrality(
         else:
             substructures.append(ligand_smiles)
 
-    sub1_dist = average_tanimoto_distance(substructures[0], representative_e3s_fp, morgan_fp_generator)
-    sub2_dist = average_tanimoto_distance(substructures[1], representative_e3s_fp, morgan_fp_generator)
-    if sub1_dist < sub2_dist:
+    sub1_sim = max_tanimoto_similarity(substructures[0], representative_e3s_fp, morgan_fp_generator)
+    sub2_sim = max_tanimoto_similarity(substructures[1], representative_e3s_fp, morgan_fp_generator)
+    if sub1_sim > sub2_sim:
         e3_smiles = substructures[0]
         wh_smiles = substructures[1]
     else:
@@ -278,7 +281,7 @@ def split_protac_with_edge_classifier(
 
     ligands = Chem.FragmentOnBonds(protac, bonds_idx, addDummies=True, dummyLabels=[(1, 1), (2, 2)])
 
-    # Get the linker
+    # Get the linker, i.e., count the dummy atoms: if two, it's the linker
     substructures = []
     for ligand in Chem.GetMolFrags(ligands, asMols=True):
         ligand_smiles = Chem.MolToSmiles(ligand, canonical=True)
@@ -296,14 +299,16 @@ def split_protac_with_edge_classifier(
     else:
         if representative_e3s_fp is None or morgan_fp_generator is None:
             raise ValueError("For pipeline trained on binary classification, representative_e3s_fp and morgan_fp_generator must be provided.")
-        sub1_dist = average_tanimoto_distance(substructures[0], representative_e3s_fp, morgan_fp_generator)
-        sub2_dist = average_tanimoto_distance(substructures[1], representative_e3s_fp, morgan_fp_generator)
-        if sub1_dist < sub2_dist:
+
+        sub1_sim = max_tanimoto_similarity(substructures[0], representative_e3s_fp, morgan_fp_generator)
+        sub2_sim = max_tanimoto_similarity(substructures[1], representative_e3s_fp, morgan_fp_generator)
+        if sub1_sim > sub2_sim:
             e3_smiles = substructures[0]
             wh_smiles = substructures[1]
         else:
             e3_smiles = substructures[1]
             wh_smiles = substructures[0]
+            
         # Get the attachment point using a regex, e.g., should return 1 if [1*] is in the SMILES
         e3_attach_point = extract_attachment_point(e3_smiles)
         wh_attach_point = extract_attachment_point(wh_smiles)
@@ -324,9 +329,9 @@ def split_protac_graph_based(
     use_capacity_weight: bool = False,
     betweenness_threshold: float = 0.4,
     betweenness_approx_frac: float = None,
+    verbose: int = 0,
 ) -> Dict[str, str]:
-    """
-    Splits a PROTAC molecule using either ML classifier or deterministic betweenness centrality.
+    """ Splits a PROTAC molecule using either ML classifier or deterministic betweenness centrality.
     Returns a dictionary with e3, poi, linker, bonds_idx.
     """
 
@@ -343,37 +348,47 @@ def split_protac_graph_based(
         representative_e3s_fp = get_representative_e3s_fp(fp_generator=morgan_fp_generator)
 
     if use_classifier:
-        ret = split_protac_with_edge_classifier(
+        split = split_protac_with_edge_classifier(
             protac_smiles=protac_smiles,
             pipeline=classifier,
             representative_e3s_fp=representative_e3s_fp,
             morgan_fp_generator=morgan_fp_generator,
         )
     else:
-        ret = split_protac_with_betweenness_centrality(
+        split = split_protac_with_betweenness_centrality(
             protac_smiles=protac_smiles,
             representative_e3s_fp=representative_e3s_fp,
             morgan_fp_generator=morgan_fp_generator,
             use_capacity_weight=use_capacity_weight,
             betweenness_threshold=betweenness_threshold,
             betweenness_approx_frac=betweenness_approx_frac,
+            verbose=verbose,
         )
 
+        # Fallback to the classifier if the graph-based method fails
+        if any(value is None for value in split.values()) and classifier is not None:
+            split = split = split_protac_with_edge_classifier(
+                protac_smiles=protac_smiles,
+                pipeline=classifier,
+                representative_e3s_fp=representative_e3s_fp,
+                morgan_fp_generator=morgan_fp_generator,
+            )
+
     substructs = {
-        "e3": ret["e3"],
-        "poi": ret["poi"],
-        "linker": ret["linker"],
+        "e3": split["e3"],
+        "poi": split["poi"],
+        "linker": split["linker"],
     }
 
     # If all of the substructures are not None, fix the amide and ester bonds
     if all(x is not None for x in substructs.values()):
         substructs = adjust_amide_bonds_in_substructs(substructs, protac_smiles)
         substructs = adjust_ester_bonds_in_substructs(substructs, protac_smiles)
-        ret["e3"] = substructs["e3"]
-        ret["poi"] = substructs["poi"]
-        ret["linker"] = substructs["linker"]
+        split["e3"] = substructs["e3"]
+        split["poi"] = substructs["poi"]
+        split["linker"] = substructs["linker"]
 
-    return ret
+    return split
 
 def split_protac_with_graphs_wrapper(
     protac_smiles: List[str],

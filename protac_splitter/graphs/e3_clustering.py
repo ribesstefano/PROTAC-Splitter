@@ -286,7 +286,7 @@ DEFAULT_REPRESENTATIVE_E3S = [
 ]
 
 
-@functools.lru_cache(maxsize=1, typed=False)
+@functools.lru_cache(maxsize=16, typed=False)
 def get_representative_e3s_fp(
     e3_list: Optional[List[str]] = None,
     fp_generator: Optional[Any] = None,
