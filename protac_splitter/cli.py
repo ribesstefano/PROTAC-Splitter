@@ -4,6 +4,7 @@ Examples:
     protac-splitter --smiles "CC(C)..."
     protac-splitter --smiles "..." --model transformer
     protac-splitter --smiles "..." --model heuristic --betweenness-threshold 0.5
+    protac-splitter --smiles "..." --model xgboost->heuristic
     protac-splitter --input-csv data.csv --smiles-col SMILES --output-csv out.csv
     protac-splitter --smiles-list "smi1" "smi2" --model heuristic --output-format csv
 """
@@ -15,14 +16,16 @@ from typing import Optional, List, Literal
 
 import tyro
 
-SplittingModel = Literal["xgboost", "transformer", "transformer+xgboost", "heuristic"]
-
-_MODEL_KWARGS = {
-    "xgboost":             {"use_transformer": False, "use_xgboost": True},
-    "transformer":         {"use_transformer": True,  "use_xgboost": False},
-    "transformer+xgboost": {"use_transformer": True,  "use_xgboost": True},
-    "heuristic":           {"use_transformer": False, "use_xgboost": False},
-}
+SplittingModel = Literal[
+    "xgboost",
+    "heuristic",
+    "transformer",
+    "transformer->xgboost",
+    "xgboost->heuristic",
+    "heuristic->xgboost",
+    "xgboost+heuristic",
+    "heuristic+xgboost",
+]
 
 
 @dataclasses.dataclass
@@ -39,8 +42,8 @@ class SplitArgs:
     input_csv: Optional[str] = None
     """Path to a CSV file containing PROTAC SMILES. Use together with --smiles-col."""
 
-    smiles_col: str = "text"
-    """Column name for SMILES in the input CSV (default: 'text')."""
+    smiles_col: str = "SMILES"
+    """Column name for SMILES in the input CSV (default: 'SMILES')."""
 
     output_csv: Optional[str] = None
     """Path to write output CSV (required when --input-csv is used)."""
@@ -51,11 +54,14 @@ class SplitArgs:
 
       xgboost             — XGBoost graph edge classifier (default; no GPU needed;
                             model is downloaded automatically on first use).
+      heuristic           — Betweenness-centrality graph algorithm (no model needed).
       transformer         — Seq2seq Transformer model hosted on HuggingFace
                             (requires the [transformer] extra; GPU recommended).
-      transformer+xgboost — Transformer model with XGBoost as fallback when
-                            Transformer predictions fail reassembly.
-      heuristic           — Betweenness-centrality graph algorithm (no model needed).
+      transformer->xgboost — Transformer first; XGBoost replaces failed predictions.
+      xgboost->heuristic  — XGBoost first; heuristic replaces failed predictions.
+      heuristic->xgboost  — Heuristic first; XGBoost replaces failed predictions.
+      xgboost+heuristic   — Run both and pick the best result (not yet implemented).
+      heuristic+xgboost   — Reserved for future use.
     """
 
     # --- Transformer-specific options (ignored for xgboost / heuristic) ---
@@ -131,7 +137,7 @@ def main() -> None:
     import pandas as pd
 
     kwargs = dict(
-        **_MODEL_KWARGS[args.model],
+        model=args.model,
         fix_predictions=args.fix_predictions,
         batch_size=args.batch_size,
         beam_size=args.beam_size,

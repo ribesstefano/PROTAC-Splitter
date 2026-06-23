@@ -404,17 +404,34 @@ def split_protac(
 
     The splitting strategy is controlled by the ``model`` argument. Supported values:
 
-    * ``"transformer"`` — seq2seq Transformer model (HuggingFace ``ailab-bio/PROTAC-Splitter``).
-    * ``"xgboost"`` — XGBoost graph edge-classifier (default).
-    * ``"heuristic"`` — betweenness-centrality heuristic; requires no downloaded model.
-    * ``"transformer->xgboost"`` — Transformer first; XGBoost replaces any failed predictions.
-    * ``"xgboost->heuristic"`` — XGBoost first; heuristic replaces any failed predictions.
-    * ``"xgboost+heuristic"`` — run both and pick the best result (placeholder — not yet implemented).
-    * ``"heuristic->xgboost"`` / ``"heuristic+xgboost"`` — reserved for future use.
+    +-------------------------------+-------------------------------------------------------+
+    | ``model`` value               | Description                                           |
+    +===============================+=======================================================+
+    | ``"xgboost"`` *(default)*     | XGBoost graph edge-classifier. No GPU required.       |
+    |                               | Model (~17 MB) downloaded automatically on first use. |
+    +-------------------------------+-------------------------------------------------------+
+    | ``"heuristic"``               | Betweenness-centrality algorithm. No download needed. |
+    +-------------------------------+-------------------------------------------------------+
+    | ``"transformer"``             | Seq2seq Transformer (``ailab-bio/PROTAC-Splitter``).  |
+    |                               | Requires the ``[transformer]`` extra; GPU recommended.|
+    +-------------------------------+-------------------------------------------------------+
+    | ``"transformer->xgboost"``    | Transformer first; XGBoost replaces failed results.   |
+    +-------------------------------+-------------------------------------------------------+
+    | ``"xgboost->heuristic"``      | XGBoost first; heuristic replaces failed results.     |
+    +-------------------------------+-------------------------------------------------------+
+    | ``"heuristic->xgboost"``      | Heuristic first; XGBoost replaces failed results.     |
+    +-------------------------------+-------------------------------------------------------+
+    | ``"xgboost+heuristic"``       | Placeholder — not yet implemented.                    |
+    +-------------------------------+-------------------------------------------------------+
+    | ``"heuristic+xgboost"``       | Reserved for future use.                              |
+    +-------------------------------+-------------------------------------------------------+
 
     Args:
         protac_smiles: SMILES to split. Accepts a single string, a list of strings,
             or a DataFrame with a ``protac_smiles_col`` column.
+        model: Splitting strategy. See the table above for valid values. Takes
+            precedence over the deprecated ``use_transformer`` / ``use_xgboost``
+            flags. Default ``None`` resolves to ``"xgboost"``.
         use_transformer: *Deprecated.* Use ``model='transformer'`` or
             ``model='transformer->xgboost'`` instead. Setting this to ``True`` maps to
             ``model='transformer->xgboost'`` when ``use_xgboost`` is also ``True``, and
@@ -441,8 +458,6 @@ def split_protac(
             betweenness centrality (heuristic only). Default ``False``.
         betweenness_approx_frac: Fraction of nodes to sample for approximate
             betweenness centrality. ``None`` uses exact computation. Default ``None``.
-        model: Splitting strategy. See above for valid values. Takes precedence over
-            the deprecated ``use_transformer`` / ``use_xgboost`` flags.
 
     Returns:
         * Single string input → ``dict`` with keys ``protac_smiles_col``,
