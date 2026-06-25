@@ -91,7 +91,7 @@ protac = (
 )
 result = split_protac(protac)
 print(result)
-# {'text': '...', 'default_pred_n0': 'e3_smiles.linker_smiles.poi_smiles', 'model_name': 'XGBoost'}
+# {'SMILES': '...', 'default_pred_n0': 'e3_smiles.linker_smiles.poi_smiles', 'model_name': 'XGBoost'}
 
 # --- List of SMILES ---
 results = split_protac([protac, protac])
@@ -105,18 +105,24 @@ result_df = split_protac(df, protac_smiles_col="PROTAC SMILES")
 print(result_df[["PROTAC SMILES", "default_pred_n0", "model_name"]].head())
 ```
 
-**Key parameters:**
+**`split_protac` arguments:**
 
-| Parameter | Default | Description |
-|---|---|---|
-| `model` (via `split_protac`) | — | See [Splitting strategies](#splitting-strategies) |
-| `use_xgboost` | `True` | Use XGBoost graph edge classifier |
-| `use_transformer` | `False` | Use seq2seq Transformer model |
-| `fix_predictions` | `True` | Apply cheminformatics post-processing |
-| `beam_size` | `5` | Beam-search width (Transformer only) |
-| `betweenness_threshold` | `0.4` | Split-point sensitivity (heuristic / XGBoost fallback) |
-| `use_capacity_weight` | `False` | Weight edges by bond order in betweenness centrality |
-| `num_proc` | `1` | Parallel worker processes |
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `protac_smiles` | `str \| list \| DataFrame` | *(required)* | SMILES to split. Single string, list of strings, or DataFrame with a `protac_smiles_col` column. |
+| `model` | `str` | `"xgboost"` | Splitting strategy. See [Splitting strategies](#splitting-strategies) for valid values. |
+| `fix_predictions` | `bool` | `True` | Apply cheminformatics post-processing to Transformer predictions before reassembly check. |
+| `protac_smiles_col` | `str` | `"SMILES"` | Column name for SMILES when input is a DataFrame; also used as key name in output dicts. |
+| `batch_size` | `int` | `1` | Inference batch size (Transformer only). |
+| `beam_size` | `int` | `5` | Beam-search width (Transformer only). Higher values may improve quality at the cost of speed. |
+| `device` | `int \| str \| None` | `None` | Torch device for the Transformer (`"cpu"`, `"cuda"`, `0`, …). Auto-detects GPU when `None`. |
+| `num_proc` | `int` | `1` | Parallel worker processes. Effective for heuristic only (XGBoost is always single-process). |
+| `verbose` | `int` | `0` | Verbosity level (0 = silent). |
+| `betweenness_threshold` | `float` | `0.4` | Betweenness-centrality cut-off for the heuristic. Higher values are more conservative. |
+| `use_capacity_weight` | `bool` | `False` | Weight graph edges by bond order when computing betweenness centrality (heuristic only). |
+| `betweenness_approx_frac` | `float \| None` | `None` | Fraction of nodes to sample for approximate betweenness centrality. `None` uses exact computation. |
+| `use_transformer` | `bool \| None` | `None` | **Deprecated.** Use `model='transformer'` instead. |
+| `use_xgboost` | `bool \| None` | `None` | **Deprecated.** Use `model='xgboost'` instead. |
 
 ### Command-line interface 🖥️
 
@@ -139,7 +145,10 @@ protac-splitter --smiles "..." --model heuristic --use-capacity-weight
 protac-splitter --smiles "..." --model transformer
 
 # Transformer with XGBoost fallback
-protac-splitter --smiles "..." --model transformer+xgboost
+protac-splitter --smiles "..." --model "transformer->xgboost"
+
+# XGBoost with heuristic fallback
+protac-splitter --smiles "..." --model "xgboost->heuristic"
 
 # Batch processing from CSV
 protac-splitter --input-csv protacs.csv --smiles-col "SMILES" \
@@ -156,10 +165,14 @@ protac-splitter --help
 
 | Value | Description |
 |---|---|
-| `xgboost` | XGBoost graph edge classifier — default, no GPU required |
-| `heuristic` | Betweenness-centrality graph algorithm — no model download |
-| `transformer` | Seq2seq Transformer (requires `[transformer]` extra) |
-| `transformer+xgboost` | Transformer with XGBoost fallback on failed reassemblies |
+| `xgboost` | XGBoost graph edge classifier — default, no GPU required. Model downloaded automatically on first use (~17 MB). |
+| `heuristic` | Betweenness-centrality graph algorithm — no model download needed. |
+| `transformer` | Seq2seq Transformer (requires `[transformer]` extra; GPU recommended). |
+| `transformer->xgboost` | Transformer first; XGBoost replaces any failed predictions. |
+| `xgboost->heuristic` | XGBoost first; heuristic replaces any failed predictions. |
+| `heuristic->xgboost` | Heuristic first; XGBoost replaces any failed predictions. |
+| `xgboost+heuristic` | Run both and pick the best result (not yet implemented). |
+| `heuristic+xgboost` | Reserved for future use. |
 
 ### Gradio app 🌐
 
@@ -172,15 +185,19 @@ gradio scripts/protac_splitter_app.py
 
 ## Splitting strategies 🧠
 
-PROTAC-Splitter supports three strategies, selectable via `--model` (CLI) or via `use_transformer` / `use_xgboost` flags (Python API):
+PROTAC-Splitter supports multiple strategies, selectable via `--model` (CLI) or via the `model` argument (Python API):
 
-1. **XGBoost** (`--model xgboost`) — graph edge classifier trained on synthetic PROTACs. Recommended for batch processing. Model downloaded automatically (~17 MB) on first use.
+1. **XGBoost** (`model="xgboost"`) — graph edge classifier trained on synthetic PROTACs. Recommended for batch processing. Model downloaded automatically (~17 MB) on first use.
 
-2. **Transformer** (`--model transformer`) — seq2seq encoder–decoder model hosted on HuggingFace (`ailab-bio/PROTAC-Splitter`). Requires the `[transformer]` extra and a GPU for reasonable throughput.
+2. **Heuristic** (`model="heuristic"`) — betweenness-centrality algorithm. No model download. Useful for quick exploration or air-gapped environments.
 
-3. **Heuristic** (`--model heuristic`) — betweenness-centrality algorithm. No model download. Useful for quick exploration or air-gapped environments.
+3. **Transformer** (`model="transformer"`) — seq2seq encoder–decoder model hosted on HuggingFace (`ailab-bio/PROTAC-Splitter`). Requires the `[transformer]` extra and a GPU for reasonable throughput.
 
-4. **Transformer + XGBoost** (`--model transformer+xgboost`) — runs the Transformer first and falls back to XGBoost for predictions that fail cheminformatics reassembly.
+4. **Transformer → XGBoost** (`model="transformer->xgboost"`) — runs the Transformer first and falls back to XGBoost for predictions that fail cheminformatics reassembly.
+
+5. **XGBoost → Heuristic** (`model="xgboost->heuristic"`) — runs XGBoost first and falls back to the heuristic for any failed predictions.
+
+6. **Heuristic → XGBoost** (`model="heuristic->xgboost"`) — runs the heuristic first (parallelisable) and applies XGBoost only to failures.
 
 ### Output format
 
