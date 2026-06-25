@@ -171,8 +171,7 @@ protac-splitter --help
 | `transformer->xgboost` | Transformer first; XGBoost replaces any failed predictions. |
 | `xgboost->heuristic` | XGBoost first; heuristic replaces any failed predictions. |
 | `heuristic->xgboost` | Heuristic first; XGBoost replaces any failed predictions. |
-| `xgboost+heuristic` | Run both and pick the best result (not yet implemented). |
-| `heuristic+xgboost` | Reserved for future use. |
+| `xgboost+heuristic` or `heuristic+xgboost` | Run both and pick the best result. |
 
 ### Gradio app 🌐
 

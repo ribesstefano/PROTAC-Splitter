@@ -5,11 +5,13 @@ import requests
 from pathlib import Path
 from typing import Union, Optional, Dict, List, Literal
 
+from rdkit import Chem
 from datasets import Dataset
 import pandas as pd
 
 from protac_splitter.config import get_cache_dir, get_hf_token
 from protac_splitter.chemoinformatics import canonize
+from protac_splitter.evaluation import split_prediction
 from protac_splitter.fixing_functions import fix_prediction
 from protac_splitter.llms.model_utils import get_pipeline, run_pipeline
 from protac_splitter.graphs.e3_clustering import get_representative_e3s_fp
@@ -89,6 +91,19 @@ def load_graph_edge_classifier_from_cache(
 # ---------------------------------------------------------------------------
 # Internal utilities
 # ---------------------------------------------------------------------------
+
+def _linker_heavy_atom_count(pred_str: Optional[str]) -> int:
+    """Return the non-dummy heavy-atom count of the linker in an 'e3.linker.poi' string, or -1."""
+    if pred_str is None:
+        return -1
+    parts = split_prediction(pred_str)
+    if parts is None or parts.get("linker") is None:
+        return -1
+    mol = Chem.MolFromSmiles(parts["linker"])
+    if mol is None:
+        return -1
+    return sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() != 0)
+
 
 def _pred_dict_to_str(pred: Optional[Dict[str, str]]) -> Optional[str]:
     """Convert a graph-split result dict to the dot-separated 'e3.linker.poi' string."""
@@ -284,18 +299,48 @@ def _run_heuristic_then_xgboost_ds(
 
 
 def _run_xgboost_and_heuristic_ds(
-    _ds: Dataset,
-    _xgboost_model: GraphEdgeClassifier,
-    _representative_e3s_fp: List,
-    _protac_smiles_col: str,
-    _betweenness_threshold: float,
-    _use_capacity_weight: bool,
-    _betweenness_approx_frac: Optional[float],
+    ds: Dataset,
+    xgboost_model: GraphEdgeClassifier,
+    representative_e3s_fp: List,
+    protac_smiles_col: str,
+    betweenness_threshold: float,
+    use_capacity_weight: bool,
+    betweenness_approx_frac: Optional[float],
+    num_proc: int = 1,
+    verbose: int = 0,
 ) -> Dataset:
-    # TODO: implement ensemble / best-pick logic — edit this function to add your selection criteria.
-    raise NotImplementedError(
-        "model='xgboost+heuristic' is not yet implemented. "
-        "Edit _run_xgboost_and_heuristic_ds() in protac_splitter.py to add the selection logic."
+    # Phase 1: heuristic on all rows in parallel.
+    heuristic_ds = _run_heuristic_ds(
+        ds, protac_smiles_col, betweenness_threshold,
+        use_capacity_weight, betweenness_approx_frac,
+        num_proc=num_proc, verbose=verbose,
+    )
+    # Phase 2: XGBoost on all rows — single-process (not thread-safe).
+    xgb_ds = _run_xgboost_ds(
+        ds, xgboost_model, representative_e3s_fp, protac_smiles_col,
+        betweenness_threshold, use_capacity_weight, betweenness_approx_frac,
+    )
+
+    # Merge both predictions into a combined dataset for parallel selection.
+    merged_df = heuristic_ds.to_pandas().rename(columns={
+        "default_pred_n0": "_heuristic_pred",
+        "model_name": "_heuristic_model",
+    })
+    merged_df["_xgb_pred"] = xgb_ds.to_pandas()["default_pred_n0"].values
+    merged_ds = Dataset.from_pandas(merged_df, preserve_index=False)
+
+    def _select(row):
+        xgb_atoms = _linker_heavy_atom_count(row["_xgb_pred"])
+        heuristic_atoms = _linker_heavy_atom_count(row["_heuristic_pred"])
+        if xgb_atoms >= heuristic_atoms:
+            return {"default_pred_n0": row["_xgb_pred"], "model_name": "XGBoost"}
+        return {"default_pred_n0": row["_heuristic_pred"], "model_name": "Heuristic"}
+
+    return merged_ds.map(
+        _select,
+        num_proc=num_proc,
+        remove_columns=["_heuristic_pred", "_heuristic_model", "_xgb_pred"],
+        desc="Selecting best prediction (longest linker)",
     )
 
 
@@ -530,10 +575,10 @@ def split_protac(
             ds, xgboost_model, representative_e3s_fp, protac_smiles_col,
             **_graph_kwargs, num_proc=num_proc, verbose=verbose,
         )
-    elif model_str == "xgboost+heuristic":
+    elif model_str == "xgboost+heuristic" or model_str == "heuristic+xgboost":
         preds_ds = _run_xgboost_and_heuristic_ds(
             ds, xgboost_model, representative_e3s_fp, protac_smiles_col,
-            **_graph_kwargs,
+            **_graph_kwargs, num_proc=num_proc, verbose=verbose,
         )
     elif model_str == "heuristic":
         preds_ds = _run_heuristic_ds(

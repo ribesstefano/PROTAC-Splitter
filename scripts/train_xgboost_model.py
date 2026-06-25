@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import dataclasses
 from pathlib import Path
-
+import pandas as pd
 import tyro
+from datasets import load_dataset
 
-from scripts.common import ensure_output_dir
-
+from protac_splitter.graphs.edge_classifier import train_edge_classifier
+from scripts.common import ensure_output_dir, get_hub_token
 
 @dataclasses.dataclass
 class Args:
@@ -35,10 +36,6 @@ class Args:
 
 
 def main(args: Args) -> None:
-    import pandas as pd
-    from datasets import load_dataset
-    from protac_splitter.graphs.edge_classifier import train_edge_classifier
-
     cache_dir = Path(args.graph_datasets_cache_dir)
     ensure_output_dir(str(cache_dir))
     ensure_output_dir(str(Path(args.output_model_path).parent))
@@ -54,7 +51,6 @@ def main(args: Args) -> None:
         test_df = pd.read_csv(test_csv)
     else:
         print("Downloading PROTAC-Splitter dataset from HuggingFace Hub...")
-        from scripts.common import get_hub_token
         token = get_hub_token(args.hub_token) if args.hub_token else None
         ds = load_dataset("ailab-bio/PROTAC-Splitter-Dataset", "clustered", token=token)
 
