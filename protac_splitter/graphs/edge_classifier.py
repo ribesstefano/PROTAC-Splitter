@@ -14,8 +14,6 @@ from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report
 from sklearn.metrics import confusion_matrix
 from xgboost import XGBClassifier
-import optuna
-from optuna.samplers import QMCSampler
 from sklearn.metrics import accuracy_score, f1_score
 
 try:
@@ -531,6 +529,14 @@ def run_optuna_search(
     study_dir: str = "./optuna_studies",
     seed: int = 42,
 ) -> Any:
+    try:
+        import optuna
+        from optuna.samplers import QMCSampler
+    except ImportError:
+        raise ImportError(
+            "Hyperparameter search requires optuna. "
+            "Install it with:\n    pip install 'protac-splitter[training]'"
+        ) from None
     Path(study_dir).mkdir(parents=True, exist_ok=True)
     study_path = f"sqlite:///{Path(study_dir) / study_name}.db"
 

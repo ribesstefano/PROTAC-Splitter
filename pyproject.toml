@@ -19,7 +19,7 @@ dependencies = [
   "numpy>=1.26,<3",
   "pandas>=2.2",
   "networkx>=2.4",
-  "scikit-learn>=1.6,<2",
+  "scikit-learn>=1.6,<1.7",
   "imbalanced-learn>=0.13",
   "xgboost>=2.0,<3.0",
   "joblib>=1.5",
@@ -30,6 +30,8 @@ dependencies = [
   "tqdm>=4.67",
   "pillow>=11.3",
   "python-dotenv>=1.0",
+  "numba>=0.65.1",
+  "scipy>=1.14",
 ]
 
 [project.optional-dependencies]
@@ -42,11 +44,11 @@ transformer = [
   "safetensors>=0.5",
 ]
 training = [
+  # Opt-in: enables model training and hyperparameter search. Optuna is not
+  # imported by the core package and is only loaded on demand by run_optuna_search().
   "protac-splitter[transformer]",
   "trl>=0.10",
   "optuna>=4.2",
-  "scipy>=1.14",
-  "numba>=0.61",
   "evaluate>=0.4",
 ]
 scripts = [
