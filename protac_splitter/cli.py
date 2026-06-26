@@ -49,7 +49,7 @@ class SplitArgs:
     """Path to write output CSV (required when --input-csv is used)."""
 
     # --- Model selection ---
-    model: SplittingModel = "xgboost"
+    model: SplittingModel = "heuristic->xgboost"
     """Splitting strategy to use:
 
       xgboost             — XGBoost graph edge classifier (default; no GPU needed;
