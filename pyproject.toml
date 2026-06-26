@@ -15,7 +15,7 @@ authors = [
 ]
 dependencies = [
   # Core: everything for split_protac() with XGBoost or heuristic (no torch required)
-  "rdkit>=2024.0.0",
+  "rdkit>=2024.9.4",
   "numpy>=1.26,<3",
   "pandas>=2.2",
   "networkx>=3.1",
