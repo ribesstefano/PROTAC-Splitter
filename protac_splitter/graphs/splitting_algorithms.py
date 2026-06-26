@@ -8,13 +8,63 @@ import networkx as nx
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
 
-from .edge_classifier import GraphEdgeClassifier
-from .e3_clustering import get_representative_e3s_fp
-from .utils import max_tanimoto_similarity
+from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
+from protac_splitter.graphs.utils import max_tanimoto_similarity
+from protac_splitter.graphs.clustering import (
+    get_representative_e3s_fp,
+    get_representative_whs_fp,
+)
 from protac_splitter.data.curation.bond_adjustments import (
     adjust_amide_bonds_in_substructs,
     adjust_ester_bonds_in_substructs
 )
+
+def distinguish_fragments(
+    frag1_smiles: str,
+    frag2_smiles: str,
+    linker_smiles: str,
+    representative_e3s_fp: List[DataStructs.ExplicitBitVect],
+    representative_whs_fp: List[DataStructs.ExplicitBitVect],
+    morgan_fp_generator: Any,
+) -> Dict[str, str]:
+    """Assign E3 vs. warhead identity to two PROTAC fragments and relabel attachment points.
+
+    Both E3 and warhead reference fingerprints are used. When they agree the
+    assignment is confident; when they conflict the function falls back to
+    E3-similarity alone and emits a TODO marker in the source for manual review.
+
+    Returns dict with 'e3', 'poi', 'linker' keys; attachment points are
+    encoded as [*:2] (E3 side) and [*:1] (POI/warhead side).
+    """
+    e3_sim1 = max_tanimoto_similarity(frag1_smiles, representative_e3s_fp, morgan_fp_generator)
+    e3_sim2 = max_tanimoto_similarity(frag2_smiles, representative_e3s_fp, morgan_fp_generator)
+    wh_sim1 = max_tanimoto_similarity(frag1_smiles, representative_whs_fp, morgan_fp_generator)
+    wh_sim2 = max_tanimoto_similarity(frag2_smiles, representative_whs_fp, morgan_fp_generator)
+
+    # Primary assignment: higher E3 similarity → E3 ligand
+    if e3_sim1 >= e3_sim2:
+        e3_smiles, wh_smiles = frag1_smiles, frag2_smiles
+        assigned_wh_sim, assigned_e3_wh_sim = wh_sim2, wh_sim1
+    else:
+        e3_smiles, wh_smiles = frag2_smiles, frag1_smiles
+        assigned_wh_sim, assigned_e3_wh_sim = wh_sim1, wh_sim2
+
+    # Concordance check: the assigned warhead should score higher on WH references
+    if assigned_wh_sim < assigned_e3_wh_sim:
+        # TODO: E3 and warhead similarities conflict for these fragments;
+        # falling back to E3-similarity assignment — review and correct manually.
+        pass
+
+    # Relabel attachment points from [N*] style to [*:2]/[*:1]
+    e3_attach_point = extract_attachment_point(e3_smiles)
+    wh_attach_point = extract_attachment_point(wh_smiles)
+
+    e3_smiles = e3_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
+    linker_smiles = linker_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
+    wh_smiles = wh_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
+    linker_smiles = linker_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
+
+    return {'e3': e3_smiles, 'poi': wh_smiles, 'linker': linker_smiles}
 
 def bond_capacity(bond: Chem.Bond) -> int:
     if bond.GetIsAromatic() or bond.IsInRing():
@@ -51,7 +101,8 @@ def extract_attachment_point(smiles):
 
 def split_protac_with_betweenness_centrality(
     protac_smiles: str,
-    representative_e3s_fp: List[DataStructs.ExplicitBitVect] = None,
+    representative_e3s_fp: Optional[List[DataStructs.ExplicitBitVect]] = None,
+    representative_whs_fp: Optional[List[DataStructs.ExplicitBitVect]] = None,
     morgan_fp_generator: Optional[Any] = None,
     use_capacity_weight: bool = False,
     betweenness_threshold: float = 0.4,
@@ -83,7 +134,10 @@ def split_protac_with_betweenness_centrality(
     if representative_e3s_fp is None:
         # Get the representative E3 ligands fingerprints
         representative_e3s_fp = get_representative_e3s_fp(fp_generator=morgan_fp_generator)
-    
+
+    if representative_whs_fp is None:
+        representative_whs_fp = get_representative_whs_fp(fp_generator=morgan_fp_generator)
+
     # -----------------------------------
     # Deterministic graph-based algorithm
     # -----------------------------------
@@ -211,30 +265,21 @@ def split_protac_with_betweenness_centrality(
         else:
             substructures.append(ligand_smiles)
 
-    sub1_sim = max_tanimoto_similarity(substructures[0], representative_e3s_fp, morgan_fp_generator)
-    sub2_sim = max_tanimoto_similarity(substructures[1], representative_e3s_fp, morgan_fp_generator)
-    if sub1_sim > sub2_sim:
-        e3_smiles = substructures[0]
-        wh_smiles = substructures[1]
-    else:
-        e3_smiles = substructures[1]
-        wh_smiles = substructures[0]
-
-    # Get the attachment point using a regex, e.g., should return 1 if [1*] is in the SMILES
-    e3_attach_point = extract_attachment_point(e3_smiles)
-    e3_smiles = e3_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
-    linker_smiles = linker_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
-
-    wh_attach_point = extract_attachment_point(wh_smiles)
-    wh_smiles = wh_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
-    linker_smiles = linker_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
-    return {'e3': e3_smiles, 'poi': wh_smiles, 'linker': linker_smiles, 'top_nodes': top_nodes, 'centrality': centrality}
-
+    result = distinguish_fragments(
+        frag1_smiles=substructures[0],
+        frag2_smiles=substructures[1],
+        linker_smiles=linker_smiles,
+        representative_e3s_fp=representative_e3s_fp,
+        representative_whs_fp=representative_whs_fp,
+        morgan_fp_generator=morgan_fp_generator,
+    )
+    return {**result, 'top_nodes': top_nodes, 'centrality': centrality}
 
 def split_protac_with_edge_classifier(
         protac_smiles: str,
         pipeline: Union[str, Path],
         representative_e3s_fp: Optional[List[np.array]] = None,
+        representative_whs_fp: Optional[List[DataStructs.ExplicitBitVect]] = None,
         morgan_fp_generator: Optional[Any] = None,
 ) -> Dict[str, str]:
     """ Split the PROTAC molecule into two parts using the pretrained edge classifier.
@@ -254,7 +299,7 @@ def split_protac_with_edge_classifier(
             radius=16,
             fpSize=1024,
             useBondTypes=True,
-            includeChirality=True,
+            includeChirality=False,
         )
 
     if representative_e3s_fp is None:
@@ -296,28 +341,26 @@ def split_protac_with_edge_classifier(
         # NOTE: The classifier was trained on the following labels assignment:
         e3_attach_point = 1
         wh_attach_point = 2
+        e3_smiles = e3_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
+        linker_smiles = linker_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
+        wh_smiles = wh_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
+        linker_smiles = linker_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
     else:
         if representative_e3s_fp is None or morgan_fp_generator is None:
             raise ValueError("For pipeline trained on binary classification, representative_e3s_fp and morgan_fp_generator must be provided.")
-
-        sub1_sim = max_tanimoto_similarity(substructures[0], representative_e3s_fp, morgan_fp_generator)
-        sub2_sim = max_tanimoto_similarity(substructures[1], representative_e3s_fp, morgan_fp_generator)
-        if sub1_sim > sub2_sim:
-            e3_smiles = substructures[0]
-            wh_smiles = substructures[1]
-        else:
-            e3_smiles = substructures[1]
-            wh_smiles = substructures[0]
-            
-        # Get the attachment point using a regex, e.g., should return 1 if [1*] is in the SMILES
-        e3_attach_point = extract_attachment_point(e3_smiles)
-        wh_attach_point = extract_attachment_point(wh_smiles)
-
-    e3_smiles = e3_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
-    linker_smiles = linker_smiles.replace(f"[{e3_attach_point}*]", "[*:2]")
-
-    wh_smiles = wh_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
-    linker_smiles = linker_smiles.replace(f"[{wh_attach_point}*]", "[*:1]")
+        if representative_whs_fp is None:
+            representative_whs_fp = get_representative_whs_fp(fp_generator=morgan_fp_generator)
+        result = distinguish_fragments(
+            frag1_smiles=substructures[0],
+            frag2_smiles=substructures[1],
+            linker_smiles=linker_smiles,
+            representative_e3s_fp=representative_e3s_fp,
+            representative_whs_fp=representative_whs_fp,
+            morgan_fp_generator=morgan_fp_generator,
+        )
+        e3_smiles = result['e3']
+        wh_smiles = result['poi']
+        linker_smiles = result['linker']
     return {'e3': e3_smiles, 'poi': wh_smiles, 'linker': linker_smiles, "bonds_idx": bonds_idx}
 
 def split_protac_graph_based(

@@ -1,18 +1,33 @@
-"""Get N most representative E3 ligases and warheads from two input CSV files.
+"""Get N most representative E3 ligases and warheads from CSV input(s).
 
-Each input CSV must have a 'SMILES' column. The script clusters molecules by
-fingerprint similarity, finds the best number of clusters via silhouette /
-Davies-Bouldin / Calinski-Harabasz metric agreement, and extracts
-cluster-centroid nearest-neighbours as representatives. A cross-dissimilarity
-filter then drops any representative that is too similar to a molecule in the
-opposite class, ensuring E3 ligases and warheads remain chemically distinct.
+Supports two input modes:
+
+  1. Two separate CSVs (one for E3 ligases, one for warheads), each with a
+     configurable SMILES column.
+  2. A single CSV with distinct columns for E3 and warhead SMILES (e.g. a
+     curated PROTAC dataset with columns "E3 Ligase Ligand SMILES" and
+     "Warhead SMILES").
+
+The script clusters molecules by fingerprint similarity, finds the best number
+of clusters via silhouette / Davies-Bouldin / Calinski-Harabasz metric
+agreement, and extracts cluster-centroid nearest-neighbours as representatives.
+A cross-dissimilarity filter then drops any representative that is too similar
+to a molecule in the opposite class, ensuring E3 ligases and warheads remain
+chemically distinct.
 
 Output: a single CSV with columns 'SMILES' and 'is_warhead' (bool).
 
-Usage:
+Usage (two separate CSVs):
     python scripts/get_representative_molecules.py \\
         --e3-csv data/e3_ligases.csv \\
         --warhead-csv data/warheads.csv \\
+        --output-csv data/representatives.csv
+
+Usage (single CSV):
+    python scripts/get_representative_molecules.py \\
+        --single-csv data/protacs.csv \\
+        --e3-smiles-column "E3 Ligase Ligand SMILES" \\
+        --warhead-smiles-column "Warhead SMILES" \\
         --output-csv data/representatives.csv
 """
 from __future__ import annotations
@@ -28,7 +43,7 @@ from rdkit import DataStructs
 from rdkit.Chem import rdFingerprintGenerator
 from tqdm import tqdm
 
-from protac_splitter.graphs.e3_clustering import (
+from protac_splitter.graphs.clustering import (
     evaluate_clusters,
     get_kmeans_clusters_fp,
     get_umap_clusters_fp,
@@ -39,26 +54,42 @@ from protac_splitter.chemoinformatics import remove_dummy_atoms
 
 @dataclasses.dataclass
 class Args:
-    """Get representative E3 ligases and warheads from two input CSV files."""
+    """Get representative E3 ligases and warheads from CSV input(s).
 
-    e3_csv: str
-    """CSV file with E3 ligase SMILES (must have a 'SMILES' column)."""
+    Exactly one of the following input modes must be used:
+      - Two separate CSVs: provide --e3-csv and --warhead-csv.
+      - Single CSV:        provide --single-csv with both molecule classes in
+                           separate columns.
+    """
 
-    warhead_csv: str
-    """CSV file with warhead SMILES (must have a 'SMILES' column)."""
+    # --- Input mode A: two separate CSVs ---
+    e3_csv: Optional[str] = None
+    """CSV file with E3 ligase SMILES."""
 
+    warhead_csv: Optional[str] = None
+    """CSV file with warhead SMILES."""
+
+    # --- Input mode B: single CSV ---
+    single_csv: Optional[str] = None
+    """Single CSV containing both E3 and warhead SMILES in separate columns."""
+
+    # --- Column names ---
+    e3_smiles_column: str = "SMILES"
+    """Column in --e3-csv (mode A) or --single-csv (mode B) that holds E3 SMILES."""
+
+    warhead_smiles_column: str = "SMILES"
+    """Column in --warhead-csv (mode A) or --single-csv (mode B) that holds warhead SMILES."""
+
+    # --- Output ---
     output_csv: str = "data/representative_molecules.csv"
     """Path to write the output CSV (columns: SMILES, is_warhead)."""
-
-    smiles_column: str = "SMILES"
-    """Column name in both input CSVs that holds SMILES strings."""
 
     n_clusters_candidates: List[int] = dataclasses.field(
         default_factory=lambda: [10, 25, 50, 100, 150]
     )
     """Candidate cluster counts evaluated for both molecule sets."""
 
-    cross_similarity_threshold: float = 0.4
+    cross_similarity_threshold: float = 0.3
     """Max Tanimoto similarity allowed between an E3 rep and a warhead rep.
     Representatives exceeding this threshold vs. the other class are removed."""
 
@@ -77,7 +108,7 @@ def _build_fp_generator(radius: int, fp_size: int):
         radius=radius,
         fpSize=fp_size,
         useBondTypes=True,
-        includeChirality=True,
+        includeChirality=False,
     )
 
 
@@ -248,26 +279,55 @@ def cross_dissimilarity_filter(
 
 
 def main(args: Args) -> None:
-    e3_path = Path(args.e3_csv)
-    wh_path = Path(args.warhead_csv)
+    # --- Validate input mode ---
+    use_single = args.single_csv is not None
+    use_two = args.e3_csv is not None or args.warhead_csv is not None
 
-    if not e3_path.exists():
-        raise FileNotFoundError(f"E3 CSV not found: {e3_path}")
-    if not wh_path.exists():
-        raise FileNotFoundError(f"Warhead CSV not found: {wh_path}")
+    if use_single and use_two:
+        raise ValueError(
+            "Provide either --single-csv OR (--e3-csv and --warhead-csv), not both."
+        )
+    if not use_single and not use_two:
+        raise ValueError(
+            "No input specified. Provide --single-csv OR both --e3-csv and --warhead-csv."
+        )
+    if use_two and (args.e3_csv is None or args.warhead_csv is None):
+        raise ValueError("Both --e3-csv and --warhead-csv must be provided together.")
 
-    e3_df = pd.read_csv(e3_path)
-    wh_df = pd.read_csv(wh_path)
-
-    for df, name in [(e3_df, "E3"), (wh_df, "warhead")]:
-        if args.smiles_column not in df.columns:
-            raise ValueError(
-                f"Column '{args.smiles_column}' not found in {name} CSV. "
-                f"Available columns: {list(df.columns)}"
-            )
-
-    e3_smiles = e3_df[args.smiles_column].dropna().unique().tolist()
-    wh_smiles = wh_df[args.smiles_column].dropna().unique().tolist()
+    # --- Load data ---
+    if use_single:
+        csv_path = Path(args.single_csv)
+        if not csv_path.exists():
+            raise FileNotFoundError(f"CSV not found: {csv_path}")
+        df = pd.read_csv(csv_path)
+        for col in [args.e3_smiles_column, args.warhead_smiles_column]:
+            if col not in df.columns:
+                raise ValueError(
+                    f"Column '{col}' not found in {csv_path}. "
+                    f"Available columns: {list(df.columns)}"
+                )
+        e3_smiles = df[args.e3_smiles_column].dropna().unique().tolist()
+        wh_smiles = df[args.warhead_smiles_column].dropna().unique().tolist()
+    else:
+        e3_path = Path(args.e3_csv)
+        wh_path = Path(args.warhead_csv)
+        if not e3_path.exists():
+            raise FileNotFoundError(f"E3 CSV not found: {e3_path}")
+        if not wh_path.exists():
+            raise FileNotFoundError(f"Warhead CSV not found: {wh_path}")
+        e3_df = pd.read_csv(e3_path)
+        wh_df = pd.read_csv(wh_path)
+        for df, col, name in [
+            (e3_df, args.e3_smiles_column, "E3"),
+            (wh_df, args.warhead_smiles_column, "warhead"),
+        ]:
+            if col not in df.columns:
+                raise ValueError(
+                    f"Column '{col}' not found in {name} CSV. "
+                    f"Available columns: {list(df.columns)}"
+                )
+        e3_smiles = e3_df[args.e3_smiles_column].dropna().unique().tolist()
+        wh_smiles = wh_df[args.warhead_smiles_column].dropna().unique().tolist()
 
     if args.verbose:
         print(f"Loaded {len(e3_smiles)} unique E3 SMILES, {len(wh_smiles)} unique warhead SMILES.")

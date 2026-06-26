@@ -14,7 +14,7 @@ import tyro
 from datasets import Dataset
 
 from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
-from protac_splitter.graphs.e3_clustering import get_representative_e3s_fp
+from protac_splitter.graphs.clustering import get_representative_e3s_fp
 from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
 
 

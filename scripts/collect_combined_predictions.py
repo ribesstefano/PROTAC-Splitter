@@ -55,7 +55,7 @@ def main(args: Args) -> None:
     logging.basicConfig(level=logging.ERROR)
 
     from protac_splitter.evaluation import check_reassembly
-    from protac_splitter.graphs.e3_clustering import get_representative_e3s_fp
+    from protac_splitter.graphs.clustering import get_representative_e3s_fp
     from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
     from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
     from protac_splitter.llms.model_utils import get_pipeline, run_pipeline
