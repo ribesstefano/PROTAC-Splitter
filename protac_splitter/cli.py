@@ -149,28 +149,32 @@ def main() -> None:
         betweenness_approx_frac=args.betweenness_approx_frac,
     )
 
-    if args.input_csv is not None:
-        df = pd.read_csv(args.input_csv)
-        result_df = split_protac(df, protac_smiles_col=args.smiles_col, **kwargs)
-        if args.output_csv:
-            result_df.to_csv(args.output_csv, index=False)
-            print(f"Results saved to {args.output_csv}")
+    try:
+        if args.input_csv is not None:
+            df = pd.read_csv(args.input_csv)
+            result_df = split_protac(df, protac_smiles_col=args.smiles_col, **kwargs)
+            if args.output_csv:
+                result_df.to_csv(args.output_csv, index=False)
+                print(f"Results saved to {args.output_csv}")
+            else:
+                print(result_df.to_string(index=False))
+        elif args.smiles_list is not None:
+            if args.output_format == "csv":
+                print("smiles,e3,linker,poi,model_name")
+            for r in split_protac(args.smiles_list, **kwargs):
+                _print_result(r, args.output_format)
+        elif args.smiles is not None:
+            if args.output_format == "csv":
+                print("smiles,e3,linker,poi,model_name")
+            _print_result(split_protac(args.smiles, **kwargs), args.output_format)
         else:
-            print(result_df.to_string(index=False))
-    elif args.smiles_list is not None:
-        if args.output_format == "csv":
-            print("smiles,e3,linker,poi,model_name")
-        for r in split_protac(args.smiles_list, **kwargs):
-            _print_result(r, args.output_format)
-    elif args.smiles is not None:
-        if args.output_format == "csv":
-            print("smiles,e3,linker,poi,model_name")
-        _print_result(split_protac(args.smiles, **kwargs), args.output_format)
-    else:
-        print(
-            "Error: provide one of --smiles, --smiles-list, or --input-csv.",
-            file=sys.stderr,
-        )
+            print(
+                "Error: provide one of --smiles, --smiles-list, or --input-csv.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    except ImportError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 

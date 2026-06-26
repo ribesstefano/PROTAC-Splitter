@@ -15,11 +15,11 @@ authors = [
 ]
 dependencies = [
   # Core: everything for split_protac() with XGBoost or heuristic (no torch required)
-  "rdkit>=2024.9.4",
+  "rdkit>=2023.9.1",
   "numpy>=1.26,<3",
   "pandas>=2.2",
-  "networkx>=3.1",
-  "scikit-learn>=1.6,<1.7",
+  "networkx>=2.4",
+  "scikit-learn>=1.6,<2",
   "imbalanced-learn>=0.13",
   "xgboost>=2.0,<3.0",
   "joblib>=1.5",

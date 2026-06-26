@@ -13,7 +13,6 @@ from protac_splitter.config import get_cache_dir, get_hf_token
 from protac_splitter.chemoinformatics import canonize
 from protac_splitter.evaluation import split_prediction
 from protac_splitter.fixing_functions import fix_prediction
-from protac_splitter.llms.model_utils import get_pipeline, run_pipeline
 from protac_splitter.graphs.clustering import get_representative_e3s_fp
 from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
 from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
@@ -360,6 +359,7 @@ def _run_transformer_ds(
     use_capacity_weight: bool = False,
     betweenness_approx_frac: Optional[float] = None,
 ) -> Dataset:
+    from protac_splitter.llms.model_utils import run_pipeline
     raw_preds = run_pipeline(
         pipe,
         ds,
@@ -528,6 +528,13 @@ def split_protac(
         xgboost_model = None
 
     if needs_transformer:
+        try:
+            from protac_splitter.llms.model_utils import get_pipeline
+        except ImportError:
+            raise ImportError(
+                "The 'transformer' model requires additional dependencies. "
+                "Install them with:\n    pip install 'protac-splitter[transformer]'"
+            ) from None
         pipe = get_pipeline(
             model_name="ailab-bio/PROTAC-Splitter",
             token=get_hf_token(),
