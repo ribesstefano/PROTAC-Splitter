@@ -1,5 +1,6 @@
 """ Train a masked language model (MLM) using an encoder-decoder architecture. """
 import os
+from pathlib import Path
 from typing import Optional, Dict, Any, Union
 import subprocess
 
@@ -109,7 +110,7 @@ def train_mlm_model(
         # Check if resume_from_checkpoint exists and it's a file
     if resume_from_checkpoint is not None:
         # Check if the checkpoint exists: it can be either a file or a directory
-        if not os.path.exists(resume_from_checkpoint):
+        if not Path(resume_from_checkpoint).exists():
             raise ValueError(f"Checkpoint file '{resume_from_checkpoint}' does not exist.")
 
     if hub_token is not None:
@@ -126,9 +127,9 @@ def train_mlm_model(
             else:
                 print(f"Repository '{hub_model_id}' could not be deleted.")
                 return
-        if delete_local_repo_if_exists and os.path.exists(output_dir):
+        if delete_local_repo_if_exists and Path(output_dir).exists():
             subprocess.run(["rm", "-rf", output_dir])
-            if not os.path.exists(output_dir):
+            if not Path(output_dir).exists():
                 print(f"Local repository '{output_dir}' deleted.")
             else:
                 print(f"Local repository '{output_dir}' could not be deleted.")

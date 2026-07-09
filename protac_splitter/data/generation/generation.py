@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
 
@@ -136,7 +137,7 @@ def generate_protacs(
                 final_df = pd.concat([final_df, batch_df]).drop_duplicates()
                 if i % 100 == 0:
                     if base_data_dir:
-                        batch_df.to_csv(os.path.join(base_data_dir, f'generated_protacs_batch={i}.csv'), index=False)
+                        batch_df.to_csv(Path(base_data_dir) / f'generated_protacs_batch={i}.csv', index=False)
                     else:
                         batch_df.to_csv(f'generated_protacs_batch={i}.csv', index=False)
                     if filename_generated_df:

@@ -1,5 +1,5 @@
-import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 from rdkit import Chem
@@ -36,7 +36,7 @@ def display_mol(
         mol.SetProp("_Name", Chem.MolToSmiles(mol, canonical=True))
         d = Draw.rdMolDraw2D.MolDraw2DSVG(w, h, noFreetype=True)
         font_path = '/System/Library/Fonts/Supplemental/Arial.ttf'
-        if os.path.exists(font_path):
+        if Path(font_path).exists():
             d.fontFile = font_path
         d.DrawMolecule(mol, legend=legend)
         d.FinishDrawing()

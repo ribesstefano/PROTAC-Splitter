@@ -1,7 +1,6 @@
 import logging
 import random
 from typing import List, Tuple, Callable, Any, Union, Dict, Optional, Literal
-from functools import lru_cache
 
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -11,15 +10,11 @@ from rdkit.Chem import CanonSmiles
 
 from .chemoinformatics import (
     canonize,
+    get_mol,
     smiles2mol,
 )
 
 RDLogger.DisableLog("rdApp.*")
-
-
-@lru_cache(maxsize=None)
-def get_mol(smiles: str) -> rdchem.Mol:
-    return Chem.MolFromSmiles(smiles)
 
 
 def find_atom_idx_of_map_atoms(

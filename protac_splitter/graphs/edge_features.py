@@ -67,6 +67,7 @@ def extract_edge_features(
     radius: int = 6,
     descriptor_names: List[str] = None,
     fp_as_string: bool = False,
+    betweenness_approx_frac: float = None,
 ) -> pd.DataFrame:
     """Extract features from the edges of a PROTAC molecule represented as a SMILES string.
     
@@ -97,8 +98,10 @@ def extract_edge_features(
 
     # Step 2: Create line graph and compute betweenness + degree
     LG = nx.line_graph(G)
-    line_betweenness = nx.betweenness_centrality(LG, endpoints=True)
-    betweenness = nx.betweenness_centrality(G, endpoints=True)
+    lg_k = max(1, round(betweenness_approx_frac * LG.number_of_nodes())) if betweenness_approx_frac is not None else None
+    g_k  = max(1, round(betweenness_approx_frac * G.number_of_nodes()))  if betweenness_approx_frac is not None else None
+    line_betweenness = nx.betweenness_centrality(LG, endpoints=True, k=lg_k)
+    betweenness = nx.betweenness_centrality(G, endpoints=True, k=g_k)
 
     # Compute k-hop degrees (number of nodes within 2, 3 hops)
     # TODO: Shall I get the degree of the node in the line graph or the original graph?

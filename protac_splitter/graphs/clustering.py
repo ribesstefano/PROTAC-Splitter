@@ -233,60 +233,95 @@ def get_representative_e3s(
 
 
 DEFAULT_REPRESENTATIVE_E3S = [
-    'Cc1ncsc1-c1ccc(CNC(=O)[C@@H]2C[C@@H](O)CN2C(=O)CN[*:2])cc1',
-    'O=C1CCC(N2Cc3c(N=[*:2])cccc3C2=O)C(=O)N1',
-    'CC(=O)NC(C(=O)N1CC(O)CC1C(=O)[*:2])C(C)(C)C',
-    'CN[C@@H](C)C(=O)N[C@H](C(=O)N1C[C@@H](Oc2ccccc2[*:2])C[C@H]1C(=O)N[C@@H]1CCCc2ccccc21)C1CCCCC1',
-    'Cc1ncsc1-c1ccc(CNC(=O)C2CC(O)CN2C(=O)C(NC(=O)CCO[*:2])C(C)(C)C)cc1',
-    'O=C1CCC(N2Cc3ccc([*:2])cc3C2=O)C(=O)N1',
-    'COc1ccc(C2=N[C@@H](c3ccc(Cl)cc3)[C@@H](c3ccc(Cl)cc3)N2C(=O)N2CCN(CC(=O)[*:2])C(=O)C2)c(OC(C)C)c1',
-    'CC(NC(=O)C1CC(O)CN1C(=O)C(N[*:2])C(C)(C)C)c1ccc(C2CC2)cc1',
-    'CCOc1cc(C(C)(C)C)ccc1C1=NC(c2ccc(Cl)cc2)C(c2ccc(Cl)cc2)N1C(=O)N1CCN(CCCC[*:2])CC1',
-    'CNC(C)C(=O)NC(C(=O)N1CCCC1c1cncc(C(=O)c2cccc([*:2])c2)c1)C1CCCCC1',
-    'CN[C@@H](C)C(=O)N[C@H](C(=O)N1CCC[C@H]1c1nc(C(=O)c2ccc([*:2])cc2)cs1)C1CCCCC1',
-    'O=C1CCC(N2C(=O)c3cccc(OC[*:2])c3C2=O)C(=O)N1',
-    'CCOc1cc(C(C)(C)C)ccc1C1=NC(c2ccc(Cl)cc2)C(c2ccc(Cl)cc2)N1C(=O)N1CCN([*:2])CC1',
-    'Cc1ncsc1-c1ccc(CNC(=O)[C@H]2C[C@H](O)CN2C(=O)C(N[*:2])C(C)(C)C)cc1',
-    'Cc1ncsc1-c1ccc([C@H](C)NC(=O)[C@@H]2C[C@@H](O)CN2C(=O)[C@@H](N[*:2])C(C)(C)C)cc1',
-    'CN[C@@H](C)C(=O)N[C@H](C(=O)N1CCC[C@H]1c1cncc(C(=O)c2cccc([*:2])c2)c1)C1CCCCC1',
-    'Cc1ncsc1-c1ccc(CNC(=O)[C@@H]2C[C@@H](O)CN2C(=O)[C@@H](N[*:2])C(C)(C)C)c(OC2CCNCC2)c1',
-    'CNC(C)C(=O)NC(C(=O)N1CC(Oc2ccc([*:2])cc2)CC1C(=O)NC1CCCc2ccccc21)C1CCCCC1',
-    'C[C@H](NC(=O)[C@@H]1C[C@@H](O)CN1C(=O)[C@@H](N[*:2])C(C)(C)C)c1ccc(C(C)(C)C)cc1',
+    'O=C1CCC(N2C(=O)c3ccc(C(=O)[*:2])cc3C2=O)C(=O)N1',
+    'CC(NC(=O)C1CC(O)CN1C(=O)C(N[*:2])C(C)(C)C)c1ccc(Cl)cc1',
+    'CNC(C)C(=O)NC(C(=O)N1CC(Oc2ccccc2[*:2])CC1C(=O)NC1CCCc2ccccc21)C1CCCCC1',
+    'O=C1CCN(c2cc(C(=O)[*:2])ccc2Cl)C(=O)N1',
+    'CNC(C)C(=O)NC(C(=O)N1CC(N[*:2])CC1C(=O)Nc1c(F)cccc1F)C(C)(C)C',
+    'CNC(C)C(=O)NC(C(=O)N1CCCC1c1nc(C(=O)c2ccc(F)cc2)cs1)C1CCN(C[*:2])CC1',
+    'CC(C)(C)C(NC(=O)C1(F)CC1)C(=O)N1CC(O)CC1C(=O)[*:2]',
+    'CNC(C)C(=O)NC(C(=O)NC1CC2CCC1N(CCc1ccc([*:2])cc1)C2)C1CCCCC1',
+    'CC1CN(CC(=O)N2CC(C)(C)c3c2cc(Cc2ccc(F)cc2)c(=O)n3C)C(CN2CCN([*:2])CC2C)CN1',
+    'O=C1CCC(N2C(=O)c3ccc([*:2])cc3C2=O)C(=O)N1',
+    'CC(=O)NC(C(=O)N1CC(O)CC1C(=O)NC(CC(=O)N1CCC([*:2])CC1)c1ccccc1)C(C)C',
+    'CNC(C)C(=O)NC(C(=O)N1Cc2cc([*:2])ccc2CC1C(=O)NC1CCCc2ccccc21)C(C)(C)C',
+    'CN[C@H](C)C(=O)N[C@@H](C(=O)N1C[C@H](N[*:2])C[C@@H]1C(=O)N[C@@H]1CCCc2ccccc21)C1CCCCC1',
     'CNC(C)C(=O)NC(C(=O)N1CCCC1c1nc(C(=O)c2ccc([*:2])cc2)cs1)C1CCCCC1',
-    'CC(=O)NC(C(=O)N1CC(O)CC1C(=O)NCc1ccc(-c2scnc2C)cc1[*:2])C(C)(C)C',
-    'Cc1ncsc1-c1ccc(CNC(=O)[C@@H]2C[C@@H](O)CN2C(=O)[C@@H](NC(=O)C2(F)CC2)C(C)(C)C)c([*:2])c1',
-    'CCOc1cc(C(C)(C)C)ccc1C1=NC(C)(c2ccc(Cl)cc2)C(C)(c2ccc(Cl)cc2)N1C(=O)N1CCN(CC(=O)[*:2])CC1',
-    'COc1ccc(C(=O)[*:2])cc1N1CCC(=O)NC1=O',
-    'CN[C@@H](C)C(=O)N[C@H](C(=O)N[C@H]1C[C@H]2CC[C@@H]1N(CCc1ccc([*:2])cc1)C2)C1CCCCC1',
-    'CNC(C)C(=O)NC(C(=O)N1CC(N[*:2])CC1C(=O)NC1CCCc2ccccc21)C1CCCCC1',
-    'CN[C@@H](C)C(=O)N[C@@H](CCCCN[*:2])C(=O)N1CCC[C@H]1C(=O)Nc1snnc1-c1ccccc1',
-    'CNC(C)C(=O)NC(C(=O)NC1CC2CCC1N(CCc1cccc([*:2])c1)C2)C1CCCCC1',
-    'O=C1CCC(N2C(=O)c3ccc(N[*:2])cc3C2=O)C(=O)N1',
-    'CNC(C)C(=O)NC(C(=O)N1CC(NC(=O)CC[*:2])CC1C(=O)Nc1c(F)cccc1F)C(C)(C)C',
-    'Cc1ncsc1-c1ccc(CNC(=O)[C@@H]2C[C@@H](O)CN2C(=O)[C@H](N[*:2])C(C)(C)C)cc1',
-    'Cc1nc[nH]c1-c1ccc(CNC(=O)C2CC(O)CN2C(=O)C(N[*:2])C(C)(C)C)cc1',
-    'Cc1ncsc1-c1ccc(C(C)NC(=O)C2CC(O)CN2C(=O)C(N[*:2])C(C)(C)C)cc1',
-    'Cc1ncsc1-c1ccc(CNC(=O)[C@@H]2C[C@@H](O)CN2C(=O)[C@@H](N[*:2])C(C)(C)C)cc1',
-    'O=C1CCC(c2cccc([*:2])c2)C(=O)N1',
-    'CC(=O)N[C@H](C(=O)N1C[C@@H](O)C[C@@H]1C(=O)N[C@@H](CC(=O)N1CCC([*:2])CC1)c1ccccc1)C(C)C',
-    'O=C(CCl)[*:2]',
-    'CC[C@@H](NC(=O)[C@@H]1C[C@H](N[*:2])CN1C(=O)[C@@H](NC(=O)[C@H](C)NC)C(C)(C)C)c1ccccc1',
-    'CN[C@H](C)C(=O)N[C@@H]1CCO[C@@H]2CC(C)(C)[C@H](C(=O)N[C@@H]3CCCc4cc([*:2])ccc43)N2C1=O',
-    'CN[C@@H](C)C(=O)N[C@H](C(=O)N1CCC[C@H]1c1nc(C(=O)c2ccc(F)cc2)cs1)C1CCN(C[*:2])CC1',
-    'Cc1ncsc1-c1ccc(CNC(=O)C2CC(O)CN2C(=O)C(N[*:2])C(C)(C)C)cc1',
+    'CCOc1cc(C(C)(C)C)ccc1C1=N[C@@](C)(c2ccc(Cl)cc2)[C@@](C)(c2ccc(Cl)cc2)N1C(=O)N1CCN(CC(=O)[*:2])CC1',
     'CNC(C)C(=O)NC(CCCCN[*:2])C(=O)N1CCCC1C(=O)Nc1snnc1-c1ccccc1',
-    'O=C1CCC(N2C(=O)c3cccc([*:2])c3C2=O)C(=O)O1',
-    'COc1ccc(C2=N[C@@H](c3ccc(Cl)cc3)[C@@H](c3ccc(Cl)cc3)N2C(=O)N2CCN(CC(=O)[*:2])C(=O)C2)cc1OC(C)C',
-    'Cc1ncsc1-c1ccc(CNC(=O)C2CC(O)CN2C(=O)C(N[*:2])C(C)(C)C)c(OC2CCNCC2)c1',
+    'COC(=O)CC1C2(C)C3=C(C)C(c4ccoc4[*:2])CC3OC2C2OC(=O)C3(C)C=CC(=O)C1(C)C23',
+    'CNC(C)C(=O)NC(C(=O)N1CCCC1c1cncc(-c2ccc(F)c(C(=O)[*:2])c2)c1)C1CCCCC1',
+    'CNC(C)C(=O)NC1CN([*:2])CCC2CCC(C(=O)NC3CCCc4ccccc43)N2C1=O',
+    'CC(C)C[C@@H](NC(=O)[C@H](O)[C@@H](N)Cc1ccccc1)C(=O)[*:2]',
+    'COc1cc(C(=O)[*:2])ccc1NC(=O)C1NC(CC(C)(C)C)C(C#N)(c2ccc(Cl)cc2F)C1c1cccc(Cl)c1F',
+    'O=C1CC[C@H](N2Cc3cc([*:2])ccc3C2=O)C(=O)N1',
+    'O=C(CCl)[*:2]',
+    'CNC(C)C(=O)NC(C(=O)N1CCCC1c1nc2c(-c3ccccc3)nccc2s1)C1CCN([*:2])CC1',
+    'Cc1ncsc1-c1ccc(CNC(=O)C2C(F)C(O)CN2C(=O)C(N[*:2])C(C)(C)C)cc1',
     'CNC(C)C(=O)NC(C(=O)N1CCCC1c1cncc(-n2ccc3c(C(=O)[*:2])cccc32)c1)C(C)C',
-    'CCN1CCN(Cc2ccc(NC(=O)c3cccc(-c4ccc5nc(N[*:2])sc5n4)c3)cc2C(F)(F)F)CC1',
-    'CN[C@@H](C)C(=O)N[C@H](C(=O)N1C[C@@H](NC(=O)CC[*:2])C[C@H]1C(=O)Nc1c(F)cccc1F)C(C)(C)C',
-    'CNC(C)C(=O)NC(C(=O)N1CCCC1C(=O)NC(C(=O)[*:2])C(c1ccccc1)c1ccccc1)C1CCCCC1',
+    'CC1CN(CC(=O)N2CC(C)(C)c3ncc(Cc4ccc(F)cc4)cc32)C(CN2CCN([*:2])CC2C)CN1',
+    'Cc1cc(C(C(=O)N2CC(O)CC2C(=O)[*:2])C(C)C)on1',
     'CC(=O)NCC(C(=O)N1CC(O)CC1C(=O)NC(CC(=O)N1CCC(N2CCC([*:2])CC2)CC1)c1ccccc1)C(C)C',
+    'CNC(C)C(=O)NC1CCOC2CC(C)(C)C(C(=O)NC3CCCc4cc([*:2])ccc43)N2C1=O',
+    'CCC(NC(=O)C1CC(N[*:2])CN1C(=O)C(NC(=O)C(C)NC)C(C)(C)C)c1ccccc1',
+    'CN[C@@H](C)C(=O)N[C@H](C(=O)N1CCC[C@H]1C(=O)N[C@H](C(=O)[*:2])C(c1ccccc1)c1ccccc1)C1CCCCC1',
+    'CC(C=CC1=C(C)C(=N[*:2])CCC1(C)C)=CC=CC(C)=CC(=O)O',
+]
+
+DEFAULT_REPRESENTATIVE_WHS = [
+    'Nc1ncnc2c1c(-c1ccc(Oc3ccccc3)cc1)nn2[C@H]1CC[C@H]([*:1])CC1',
+    'NC(Cc1ccc(O)c(O)c1)C(=O)[*:1]',
+    'COc1cc([*:1])ccc1Nc1ncc(Cl)c(Nc2ccccc2S(=O)(=O)C(C)C)n1',
+    'CC1(C)CCC(c2ccc(Cl)cc2)=C(CN2CCN(c3ccc(C(=O)NS(=O)(=O)c4ccc(NC(CSc5ccccc5)C[*:1])c(S(=O)(=O)C(F)(F)F)c4)cc3)CC2)C1',
+    'CC(C)c1cnn2c(NCc3cccc([*:1])c3N(C)C)nc(OC3CCN(C)CC3)nc12',
+    'CC1(C[*:1])CCC(c2ccc(Cl)cc2)=C(CN2CCN(c3ccc(C(=O)NS(=O)(=O)c4ccc(NC(CCN5CCOCC5)CSc5ccccc5)c(S(=O)(=O)C(F)(F)F)c4)cc3)CC2)C1',
+    'Nc1nc2c(ncn2C2OC(COP(=O)(O)O[*:1])C(O)C2O)c(=O)[nH]1',
+    'NC(=O)CCC(NC(=O)C1CCC2CCN([*:1])CC(NC(=O)c3cc4cc(OP(=O)(O)O)ccc4[nH]3)C(=O)N21)C(=O)NC(c1ccccc1)c1ccccc1',
+    'CCCNc1nc(Nc2ccc(C#N)cc2)ncc1C#CCCCNC(=O)C(C)N(C)C(=O)CC[*:1]',
+    'C=CC(=O)N[C@H](CCC(=O)[*:1])C(=O)Nc1cccc(Nc2ncc(NC(=O)c3cc(NC(=O)c4cccc(C)c4)ccc3C)cn2)c1',
+    'C=CC(=O)Nc1cc(Nc2nccc(-c3cn(C)c4ccccc34)n2)c(OC)cc1N(CCN(C)C)C[*:1]',
+    'Nc1nc2c(c(=O)[nH]1)[n+](Cc1ccccc1)cn2C1OC(COP(=O)(O)O[*:1])C(O)C1O',
+    'COc1ccc(Cl)c(S(=O)(=O)Nc2ccc(-c3nc(OCC4CN([*:1])CCO4)c4cn[nH]c4n3)cc2)c1',
+    'COc1cc2ncnc(Nc3ccc(F)c(Cl)c3)c2cc1O[*:1]',
+    'CC1Cc2c([nH]c3ccccc23)C(c2c(F)cc([*:1])cc2F)N1CC(C)(C)F',
+    'CCC1c2nnc(C)n2-c2cnc(Nc3ccc(C(=O)NC4CCN(C[*:1])CC4)cc3OC)nc2N1CC1CCCCC1',
+    'CC(=O)NC(C(=O)N1CC(O)CC1C(=O)NCc1ccc(-c2scnc2C)cc1[*:1])C(C)(C)C',
+    'C=CC(=O)N1CCCC(n2c(Nc3ccccc3)nc3cnc(Nc4ccc(N5CCN(C[*:1])CC5)cc4)nc32)C1',
+    'C=C(F)C(=O)N1CCN(c2nc(OCC3CCCN3C[*:1])nc3c2CCN(c2cccc4cccc(Cl)c24)C3)CC1CC#N',
+    'NC(=O)c1c(-c2ccc(Oc3ccc(F)cc3F)cc2)nn(C2CCCN([*:1])C2)c1N',
+    'CN(CCCNc1nc(Nc2ccc([*:1])cc2)ncc1C1CC1)C(=O)C1CCC1',
+    'CCN(c1ccc(C#N)c(Cl)c1)C1CCC(NC(=O)c2ccc([*:1])cc2)CC1',
+    'CCC1NC(=O)C(C(O)C(C)CC=CC[*:1])N(C)C(=O)C(C(C)C)N(C)C(=O)C(CC(C)C)N(C)C(=O)C(CC(C)C)N(C)C(=O)C(C)NC(=O)C(C)NC(=O)C(CC(C)C)N(C)C(=O)C(C(C)C)NC(=O)C(CC(C)C)N(C)C(=O)CN(C)C1=O',
+    'Cc1sc2c(c1C)C(c1ccc(Cl)cc1)=NC(CC(=O)[*:1])c1nnc(C)n1-2',
+    'CCC(C(=O)N1CCCCC1C(=O)OC(CCc1ccc(OC)c(OC)c1)c1ccccc1[*:1])c1cc(OC)c(OC)c(OC)c1',
+    'CCCn1cc(-c2nc([*:1])nc3[nH]ccc23)cn1',
+    'COC1CC2CCC(C)C(O)(O2)C(=O)C(=O)N2CCCCC2C(=O)OC(C(C)CC2CCC(O[*:1])C(OC)C2)CC(=O)C(C)C=C(C)C(O)C(OC)C(=O)C(C)CC(C)C=CC=CC=C1C',
+    'N#Cc1ccc(OC2CC(N[*:1])C2)cc1Cl',
+    'CN1CCN(c2ccc(-c3cccc(C(=O)[*:1])c3)cc2NC(=O)c2c[nH]c(=O)cc2C(F)(F)F)CC1',
+    'Cc1nc(Nc2ncc(C(=O)Nc3c(C)cccc3Cl)s2)cc(N2CCN(C[*:1])CC2)n1',
+    'CC1(C)C(NC(=O)c2ccc(O[*:1])cc2)C(C)(C)C1Oc1ccc(C#N)c(Cl)c1',
+    'NC(=O)CCC(NC(=O)C1CCC2CCN(C(=O)[*:1])CC(NC(=O)c3cc4cc(C(F)(F)P(=O)(O)O)ccc4[nH]3)C(=O)N21)C(=O)NC(c1ccccc1)c1ccccc1',
+    'CCCS(=O)(=O)Nc1ccc(F)c(C(=O)c2c[nH]c3ncc(-c4ccc([*:1])cc4)cc23)c1F',
+    'O=C(c1ccc(OCCN(C[*:1])C2CCC2)cc1)c1c(-c2ccc(O)cc2)sc2cc(O)ccc12',
+    'CC1CC(O)c2ncnc(N3CCN(C(=O)C(CN[*:1])c4ccc(Cl)cc4)CC3)c21',
+    'Cc1c(C#N)c(-c2ccc(C#N)cc2)c(C)n1Cc1ccccc1[*:1]',
+    'ON[*:1]',
+    'CC1(N)CCN(c2cnc(Sc3cccc(N[*:1])c3Cl)c(N)n2)CC1',
+    'CC(C)c1cnn2c(NCc3ccc([*:1])cc3)cc(NCCCCCCN)nc12',
+    'CCOc1cc(C(C)(C)C)ccc1C1=N[C@H](c2ccc(Cl)cc2)[C@H](c2ccc(Cl)cc2)N1C(=O)N1CCN(CC(=O)[*:1])C(=O)C1',
+    'c1cc([*:1])ccc1-c1csc(N2CCOCC2)n1',
+    'CCCS(=O)(=O)Nc1ccc(F)c(-n2cc(-c3cncnc3)c3nc(N(C)C4CCN(CC[*:1])CC4)ccc32)c1F',
+    'COc1cc2c(OCC3CCC(=O)N3)ncc([*:1])c2cc1C(N)=O',
+    'Cn1cc(-c2ccccc2)c2cc(C(=O)[*:1])[nH]c2c1=O',
+    'CCN(c1cc(-c2ccc(C[*:1])cc2)cc(C(=O)NCc2c(C)cc(C)[nH]c2=O)c1C)C1CCOCC1',
+    'Cc1ccc(C(=O)Nc2ccc(CN3CCN(C[*:1])CC3)c(C(F)(F)F)c2)cc1C#Cc1cnc2cccnn12',
+    'NC(=O)CCC(NC(=O)C1CCC2CCN([*:1])CC(NC(=O)c3cc4cc(C(F)(F)P(=O)(O)O)ccc4[nH]3)C(=O)N21)C(=O)NC(c1ccccc1)c1ccccc1',
+    'O=C(CCCN[*:1])N1CCN(C(=O)c2cc(Cc3n[nH]c(=O)c4ccccc34)ccc2F)CC1',
+    'Cc1ncsc1-c1ccc(CNC(=O)C2CC(O)CN2C(=O)C(NC(=O)CO[*:1])C(C)(C)C)c(F)c1',
 ]
 
 
-@functools.lru_cache(maxsize=1, typed=False)
+@functools.lru_cache(maxsize=16, typed=False)
 def get_representative_e3s_fp(
     e3_list: Optional[List[str]] = None,
     fp_generator: Optional[Any] = None,
@@ -318,4 +353,36 @@ def get_representative_e3s_fp(
     if not representative_e3s_fp:
         raise ValueError("No valid E3 ligands found in the provided list.")
     return representative_e3s_fp
+
+@functools.lru_cache(maxsize=16, typed=False)
+def get_representative_whs_fp(
+    wh_list: Optional[List[str]] = None,
+    fp_generator: Optional[Any] = None,
+    verbose: int = 0,
+) -> List[DataStructs.ExplicitBitVect]:
+    """
+    Generate Morgan fingerprints for a list of warheads. If no list is provided,
+    it uses a default list of representative warheads.
     
+    Parameters:
+        wh_list (Optional[List[str]]): List of SMILES strings for warheads. If None, uses a default list.
+        fp_generator (Optional[Any]): RDKit fingerprint generator. If None, a default Morgan fingerprint generator is used.
+        
+    Returns:
+        List[DataStructs.ExplicitBitVect]: List of RDKit Morgan fingerprints for the warheads.
+    """
+    representative_e3s_fp = []
+    if verbose > 0:
+        iterable = tqdm(wh_list or DEFAULT_REPRESENTATIVE_WHS, desc="Generating fingerprints for warheads")
+    else:
+        iterable = wh_list or DEFAULT_REPRESENTATIVE_WHS
+    for smi in iterable:
+        # Get the Morgan fingerprint for the SMILES string
+        fp = get_fp(remove_dummy_atoms(smi), fp_generator, return_np=False)
+        if fp is not None:
+            representative_e3s_fp.append(fp)
+        else:
+            print(f"Warning: Invalid SMILES string '{smi}' encountered, skipping.")
+    if not representative_e3s_fp:
+        raise ValueError("No valid warheads found in the provided list.")
+    return representative_e3s_fp

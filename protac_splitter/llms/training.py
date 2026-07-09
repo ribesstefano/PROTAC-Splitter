@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from typing import Optional, Dict, Any, Callable, Tuple, Union
 from functools import partial
 import subprocess
@@ -453,19 +454,19 @@ def train_model(
     # Check if resume_from_checkpoint exists and it's a file
     if resume_from_checkpoint is not None:
         # Check if the checkpoint exists: it can be either a file or a directory
-        if not os.path.exists(resume_from_checkpoint):
+        if not Path(resume_from_checkpoint).exists():
             raise ValueError(f"Checkpoint file '{resume_from_checkpoint}' does not exist.")
 
     if hub_token is not None:
         hf.login(token=hub_token)
-    
+
     # Setup output directory and Hugging Face repository
     output_dir += f"/{model_id}"
     if organization is not None:
         hub_model_id = f"{organization}/{model_id}"
-        if delete_local_repo_if_exists and os.path.exists(output_dir):
+        if delete_local_repo_if_exists and Path(output_dir).exists():
             subprocess.run(["rm", "-rf", output_dir])
-            if not os.path.exists(output_dir):
+            if not Path(output_dir).exists():
                 print(f"Local repository '{output_dir}' deleted.")
             else:
                 print(f"Local repository '{output_dir}' could not be deleted.")

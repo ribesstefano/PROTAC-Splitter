@@ -1,0 +1,42 @@
+name: Sync Gradio app to HF Space
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/protac_splitter_app.py"
+      - "scripts/hf_space_requirements.txt"
+      - ".github/workflows/sync-hf-space.yml"
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PROTAC-Splitter
+        uses: actions/checkout@v4
+
+      - name: Push updated app to the HF Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HF_TOKEN}" ]; then
+            echo "::error::HF_TOKEN secret is not set. See README for setup instructions."
+            exit 1
+          fi
+
+          git clone "https://user:${HF_TOKEN}@huggingface.co/spaces/ailab-bio/PROTAC-Splitter-App" space
+          cp scripts/protac_splitter_app.py space/protac_splitter_app.py
+          cp scripts/hf_space_requirements.txt space/requirements.txt
+
+          cd space
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add protac_splitter_app.py requirements.txt
+          if git diff --cached --quiet; then
+            echo "No changes to sync — Space is already up to date."
+          else
+            git commit -m "Sync app from ribesstefano/PROTAC-Splitter@${GITHUB_SHA}"
+            git push
+          fi

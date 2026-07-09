@@ -1,66 +1,83 @@
-import os
-import argparse
+"""Train the XGBoost graph edge classifier for PROTAC splitting.
 
-from datasets import load_dataset
+Downloads the PROTAC-Splitter dataset from HuggingFace Hub unless CSVs are
+already present in the cache directory.
+
+Usage:
+    python scripts/train_xgboost_model.py --help
+    python scripts/train_xgboost_model.py --output-model-path models/my_model.joblib
+"""
+from __future__ import annotations
+
+import dataclasses
+from pathlib import Path
 import pandas as pd
+import tyro
+from datasets import load_dataset
+
 from protac_splitter.graphs.edge_classifier import train_edge_classifier
+from scripts.common import ensure_output_dir, get_hub_token
 
-# Get script directory
-script_dir = os.path.dirname(os.path.abspath(__file__))
-models_dir = os.path.join(script_dir, "..", "models")
+@dataclasses.dataclass
+class Args:
+    """Train an XGBoost edge classifier for PROTAC splitting."""
 
-def main():
-    parser = argparse.ArgumentParser(description="Train an edge classifier for PROTAC splitting.")
-    parser.add_argument(
-        "--output_model_path",
-        type=str,
-        default="./models/PROTAC-Splitter-XGBoost.joblib",
-        help="Path to save the trained edge classifier model.",
-    )
-    parser.add_argument(
-        "--graph_datasets_cache_dir",
-        type=str,
-        default="./data/graph_based/",
-        help="Directory to cache the graph datasets.",
-    )
+    output_model_path: str = "./models/PROTAC-Splitter-XGBoost.joblib"
+    """Path to save the trained edge classifier model."""
 
-    args = parser.parse_args()
-    
-    # Check if train.csv exists in the specified cache directory
-    train_csv_path = f"{args.graph_datasets_cache_dir}/train.csv"
-    if not os.path.exists(train_csv_path):
-        # Load the dataset
-        ds = load_dataset('ailab-bio/PROTAC-Splitter-Dataset', 'clustered')
-        def get_substructs(row):
+    graph_datasets_cache_dir: str = "./data/graph_based/"
+    """Directory to cache the extracted graph feature datasets."""
+
+    hub_token: str = ""
+    """HuggingFace token (defaults to HF_TOKEN in .env)."""
+
+    num_proc: int = 8
+    """Number of parallel processes for dataset mapping."""
+
+
+def main(args: Args) -> None:
+    cache_dir = Path(args.graph_datasets_cache_dir)
+    ensure_output_dir(str(cache_dir))
+    ensure_output_dir(str(Path(args.output_model_path).parent))
+
+    train_csv = cache_dir / "train.csv"
+    val_csv = cache_dir / "val.csv"
+    test_csv = cache_dir / "test.csv"
+
+    if train_csv.exists() and val_csv.exists() and test_csv.exists():
+        print(f"Loading cached graph datasets from {cache_dir}")
+        train_df = pd.read_csv(train_csv)
+        val_df = pd.read_csv(val_csv)
+        test_df = pd.read_csv(test_csv)
+    else:
+        print("Downloading PROTAC-Splitter dataset from HuggingFace Hub...")
+        token = get_hub_token(args.hub_token) if args.hub_token else None
+        ds = load_dataset("ailab-bio/PROTAC-Splitter-Dataset", "clustered", token=token)
+
+        def get_substructs(row: dict) -> dict:
             text = row["text"]
-            labels = row["labels"]
+            parts = row["labels"].split(".")
             return {
                 "PROTAC SMILES": text,
-                "POI Ligand SMILES with direction": labels.split(".")[2],
-                "Linker SMILES with direction": labels.split(".")[1],
-                "E3 Binder SMILES with direction": labels.split(".")[0],
+                "E3 Binder SMILES with direction": parts[0],
+                "Linker SMILES with direction": parts[1],
+                "POI Ligand SMILES with direction": parts[2],
             }
 
-        ds = load_dataset("ailab-bio/PROTAC-Splitter-Dataset", "clustered")
-        ds = ds.map(get_substructs, num_proc=8, remove_columns=["text", "labels"])
+        ds = ds.map(get_substructs, num_proc=args.num_proc, remove_columns=["text", "labels"])
         train_df = ds["train"].to_pandas()
         val_df = ds["validation"].to_pandas()
         test_df = ds["test"].to_pandas()
-    else:
-        print(f"Loading training data from: {train_csv_path}")
-        train_df = None
-        val_df = None
-        test_df = None
 
     train_edge_classifier(
         train_df=train_df,
         val_df=val_df,
         test_df=test_df,
         model_filename=args.output_model_path,
-        cache_dir=args.graph_datasets_cache_dir,
+        cache_dir=str(cache_dir),
     )
     print(f"Edge classifier model saved to: {args.output_model_path}")
 
 
 if __name__ == "__main__":
-    main()
+    main(tyro.cli(Args))

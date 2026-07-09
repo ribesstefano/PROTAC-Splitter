@@ -37,13 +37,13 @@ def get_fp(
     else:
         return fp_generator.GetFingerprint(mol)
 
-def average_tanimoto_distance(
+def max_tanimoto_similarity(
     smiles: str,
     fingerprints: List[DataStructs.ExplicitBitVect],
     morgan_fp_generator: Optional[Any] = None,
 ) -> float:
-    """
-    Compute the average Tanimoto distance between a query SMILES and a list of RDKit fingerprints.
+    """ Compute the maximum Tanimoto similarity between a query SMILES and a list
+        of RDKit fingerprints.
 
     Parameters:
         smiles (str): SMILES string of the query molecule.
@@ -51,17 +51,18 @@ def average_tanimoto_distance(
         morgan_fp_generator: RDKit Morgan fingerprint generator.
 
     Returns:
-        float: Average Tanimoto distance (1 - similarity) between the query and the fingerprints.
+        float: Maximum Tanimoto similarity between the query and the fingerprints.
     """
     query_fp = get_fp(smiles, morgan_fp_generator, return_np=False)
     if query_fp is None:
         raise ValueError(f"Invalid SMILES string: {smiles}")
-    distances = DataStructs.BulkTanimotoSimilarity(query_fp, fingerprints, returnDistance=True)
-
-    return np.array(distances).mean()
+    distances = DataStructs.BulkTanimotoSimilarity(
+        query_fp,
+        fingerprints,
+        returnDistance=False,
+    )
+    return np.array(distances).max()
 
 def numpy_to_rdkit_fp(arr: np.ndarray) -> DataStructs.ExplicitBitVect:
-    """
-    Convert a NumPy array to an RDKit ExplicitBitVect.
-    """
+    """ Convert a NumPy array to an RDKit ExplicitBitVect. """
     return DataStructs.CreateFromBitString(''.join(arr.astype(str)))

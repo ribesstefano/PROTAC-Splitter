@@ -1,6 +1,7 @@
 """ Chemoinformatics utilities for PROTAC Splitter. """
 import logging
-from typing import List, Union, Optional, Literal
+from functools import lru_cache
+from typing import Dict, List, Union, Optional, Literal
 from multiprocessing import Process, Queue
 from hashlib import sha256
 
@@ -70,6 +71,7 @@ def remove_stereo(smiles: str) -> str:
         return None
 
 
+@lru_cache(maxsize=None)
 def get_mol(smiles: str, remove_stereo: bool = False) -> Chem.Mol:
     """
     Get a molecule object from a SMILES string.
