@@ -19,6 +19,7 @@ Date: 2025-06
 
 import logging
 import os
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Union
@@ -30,11 +31,24 @@ from rdkit import Chem
 from rdkit.Chem import Draw
 
 from protac_splitter import split_protac
+from protac_splitter.config import get_cache_dir
 from protac_splitter.evaluation import split_prediction
 
 # HF Spaces sets SPACE_ID automatically; cap parallelism on the (limited) free tier.
 IS_HF_SPACE = os.environ.get("SPACE_ID") is not None
 MAX_NUM_PROC = 2 if IS_HF_SPACE else 8
+
+# Filename must match `_XGBOOST_MODEL_FILENAME` in protac_splitter/protac_splitter.py.
+# If a copy of the model is bundled alongside this script (as it is on the HF Space,
+# to avoid depending on a runtime download from Zenodo), seed the cache with it before
+# any request can trigger a download.
+_BUNDLED_XGBOOST_MODEL = Path(__file__).with_name("PROTAC-Splitter-XGBoost.joblib")
+if _BUNDLED_XGBOOST_MODEL.exists():
+    _cached_model_path = get_cache_dir() / _BUNDLED_XGBOOST_MODEL.name
+    if not _cached_model_path.exists():
+        _cached_model_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(_BUNDLED_XGBOOST_MODEL, _cached_model_path)
+        logging.info(f"Seeded XGBoost model cache from bundled file → {_cached_model_path}")
 
 MODEL_CHOICES = [
     ("Heuristic → XGBoost (recommended)", "heuristic->xgboost"),
