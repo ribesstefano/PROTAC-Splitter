@@ -17,12 +17,21 @@ Author: Stefano Ribes
 Date: 2025-06
 """
 
+import faulthandler
 import logging
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Union
+
+# Diagnostic: if any request stalls this long, dump every thread's exact Python
+# stack to stderr (visible in the Space's log stream) and keep dumping every 20s
+# while it's still stuck. Cheap, always-on, and turns "it hangs" into "it's stuck
+# at this exact line" the next time it happens.
+faulthandler.enable()
+faulthandler.dump_traceback_later(20, repeat=True, exit=False, file=sys.stderr)
 
 # Import protac_splitter before gradio/pandas/rdkit below: it sets thread-count env
 # vars for native math libraries (see protac_splitter/config.py), which some of them
