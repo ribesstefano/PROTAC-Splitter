@@ -396,11 +396,14 @@ On the other end, `c1ccccc1CCC1CCCC1` will return a plausible split, even though
                 cache_examples=True,
             )
 
-            # Connect the button click event to the processing function
+            # Connect the button click event to the processing function.
+            # Own concurrency lane, sized above the CSV lane: single-SMILES calls are
+            # cheap, so several can run at once without starving each other.
             submit_smiles.click(
                 process_single_smiles,
                 inputs=[smiles_input, model, beam_size, betweenness_threshold, use_capacity_weight, betweenness_approx_frac],
-                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts, smiles_output_df]
+                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts, smiles_output_df],
+                concurrency_limit=4,
             )
 
         # ----------------------------------------------------------------------
@@ -419,14 +422,18 @@ On the other end, `c1ccccc1CCC1CCCC1` will return a plausible split, even though
             # Output file download area
             download_output = gr.File(label="Download Predictions")
 
-            # Connect the button click event to the processing function
+            # Connect the button click event to the processing function.
+            # Own concurrency lane, capped at 1: batch jobs already use num_proc worker
+            # processes internally, so running several batches at once on a 2-core Space
+            # would oversubscribe the CPU rather than speed anything up.
             submit_csv.click(
                 process_csv,
                 inputs=[
                     file_input, smiles_column, model, beam_size, batch_size, num_proc,
                     betweenness_threshold, use_capacity_weight, betweenness_approx_frac,
                 ],
-                outputs=[download_output]
+                outputs=[download_output],
+                concurrency_limit=1,
             )
 
             gr.Markdown(f"""**Note:** The output CSV will contain the following columns:
@@ -462,6 +469,9 @@ If you find this work useful, please consider citing it:
 # NOTE: `demo` must be a global variable, so to make the Gradio's hot-reload system work.
 # NOTE: Launch the app with `gradio scripts/protac_splitter_app.py` to develop it.
 demo = create_interface()
+# Bound the total queue backlog so a burst of requests degrades predictably (early
+# "queue full" errors) instead of piling up unboundedly on a 2-core Space.
+demo.queue(max_size=32)
 
 if __name__ == "__main__":
     # Set logging level to DEBUG for detailed output
