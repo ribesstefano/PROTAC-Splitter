@@ -1,15 +1,21 @@
 import hashlib
 import logging
 import warnings
-import requests
 from pathlib import Path
 from typing import Union, Optional, Dict, List, Literal
 
+# Import first, before numpy-linked packages (rdkit/datasets/pandas below): this sets
+# thread-count env vars for native math libraries (OpenMP/OpenBLAS/MKL/Accelerate),
+# which some of them only read once, at first load. Importing it after would be too
+# late and leave those libraries free to over-provision threads on cgroup-limited
+# containers.
+from protac_splitter.config import get_cache_dir, get_hf_token
+
+import requests
 from rdkit import Chem
 from datasets import Dataset
 import pandas as pd
 
-from protac_splitter.config import get_cache_dir, get_hf_token
 from protac_splitter.chemoinformatics import canonize
 from protac_splitter.evaluation import split_prediction
 from protac_splitter.fixing_functions import fix_prediction

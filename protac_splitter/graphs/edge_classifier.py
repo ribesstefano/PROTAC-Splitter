@@ -137,7 +137,16 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "GraphEdgeClassifier":
-        return joblib.load(str(path))
+        model = joblib.load(str(path))
+        # The fitted estimator's n_jobs (None = auto-detect all cores) is baked in at
+        # training time. On cgroup-limited containers where the reported core count
+        # doesn't match the actual CPU quota, that over-provisions native threads and
+        # can make a single prediction take orders of magnitude longer than it should.
+        # A single row gains nothing from parallelism anyway, so force it to 1.
+        clf = model.pipeline.named_steps.get("clf")
+        if clf is not None and hasattr(clf, "set_params"):
+            clf.set_params(n_jobs=1)
+        return model
 
     @staticmethod
     def extract_graph_features(

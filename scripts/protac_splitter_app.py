@@ -24,15 +24,19 @@ import tempfile
 from pathlib import Path
 from typing import Union
 
+# Import protac_splitter before gradio/pandas/rdkit below: it sets thread-count env
+# vars for native math libraries (see protac_splitter/config.py), which some of them
+# only read once, at first load — importing it after gradio (which pulls in numpy
+# transitively) would be too late.
+from protac_splitter import split_protac
+from protac_splitter.config import get_cache_dir
+from protac_splitter.evaluation import split_prediction
+
 from PIL import Image
 import gradio as gr
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import Draw
-
-from protac_splitter import split_protac
-from protac_splitter.config import get_cache_dir
-from protac_splitter.evaluation import split_prediction
 
 # HF Spaces sets SPACE_ID automatically; cap parallelism on the (limited) free tier.
 IS_HF_SPACE = os.environ.get("SPACE_ID") is not None

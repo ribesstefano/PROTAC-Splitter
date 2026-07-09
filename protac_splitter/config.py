@@ -6,9 +6,20 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# XGBoost with OpenMP can deadlock on macOS ARM64 when spawning multiple threads
-# during model deserialization. setdefault respects any existing user override.
-os.environ.setdefault("OMP_NUM_THREADS", "1")
+# Native math libraries (OpenMP, OpenBLAS, MKL, Apple Accelerate) each read their own
+# thread-count env var and default to "use every core the process can see" — which on
+# a cgroup-limited container can wildly exceed the actual CPU quota and turn a
+# millisecond-scale single-row prediction into a multi-minute stall. setdefault
+# respects any existing user override.
+for _threads_var in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "BLIS_NUM_THREADS",
+):
+    os.environ.setdefault(_threads_var, "1")
 
 
 def get_cache_dir() -> Path:
