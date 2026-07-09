@@ -1,12 +1,11 @@
 name: Sync Gradio app to HF Space
 
+# Runs on every push to main (not just when the app file itself changes):
+# requirements.txt pins protac-splitter to this exact commit, so any change
+# to the library needs a fresh Space build, not just changes to the app script.
 on:
   push:
     branches: [main]
-    paths:
-      - "scripts/protac_splitter_app.py"
-      - "scripts/hf_space_requirements.txt"
-      - ".github/workflows/sync-hf-space.yml"
   workflow_dispatch: {}
 
 jobs:
@@ -28,7 +27,12 @@ jobs:
 
           git clone "https://user:${HF_TOKEN}@huggingface.co/spaces/ailab-bio/PROTAC-Splitter-App" space
           cp scripts/protac_splitter_app.py space/protac_splitter_app.py
-          cp scripts/hf_space_requirements.txt space/requirements.txt
+
+          # Pin to this commit, not the floating "main" ref: HF Spaces cache the
+          # build layer by requirements.txt content, so a static "@main" string
+          # lets a stale (pre-update) resolution survive across rebuilds.
+          sed "s|PROTAC-Splitter.git@main|PROTAC-Splitter.git@${GITHUB_SHA}|" \
+            scripts/hf_space_requirements.txt > space/requirements.txt
 
           cd space
           git config user.name "github-actions[bot]"
