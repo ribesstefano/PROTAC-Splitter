@@ -128,6 +128,17 @@ def _download_xgboost_model(
 # Internal utilities
 # ---------------------------------------------------------------------------
 
+def _safe_num_proc(num_proc: Optional[int]) -> Optional[int]:
+    """Normalize a num_proc value for passing to Dataset.map().
+
+    datasets.Dataset.map() only runs in-process when num_proc is None — passing 1
+    (rather than omitting it) still forks a worker via multiprocessing.Pool, which is
+    pure overhead for "1 worker" and, worse, can deadlock if a native library (e.g.
+    XGBoost/OpenBLAS) already initialized threads in the parent before the fork.
+    """
+    return None if num_proc is None or num_proc <= 1 else num_proc
+
+
 def _linker_heavy_atom_count(pred_str: Optional[str]) -> int:
     """Return the non-dummy heavy-atom count of the linker in an 'e3.linker.poi' string, or -1."""
     if pred_str is None:
@@ -234,7 +245,11 @@ def _run_xgboost_ds(
         )
         return {protac_smiles_col: protac, "default_pred_n0": _pred_dict_to_str(pred), "model_name": "XGBoost"}
 
-    return ds.map(_map, num_proc=1, desc="Splitting with XGBoost")
+    # num_proc must stay None (not 1): datasets.Dataset.map() only runs in-process
+    # when num_proc is None — passing 1 still forks a worker via multiprocessing.Pool,
+    # which deadlocks if XGBoost/OpenBLAS already initialized native threads in the
+    # parent (during model load, just above) before the fork.
+    return ds.map(_map, desc="Splitting with XGBoost")
 
 
 def _run_heuristic_ds(
@@ -258,7 +273,7 @@ def _run_heuristic_ds(
         )
         return {protac_smiles_col: protac, "default_pred_n0": _pred_dict_to_str(pred), "model_name": "Heuristic"}
 
-    return ds.map(_map, num_proc=num_proc, desc="Splitting with Heuristic")
+    return ds.map(_map, num_proc=_safe_num_proc(num_proc), desc="Splitting with Heuristic")
 
 
 def _run_xgboost_then_heuristic_ds(
@@ -299,7 +314,8 @@ def _run_xgboost_then_heuristic_ds(
             model_name = "XGBoost"
         return {protac_smiles_col: protac, "default_pred_n0": split, "model_name": model_name}
 
-    return ds.map(_map, num_proc=1, desc="Splitting with XGBoost → Heuristic fallback")
+    # See the num_proc note in _run_xgboost_ds above — must be None, not 1.
+    return ds.map(_map, desc="Splitting with XGBoost → Heuristic fallback")
 
 def _run_heuristic_then_xgboost_ds(
     ds: Dataset,
@@ -374,7 +390,7 @@ def _run_xgboost_and_heuristic_ds(
 
     return merged_ds.map(
         _select,
-        num_proc=num_proc,
+        num_proc=_safe_num_proc(num_proc),
         remove_columns=["_heuristic_pred", "_heuristic_model", "_xgb_pred"],
         desc="Selecting best prediction (longest linker)",
     )
@@ -447,8 +463,9 @@ def _run_transformer_ds(
         desc_parts.append("XGBoost fallback")
     return preds_ds.map(
         _map,
-        # XGBoost inside map is not thread-safe
-        num_proc=1 if xgboost_fallback else num_proc,
+        # XGBoost inside map is not thread-safe, so no true parallelism here — but
+        # that means None, not 1: see the num_proc note in _run_xgboost_ds above.
+        num_proc=None if xgboost_fallback else _safe_num_proc(num_proc),
         desc=" and ".join(desc_parts) or "Selecting best Transformer prediction",
     )
 
