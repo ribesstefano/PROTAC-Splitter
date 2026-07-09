@@ -57,34 +57,65 @@ def load_graph_edge_classifier_from_cache(
     model_path = cache_path / model_filename
 
     if not model_path.exists():
-        logging.info(f"Downloading XGBoost model → {model_path} ...")
-        response = requests.get(download_url, stream=True)
-        response.raise_for_status()
-        expected_size = int(response.headers.get("Content-Length", -1))
-
-        with model_path.open("wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    f.write(chunk)
-
-        if expected_size != -1:
-            actual = model_path.stat().st_size
-            if actual != expected_size:
-                model_path.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"Download incomplete: got {actual} bytes, expected {expected_size}."
-                )
-
-        h = hashlib.sha256(model_path.read_bytes()).hexdigest()
-        if h != _XGBOOST_SHA256:
-            model_path.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"Downloaded model checksum mismatch: got {h}, expected {_XGBOOST_SHA256}. "
-                "The file has been removed — please try again."
-            )
-        logging.info("XGBoost model downloaded and verified.")
+        _download_xgboost_model(download_url, model_path)
 
     return GraphEdgeClassifier.load(model_path)
+
+
+def _download_xgboost_model(
+    download_url: str,
+    model_path: Path,
+    num_attempts: int = 3,
+    connect_timeout: float = 10.0,
+    read_timeout: float = 30.0,
+) -> None:
+    """Download the XGBoost model to `model_path`, retrying on transient network errors.
+
+    Downloads to a temporary file first and only renames it into place once fully
+    verified, so a killed or timed-out download never leaves a corrupt file behind
+    that a later run would mistake for a valid cache hit.
+    """
+    tmp_path = model_path.with_suffix(model_path.suffix + ".part")
+    last_error: Optional[Exception] = None
+
+    for attempt in range(1, num_attempts + 1):
+        try:
+            logging.info(f"Downloading XGBoost model → {model_path} (attempt {attempt}/{num_attempts}) ...")
+            response = requests.get(download_url, stream=True, timeout=(connect_timeout, read_timeout))
+            response.raise_for_status()
+            expected_size = int(response.headers.get("Content-Length", -1))
+
+            with tmp_path.open("wb") as f:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        f.write(chunk)
+
+            if expected_size != -1:
+                actual = tmp_path.stat().st_size
+                if actual != expected_size:
+                    raise RuntimeError(
+                        f"Download incomplete: got {actual} bytes, expected {expected_size}."
+                    )
+
+            h = hashlib.sha256(tmp_path.read_bytes()).hexdigest()
+            if h != _XGBOOST_SHA256:
+                raise RuntimeError(
+                    f"Downloaded model checksum mismatch: got {h}, expected {_XGBOOST_SHA256}."
+                )
+
+            tmp_path.rename(model_path)
+            logging.info("XGBoost model downloaded and verified.")
+            return
+        except (requests.exceptions.RequestException, RuntimeError) as e:
+            last_error = e
+            tmp_path.unlink(missing_ok=True)
+            logging.warning(f"XGBoost model download attempt {attempt}/{num_attempts} failed: {e}")
+
+    raise RuntimeError(
+        f"Failed to download the XGBoost model from {download_url} after {num_attempts} attempts: "
+        f"{last_error}. You can also download it manually and place it at {model_path} "
+        "(or point PROTAC_SPLITTER_CACHE_DIR at a directory that already contains it)."
+    ) from last_error
 
 
 # ---------------------------------------------------------------------------
