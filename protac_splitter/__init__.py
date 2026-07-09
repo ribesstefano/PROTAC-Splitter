@@ -7,5 +7,5 @@ from protac_splitter.evaluation import (
     split_prediction,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.5.0"
 __author__ = "Stefano Ribes and Anders Källberg"
