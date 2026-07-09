@@ -4,6 +4,10 @@ This repository contains the program code to split PROTAC molecules into their t
 
 A Gradio app is available to split PROTAC molecules and visualize the results: [https://huggingface.co/spaces/ailab-bio/PROTAC-Splitter-App](https://huggingface.co/spaces/ailab-bio/PROTAC-Splitter-App).
 
+<p align="center">
+  <img src="misc/gradio_app_screenshot.png" alt="Overview of the TACK dataset and training pipeline" width="90%">
+</p>
+
 ## Table of Contents 📜
 
 - [Installation](#installation)
