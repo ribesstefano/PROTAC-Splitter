@@ -18,8 +18,6 @@ A Gradio app is available to split PROTAC molecules and visualize the results: [
 - [License](#license)
 - [Reference](#reference)
 
----
-
 ## Installation 🛠️
 
 Requires Python 3.10+. Always use a virtual environment.
@@ -50,15 +48,9 @@ uv sync --extra dev        # install all extras into .venv
 source .venv/bin/activate
 ```
 
-> **Pretrained models are downloaded automatically on first use.**  
-> The XGBoost model (~17 MB) is cached to `~/.cache/protac_splitter/` on the first call to `split_protac()`.  
-> The Transformer model is cached by HuggingFace `transformers` in `~/.cache/huggingface/`.
+## Models Cache Configuration ⚙️
 
----
-
-## Configuration ⚙️
-
-Create a `.env` file in your working directory (or copy `.env.example`) to override defaults:
+Pretrained models are downloaded automatically on first use. To set a custom cache directory, you can use the `PROTAC_SPLITTER_CACHE_DIR` environment variable. To do so, create a `.env` file in your working directory (or copy `.env.example`) to override defaults:
 
 ```bash
 cp .env.example .env
@@ -68,14 +60,13 @@ cp .env.example .env
 # .env
 # Directory where pretrained models are cached (default: ~/.cache/protac_splitter)
 PROTAC_SPLITTER_CACHE_DIR=~/.cache/protac_splitter
-
-# HuggingFace token — only needed to access private Hub models
-HF_TOKEN=
 ```
 
 Environment variables are loaded automatically via `python-dotenv` when the package is imported.
 
----
+> [!NOTE]
+> The XGBoost model (~17 MB) is cached to `PROTAC_SPLITTER_CACHE_DIR` on the first call to `split_protac()`.  
+> The Transformer model, if installed, is cached by HuggingFace `transformers` in `HF_HOME` (see [here](https://huggingface.co/docs/datasets/en/cache)).
 
 ## Usage 🚀
 
@@ -161,7 +152,19 @@ protac-splitter --smiles "..." --model heuristic --output-format csv
 protac-splitter --help
 ```
 
-**Available models (`--model`):**
+### Output format
+
+All strategies return predictions in a dot-separated SMILES format:
+
+```
+e3_smiles.linker_smiles.poi_smiles
+```
+
+Attachment points are encoded as `[*:1]` (POI side) and `[*:2]` (E3 side).
+
+## Splitting strategies 🧠
+
+PROTAC-Splitter supports multiple strategies, selectable via `--model` (CLI) or via the `model` argument (Python API):
 
 | Value | Description |
 |---|---|
@@ -173,42 +176,23 @@ protac-splitter --help
 | `heuristic->xgboost` | Heuristic first; XGBoost replaces any failed predictions. |
 | `xgboost+heuristic` or `heuristic+xgboost` | Run both and pick the best result. |
 
-### Gradio app 🌐
+> [!IMPORTANT]  
+> The above strategies must be passed as a double-quoted string in the CLI (e.g., `--model "transformer->xgboost"`). The `>` operator is a shell redirection operator, so it must be quoted to avoid shell interpretation.
+
+The default strategy is `heuristic->xgboost`, which is the most robust, fastest and accurate for general use.
+
+> [!TIP]
+> We recommend increasing the `num_proc` argument to maximize the amount of parallelism when using the default strategy.
+
+## Gradio app locally 🌐
+
+To run the Gradio app locally, install the `[scripts]` extra and run:
 
 ```bash
 gradio scripts/protac_splitter_app.py
-# Open http://localhost:7860
 ```
 
----
-
-## Splitting strategies 🧠
-
-PROTAC-Splitter supports multiple strategies, selectable via `--model` (CLI) or via the `model` argument (Python API):
-
-1. **XGBoost** (`model="xgboost"`) — graph edge classifier trained on synthetic PROTACs. Recommended for batch processing. Model downloaded automatically (~17 MB) on first use.
-
-2. **Heuristic** (`model="heuristic"`) — betweenness-centrality algorithm. No model download. Useful for quick exploration or air-gapped environments.
-
-3. **Transformer** (`model="transformer"`) — seq2seq encoder–decoder model hosted on HuggingFace (`ailab-bio/PROTAC-Splitter`). Requires the `[transformer]` extra and a GPU for reasonable throughput.
-
-4. **Transformer → XGBoost** (`model="transformer->xgboost"`) — runs the Transformer first and falls back to XGBoost for predictions that fail cheminformatics reassembly.
-
-5. **XGBoost → Heuristic** (`model="xgboost->heuristic"`) — runs XGBoost first and falls back to the heuristic for any failed predictions.
-
-6. **Heuristic → XGBoost** (`model="heuristic->xgboost"`) — runs the heuristic first (parallelisable) and applies XGBoost only to failures.
-
-### Output format
-
-All strategies return predictions in a dot-separated SMILES format:
-
-```
-e3_smiles.linker_smiles.poi_smiles
-```
-
-Attachment points are encoded as `[*:1]` (POI side) and `[*:2]` (E3 side).
-
----
+Then open [http://localhost:7860](http://localhost:7860) in your browser to use the app.
 
 ## Data availability 📊
 
@@ -217,19 +201,13 @@ Curated datasets and trained models are available on Zenodo:
 
 The XGBoost model is downloaded automatically to `$PROTAC_SPLITTER_CACHE_DIR` on first use. No manual download step is needed.
 
----
-
 ## Contributing 🤝
 
 We welcome contributions! If you have suggestions for improvements, bug fixes, or new features, please open an issue or submit a pull request.
 
----
-
 ## License 📄
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
----
 
 ## Reference 📚
 

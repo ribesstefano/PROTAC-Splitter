@@ -53,7 +53,7 @@ training = [
 ]
 scripts = [
   "protac-splitter[transformer]",
-  "gradio>=5.35",
+  "gradio>=5.35,<6",
   "matplotlib>=3.10",
   "seaborn>=0.13",
 ]

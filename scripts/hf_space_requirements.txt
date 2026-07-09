@@ -1,0 +1,1 @@
+protac-splitter[scripts] @ git+https://github.com/ribesstefano/PROTAC-Splitter.git@main

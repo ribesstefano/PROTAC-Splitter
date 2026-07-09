@@ -182,7 +182,7 @@ def _run_xgboost_ds(
     protac_smiles_col: str,
     betweenness_threshold: float,
     use_capacity_weight: bool,
-    betweenness_approx_frac: Optional[float],
+    betweenness_approx_frac: Optional[float] = None,
 ) -> Dataset:
     def _map(row):
         protac = row[protac_smiles_col]
@@ -205,7 +205,7 @@ def _run_heuristic_ds(
     protac_smiles_col: str,
     betweenness_threshold: float,
     use_capacity_weight: bool,
-    betweenness_approx_frac: Optional[float],
+    betweenness_approx_frac: Optional[float] = None,
     num_proc: int = 1,
     verbose: int = 0,
 ) -> Dataset:
@@ -231,7 +231,7 @@ def _run_xgboost_then_heuristic_ds(
     protac_smiles_col: str,
     betweenness_threshold: float,
     use_capacity_weight: bool,
-    betweenness_approx_frac: Optional[float],
+    betweenness_approx_frac: Optional[float] = None,
     verbose: int = 0,
 ) -> Dataset:
     def _map(row):
@@ -271,7 +271,7 @@ def _run_heuristic_then_xgboost_ds(
     protac_smiles_col: str,
     betweenness_threshold: float,
     use_capacity_weight: bool,
-    betweenness_approx_frac: Optional[float],
+    betweenness_approx_frac: Optional[float] = None,
     num_proc: int = 1,
     verbose: int = 0,
 ) -> Dataset:
@@ -304,7 +304,7 @@ def _run_xgboost_and_heuristic_ds(
     protac_smiles_col: str,
     betweenness_threshold: float,
     use_capacity_weight: bool,
-    betweenness_approx_frac: Optional[float],
+    betweenness_approx_frac: Optional[float] = None,
     num_proc: int = 1,
     verbose: int = 0,
 ) -> Dataset:
