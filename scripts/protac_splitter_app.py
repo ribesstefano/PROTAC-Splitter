@@ -11,7 +11,8 @@ two main modes of operation:
 2. Batch processing via CSV file upload
 
 Users choose a splitting strategy (see `model` in `protac_splitter.split_protac`):
-XGBoost, heuristic, Transformer, or a combination of these.
+XGBoost, heuristic, Transformer, a combination of these, or the QC-gated
+"adaptive" strategy that escalates through several of them.
 
 Author: Stefano Ribes
 Date: 2025-06
@@ -71,6 +72,7 @@ MODEL_CHOICES = [
     ("XGBoost + Heuristic (best of both)", "xgboost+heuristic"),
     ("Transformer", "transformer"),
     ("Transformer → XGBoost", "transformer->xgboost"),
+    ("Adaptive (QC-gated escalation, best quality)", "adaptive"),
 ]
 DEFAULT_MODEL = "heuristic->xgboost"
 
@@ -98,6 +100,8 @@ def process_single_smiles(
         betweenness_threshold: float = 0.4,
         use_capacity_weight: bool = False,
         betweenness_approx_frac: float = None,
+        adaptive_use_xgboost: bool = True,
+        adaptive_use_transformer: bool = False,
 ) -> tuple:
     """
     Process a single SMILES string and generate PROTAC fragment predictions
@@ -111,9 +115,14 @@ def process_single_smiles(
         use_capacity_weight: Weight graph edges by bond capacity, heuristic only
         betweenness_approx_frac: Fraction of nodes sampled for approximate betweenness
             centrality, heuristic only. Leave empty for exact computation.
+        adaptive_use_xgboost: Whether the XGBoost stage runs on molecules the
+            heuristic grid left flagged, only used when `model == "adaptive"`
+        adaptive_use_transformer: Whether the Transformer stage runs on molecules
+            still flagged after XGBoost, only used when `model == "adaptive"`
 
     Returns:
-        Tuple containing input image, output images, SMILES texts and status message
+        Tuple containing input image, output images, SMILES texts, substructure
+        dataframe, and a status message with the winning model/QC info
     """
     if not protac_smiles:
         raise gr.Error("Please provide a valid PROTAC SMILES string.", duration=5)
@@ -127,6 +136,8 @@ def process_single_smiles(
             betweenness_threshold=betweenness_threshold,
             use_capacity_weight=use_capacity_weight,
             betweenness_approx_frac=betweenness_approx_frac,
+            adaptive_use_xgboost=adaptive_use_xgboost,
+            adaptive_use_transformer=adaptive_use_transformer,
             verbose=1,
         )
     except Exception as e:
@@ -161,7 +172,19 @@ def process_single_smiles(
         "SMILES": [splits.get("e3") or "FAILED", splits.get("linker") or "FAILED", splits.get("poi") or "FAILED"],
     })
 
-    return input_img, images, smiles_texts, smiles_df
+    # `n_flags` / `review_reasons` / `heuristic_params` are only present when
+    # model="adaptive" (see evaluation.score_split / count_flags).
+    info_lines = [f"Model used: {results.get('model_name')}"]
+    if "n_flags" in results:
+        reasons = results.get("review_reasons") or "none"
+        params = results.get("heuristic_params")
+        info_lines.append(
+            f"Remaining QC flags: {results['n_flags']} ({reasons})"
+            + (f" [winning heuristic params: {params}]" if params else "")
+        )
+    info_text = "\n".join(info_lines)
+
+    return input_img, images, smiles_texts, smiles_df, info_text
 
 def process_csv(
         file: gr.File,
@@ -173,6 +196,8 @@ def process_csv(
         betweenness_threshold: float = 0.4,
         use_capacity_weight: bool = False,
         betweenness_approx_frac: float = None,
+        adaptive_use_xgboost: bool = True,
+        adaptive_use_transformer: bool = False,
         # NOTE: `pr` is a progress tracker, it is used to track the progress but
         # it is not used in this function. Do not remove it.
         pr: gr.Progress = gr.Progress(track_tqdm=True),
@@ -190,6 +215,10 @@ def process_csv(
         use_capacity_weight: Weight graph edges by bond capacity, heuristic only
         betweenness_approx_frac: Fraction of nodes sampled for approximate betweenness
             centrality, heuristic only. Leave empty for exact computation.
+        adaptive_use_xgboost: Whether the XGBoost stage runs on molecules the
+            heuristic grid left flagged, only used when `model == "adaptive"`
+        adaptive_use_transformer: Whether the Transformer stage runs on molecules
+            still flagged after XGBoost, only used when `model == "adaptive"`
 
     Returns:
         Path to output CSV file with predictions
@@ -211,6 +240,8 @@ def process_csv(
             betweenness_threshold=betweenness_threshold,
             use_capacity_weight=use_capacity_weight,
             betweenness_approx_frac=betweenness_approx_frac,
+            adaptive_use_xgboost=adaptive_use_xgboost,
+            adaptive_use_transformer=adaptive_use_transformer,
             verbose=1,
         )
     except Exception as e:
@@ -275,6 +306,10 @@ You can choose which strategy to use for splitting PROTAC molecules:
 - **XGBoost → Heuristic** / **XGBoost + Heuristic**: alternative combinations of the two graph-based strategies.
 - **Transformer** / **Transformer → XGBoost**: often more accurate, but a much slower deep learning model.
   {"Disabled on this Hugging Face Space (CPU-only, too slow for interactive use)." if IS_HF_SPACE else "Runs on CPU, so it is slower, especially for large CSV files."}
+- **Adaptive**: QC-gated escalation, not just fallback-on-failure — tries a heuristic parameter grid first,
+  then XGBoost, then (if enabled below) the Transformer, keeping whichever candidate scores best on
+  automated plausibility checks. Slower than a single strategy, but generally the highest-quality split;
+  also reports which method/parameters won and any remaining review flags. See **Adaptive Settings** below.
 """)
         with gr.Row():
             with gr.Column(scale=2):
@@ -285,10 +320,10 @@ You can choose which strategy to use for splitting PROTAC molecules:
                 )
 
         heuristic_settings_label = gr.Markdown(
-            "### Heuristic Settings\n\nOnly used when the heuristic algorithm is part of the selected splitting strategy above.",
-            visible="heuristic" in DEFAULT_MODEL,
+            "### Heuristic Settings\n\nOnly used when the heuristic algorithm is part of the selected splitting strategy above (including **Adaptive**, whose parameter grid is seeded with these values).",
+            visible="heuristic" in DEFAULT_MODEL or DEFAULT_MODEL == "adaptive",
         )
-        with gr.Row(visible="heuristic" in DEFAULT_MODEL) as heuristic_settings_row:
+        with gr.Row(visible="heuristic" in DEFAULT_MODEL or DEFAULT_MODEL == "adaptive") as heuristic_settings_row:
             betweenness_threshold = gr.Slider(
                 label="Betweenness Threshold",
                 value=0.4,
@@ -309,6 +344,22 @@ You can choose which strategy to use for splitting PROTAC molecules:
                 maximum=1.0,
                 step=0.05,
                 info="Fraction of nodes to sample for approximate betweenness centrality. Leave empty for exact computation.",
+            )
+
+        adaptive_settings_label = gr.Markdown(
+            "### Adaptive Settings\n\nOnly used when the **Adaptive** splitting strategy is selected above.",
+            visible=DEFAULT_MODEL == "adaptive",
+        )
+        with gr.Row(visible=DEFAULT_MODEL == "adaptive") as adaptive_settings_row:
+            adaptive_use_xgboost = gr.Checkbox(
+                label="Use XGBoost stage",
+                value=True,
+                info="Run the XGBoost edge classifier on molecules the heuristic grid left flagged.",
+            )
+            adaptive_use_transformer = gr.Checkbox(
+                label="Use Transformer stage",
+                value=False,
+                info="Run the Transformer model on molecules still flagged after XGBoost. Requires the [transformer] extra; slow on CPU.",
             )
 
         # ----------------------------------------------------------------------
@@ -344,7 +395,7 @@ For single SMILES processing, the default values should work well in most cases.
                     maximum=10,
                     step=1,
                     info="Width of the beam search for the Transformer model. Higher values may improve accuracy but increase processing time.",
-                    visible="transformer" in DEFAULT_MODEL,
+                    visible="transformer" in DEFAULT_MODEL or DEFAULT_MODEL == "adaptive",
                 )
 
             # Add a batch size input, only relevant for Transformer-based strategies
@@ -356,19 +407,24 @@ For single SMILES processing, the default values should work well in most cases.
                     maximum=64,
                     step=1,
                     info="Batch size for processing. Higher values may improve performance, especially on GPU machines, but require more memory.",
-                    visible="transformer" in DEFAULT_MODEL,
+                    visible="transformer" in DEFAULT_MODEL or DEFAULT_MODEL == "adaptive",
                 )
 
-            # Show/hide the Transformer-only and heuristic-only options based on the selected strategy
+            # Show/hide the Transformer-only, heuristic-only, and adaptive-only options based on the selected strategy
             model.change(
                 lambda m: (
-                    gr.update(visible="transformer" in m),
-                    gr.update(visible="transformer" in m),
-                    gr.update(visible="heuristic" in m),
-                    gr.update(visible="heuristic" in m),
+                    gr.update(visible="transformer" in m or m == "adaptive"),
+                    gr.update(visible="transformer" in m or m == "adaptive"),
+                    gr.update(visible="heuristic" in m or m == "adaptive"),
+                    gr.update(visible="heuristic" in m or m == "adaptive"),
+                    gr.update(visible=m == "adaptive"),
+                    gr.update(visible=m == "adaptive"),
                 ),
                 inputs=[model],
-                outputs=[beam_size, batch_size, heuristic_settings_label, heuristic_settings_row],
+                outputs=[
+                    beam_size, batch_size, heuristic_settings_label, heuristic_settings_row,
+                    adaptive_settings_label, adaptive_settings_row,
+                ],
             )
 
         # ----------------------------------------------------------------------
@@ -407,18 +463,29 @@ On the other end, `c1ccccc1CCC1CCCC1` will return a plausible split, even though
                 lines=1,
                 show_copy_button=True,
             )
+            smiles_output_info = gr.Textbox(
+                label="Split Info",
+                interactive=False,
+                lines=2,
+                info="Winning model, and (for the Adaptive strategy) remaining QC flags / winning heuristic params.",
+            )
 
             # Add this Examples component
             gr.Examples(
                 examples=[
-                    # SMILES, model, beam_size, betweenness_threshold, use_capacity_weight, betweenness_approx_frac
-                    ["CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O", "heuristic->xgboost", 5, 0.4, False, None],
-                    ["Cc1nnc2n1-c1sc(C#Cc3cnn(-c4cccc5c4C(=O)N(C4CCC(=O)NC4=O)C5=O)c3)c(Cc3ccccc3)c1COC2", "heuristic->xgboost", 5, 0.4, False, None],
-                    ["c1ccccc1CCC1CCCC1", "heuristic", 5, 0.4, False, None],
-                    ["O=C(NCCOCCOCCN1CCCC1)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O", "heuristic", 5, 0.4, False, None],
+                    # SMILES, model, beam_size, betweenness_threshold, use_capacity_weight,
+                    # betweenness_approx_frac, adaptive_use_xgboost, adaptive_use_transformer
+                    ["CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O", "heuristic->xgboost", 5, 0.4, False, None, True, False],
+                    ["Cc1nnc2n1-c1sc(C#Cc3cnn(-c4cccc5c4C(=O)N(C4CCC(=O)NC4=O)C5=O)c3)c(Cc3ccccc3)c1COC2", "heuristic->xgboost", 5, 0.4, False, None, True, False],
+                    ["c1ccccc1CCC1CCCC1", "heuristic", 5, 0.4, False, None, True, False],
+                    ["O=C(NCCOCCOCCN1CCCC1)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O", "heuristic", 5, 0.4, False, None, True, False],
+                    ["CC(C)(C)S(=O)(=O)c1cc2c(Nc3ccc4scnc4c3)ccnc2cc1OCCOCCOCCOCCOCC(=O)Nc1cccc2c1CN(C1CCC(=O)NC1=O)C2=O", "adaptive", 5, 0.4, False, None, True, False],
                 ],
-                inputs=[smiles_input, model, beam_size, betweenness_threshold, use_capacity_weight, betweenness_approx_frac],
-                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts, smiles_output_df],
+                inputs=[
+                    smiles_input, model, beam_size, betweenness_threshold, use_capacity_weight,
+                    betweenness_approx_frac, adaptive_use_xgboost, adaptive_use_transformer,
+                ],
+                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts, smiles_output_df, smiles_output_info],
                 fn=process_single_smiles,
                 cache_examples=True,
             )
@@ -428,8 +495,11 @@ On the other end, `c1ccccc1CCC1CCCC1` will return a plausible split, even though
             # cheap, so several can run at once without starving each other.
             submit_smiles.click(
                 process_single_smiles,
-                inputs=[smiles_input, model, beam_size, betweenness_threshold, use_capacity_weight, betweenness_approx_frac],
-                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts, smiles_output_df],
+                inputs=[
+                    smiles_input, model, beam_size, betweenness_threshold, use_capacity_weight,
+                    betweenness_approx_frac, adaptive_use_xgboost, adaptive_use_transformer,
+                ],
+                outputs=[smiles_input_image, smiles_output_images, smiles_output_texts, smiles_output_df, smiles_output_info],
                 concurrency_limit=4,
             )
 
@@ -458,6 +528,7 @@ On the other end, `c1ccccc1CCC1CCCC1` will return a plausible split, even though
                 inputs=[
                     file_input, smiles_column, model, beam_size, batch_size, num_proc,
                     betweenness_threshold, use_capacity_weight, betweenness_approx_frac,
+                    adaptive_use_xgboost, adaptive_use_transformer,
                 ],
                 outputs=[download_output],
                 concurrency_limit=1,
@@ -468,6 +539,8 @@ On the other end, `c1ccccc1CCC1CCCC1` will return a plausible split, even though
 - `smiles_column`: The original PROTAC SMILES string
 - `default_pred_n0`: The predicted SMILES strings for the splits
 - `model_name`: The model used for the prediction
+- With the **Adaptive** strategy, three extra columns: `heuristic_params` (which grid point won,
+  when `model_name == "Heuristic"`, else empty), `n_flags`, and `review_reasons`
 """)
 
         # ----------------------------------------------------------------------
