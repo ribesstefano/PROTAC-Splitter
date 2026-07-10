@@ -181,7 +181,7 @@ def _resolve_model(
     if model is not None:
         return model
     if use_transformer is None and use_xgboost is None:
-        return "xgboost"  # default behaviour
+        return "adaptive"  # default behaviour
     warnings.warn(
         "use_transformer and use_xgboost are deprecated and will be removed in a future release. "
         "Use the `model` argument instead "
@@ -828,7 +828,7 @@ def split_protac(
     +-------------------------------+-------------------------------------------------------+
     | ``model`` value               | Description                                           |
     +===============================+=======================================================+
-    | ``"xgboost"`` *(default)*     | XGBoost graph edge-classifier. No GPU required.       |
+    | ``"xgboost"``                 | XGBoost graph edge-classifier. No GPU required.       |
     |                               | Model (~17 MB) downloaded automatically on first use. |
     +-------------------------------+-------------------------------------------------------+
     | ``"heuristic"``               | Betweenness-centrality algorithm. No download needed. |
@@ -846,7 +846,7 @@ def split_protac(
     +-------------------------------+-------------------------------------------------------+
     | ``"heuristic+xgboost"``       | Reserved for future use.                              |
     +-------------------------------+-------------------------------------------------------+
-    | ``"adaptive"``                | QC-gated escalation: a small heuristic parameter      |
+    | ``"adaptive"`` *(default)*    | QC-gated escalation: a small heuristic parameter      |
     |                               | grid first, then XGBoost, then (if enabled) the       |
     |                               | Transformer -- each stage only runs on molecules      |
     |                               | the previous stage left flagged by                    |
@@ -861,7 +861,7 @@ def split_protac(
             or a DataFrame with a ``protac_smiles_col`` column.
         model: Splitting strategy. See the table above for valid values. Takes
             precedence over the deprecated ``use_transformer`` / ``use_xgboost``
-            flags. Default ``None`` resolves to ``"xgboost"``.
+            flags. Default ``None`` resolves to ``"adaptive"``.
         use_transformer: *Deprecated.* Use ``model='transformer'`` or
             ``model='transformer->xgboost'`` instead. Setting this to ``True`` maps to
             ``model='transformer->xgboost'`` when ``use_xgboost`` is also ``True``, and

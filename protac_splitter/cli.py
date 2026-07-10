@@ -50,11 +50,15 @@ class SplitArgs:
     """Path to write output CSV (required when --input-csv is used)."""
 
     # --- Model selection ---
-    model: SplittingModel = "heuristic->xgboost"
+    model: SplittingModel = "adaptive"
     """Splitting strategy to use:
 
-      xgboost             — XGBoost graph edge classifier (default; no GPU needed;
-                            model is downloaded automatically on first use).
+      adaptive            — (default) QC-gated escalation: a heuristic parameter
+                            grid, then XGBoost, then (if --adaptive-use-transformer)
+                            the Transformer — each stage only runs on molecules the
+                            previous stage left flagged. See --adaptive-use-*.
+      xgboost             — XGBoost graph edge classifier (no GPU needed; model is
+                            downloaded automatically on first use).
       heuristic           — Betweenness-centrality graph algorithm (no model needed).
       transformer         — Seq2seq Transformer model hosted on HuggingFace
                             (requires the [transformer] extra; GPU recommended).
@@ -63,10 +67,6 @@ class SplitArgs:
       heuristic->xgboost  — Heuristic first; XGBoost replaces failed predictions.
       xgboost+heuristic   — Run both and pick the best result (not yet implemented).
       heuristic+xgboost   — Reserved for future use.
-      adaptive            — QC-gated escalation: a heuristic parameter grid, then
-                            XGBoost, then (if --adaptive-use-transformer) the
-                            Transformer — each stage only runs on molecules the
-                            previous stage left flagged. See --adaptive-use-*.
     """
 
     # --- Transformer-specific options (ignored for xgboost / heuristic) ---

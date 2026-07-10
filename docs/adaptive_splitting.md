@@ -219,7 +219,7 @@ being treated as settled.
 ## Relationship to offline dataset QC
 
 [`dataset_qc.qc_row()`](../protac_splitter/data/curation/dataset_qc.py) (driven by
-[`scripts/qc_dataset.py`](../scripts/README.md)) is the offline counterpart: given a
+[`scripts/qc_dataset.py`](README.md)) is the offline counterpart: given a
 CSV of `(protac_smiles, prediction)` pairs — from any source, not just this pipeline —
 it flags suspect rows for manual review. It calls the exact same `score_split()` /
 `count_flags()` for the split-dependent checks described above, then adds checks that
