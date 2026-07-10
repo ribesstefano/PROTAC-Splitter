@@ -3,11 +3,11 @@
 import math
 import re
 import logging
-from typing import Tuple, Any, Dict, Optional, Union
+from typing import Tuple, Any, Dict, List, Optional, Union
 
 import numpy as np
 from rdkit import Chem, RDLogger
-from rdkit.Chem import DataStructs
+from rdkit.Chem import DataStructs, Descriptors, rdMolDescriptors
 
 # Disable RDKit logging: when checking SMILES validity, we suppress warnings
 RDLogger.DisableLog("rdApp.*")
@@ -16,6 +16,7 @@ from .chemoinformatics import (
     canonize,
     canonize_smiles,
     remove_stereo,
+    remove_dummy_atoms,
     get_substr_match,
 )
 from .protac_cheminformatics import reassemble_protac
@@ -23,6 +24,10 @@ from .graphs_utils import (
     get_smiles2graph_edit_distance,
     get_smiles2graph_edit_distance_norm,
 )
+# NOTE: protac_splitter.graphs.* is imported lazily (inside _known_ligand_similarity)
+# rather than at module level: protac_splitter.graphs/__init__.py pulls in
+# data.curation.bond_adjustments -> data.curation.curation, which itself imports from
+# this module, so an eager import here would be a circular import at package load time.
 
 
 def is_valid_smiles(
@@ -493,3 +498,313 @@ def score_prediction(
     scores['all_ligands_equal'] = all([scores[f'{sub}_equal'] for sub in ['e3', 'poi', 'linker']])
 
     return scores
+
+
+# ---------------------------------------------------------------------------
+# Single-split QC scorer — reference-free plausibility checks that vary with
+# *which bonds were cut*, usable both for offline dataset QC
+# (protac_splitter.data.curation.dataset_qc) and as an inference-time quality
+# gate (protac_splitter.split_protac(model="adaptive")).
+# ---------------------------------------------------------------------------
+
+FRAGMENT_MW_BOUNDS: Dict[str, Tuple[float, float]] = {
+    "e3": (150.0, 700.0),
+    "poi": (120.0, 900.0),
+}
+
+# Heavy-atom-count bounds, checked alongside MW: MW alone can be fooled by atom
+# composition (e.g. a couple of halogens push MW into range on a fragment with almost
+# no skeleton, or the reverse for a fluorine-/PEG-heavy fragment) — a fragment must
+# clear *both* bars to be considered plausible. Derived from the heavy-atom-count
+# distribution of the curated reference lists themselves (graphs/clustering.py's
+# DEFAULT_REPRESENTATIVE_E3S / _WHS): p5/p95 are ~(17, 42) for E3s and ~(15, 65) for
+# warheads, widened a bit here to avoid rejecting legitimate small fragments.
+FRAGMENT_HEAVY_ATOM_BOUNDS: Dict[str, Tuple[int, int]] = {
+    "e3": (10, 55),
+    "poi": (8, 70),
+}
+
+# Above this many consecutive non-ring, unbranched heavy atoms strung out anywhere off
+# an E3/POI fragment's own ring system, the fragment looks less like "a ligand with a
+# short tether" and more like "an under-cut linker still fused onto it" (e.g. a
+# PEG/amide chain that should have been isolated as part of the linker instead).
+# Calibrated against Datasets/smiles/dataset-curated-held-out.csv (5,670 real curated
+# PROTAC splits): on the 115 manually-curated rows the max is 4 (POI) / 3 (E3); on the
+# full set p99 is 6 (POI) / 3 (E3) and the true max is 15 (POI) / 10 (E3) — 6 sits with
+# a 2-unit margin above the trusted max while only trimming ~1% of the noisier,
+# non-manually-curated tail.
+FRAGMENT_ATTACHMENT_CHAIN_LIMIT = 6
+
+
+def _ring_system_atoms(mol: Chem.Mol, start_idx: int) -> set:
+    """All atoms in the fused/bridged ring system containing `start_idx` (BFS restricted
+    to ring bonds), e.g. the full isoindolinone-benzo bicycle, not just one ring of it.
+    """
+    ring_bonds = set()
+    for ring in mol.GetRingInfo().BondRings():
+        ring_bonds.update(ring)
+    system = {start_idx}
+    frontier = [start_idx]
+    while frontier:
+        idx = frontier.pop()
+        for bond in mol.GetAtomWithIdx(idx).GetBonds():
+            if bond.GetIdx() in ring_bonds:
+                other = bond.GetOtherAtomIdx(idx)
+                if other not in system:
+                    system.add(other)
+                    frontier.append(other)
+    return system
+
+
+def _chain_length_from(mol: Chem.Mol, start_idx: int, exclude: set) -> int:
+    """Heavy atoms strung out from `start_idx` before hitting a ring or a real branch.
+    Terminal decorations (=O, =S, halogens, a lone terminal methyl) don't count as a
+    branch — only a neighbor that itself keeps going is a genuine fork in the chain.
+    """
+    visited = set(exclude)
+    current = mol.GetAtomWithIdx(start_idx)
+    length = 0
+    while current is not None and not current.IsInRing():
+        length += 1
+        visited.add(current.GetIdx())
+        next_atoms = [
+            n for n in current.GetNeighbors()
+            if n.GetIdx() not in visited and n.GetDegree() > 1
+        ]
+        if len(next_atoms) != 1:
+            break  # dead end (0 real continuations) or a real fork (2+) -- stop counting
+        current = next_atoms[0]
+    return length
+
+
+def _attachment_chain_length(mol: Chem.Mol) -> Optional[int]:
+    """Longest run of heavy atoms strung off the fragment's ring system before hitting
+    another ring or a branch. A long run is the topological signature of a cut placed
+    too early: real E3/POI cores are ring-based, so a long acyclic tail anywhere off
+    that ring system (not just in line with the attachment point itself — the leak can
+    just as easily hang off a different ring substituent) means part of the linker is
+    still attached. If the attachment point isn't on a ring at all, this just walks the
+    chain from it directly.
+    """
+    dummy = next((a for a in mol.GetAtoms() if a.GetAtomicNum() == 0), None)
+    if dummy is None or dummy.GetDegree() == 0:
+        return None
+
+    anchor = dummy.GetNeighbors()[0]
+    if not anchor.IsInRing():
+        return _chain_length_from(mol, anchor.GetIdx(), exclude={dummy.GetIdx()})
+
+    ring_system = _ring_system_atoms(mol, anchor.GetIdx())
+    max_length = 0
+    for idx in ring_system:
+        for neighbor in mol.GetAtomWithIdx(idx).GetNeighbors():
+            n_idx = neighbor.GetIdx()
+            if n_idx in ring_system or n_idx == dummy.GetIdx():
+                continue
+            max_length = max(max_length, _chain_length_from(mol, n_idx, exclude=ring_system))
+    return max_length
+
+
+def _fragment_descriptors(role: str, frag_smiles: Optional[str]) -> Dict[str, Any]:
+    # NOTE: descriptors are computed on the dummy-stripped fragment, which RDKit
+    # re-perceives valence for on reparse — the attachment carbon gets capped with an
+    # implicit H, as if the fragment were synthesized standalone. That's correct for
+    # MW/heavy-atom counts.
+    out = {
+        f"{role}_mw": None,
+        f"{role}_heavy_atoms": None,
+        f"{role}_disconnected": False,
+        f"{role}_attachment_chain_length": None,
+        f"flag_{role}_out_of_range": False,
+        f"flag_{role}_linker_leak": False,
+    }
+    if frag_smiles is None:
+        return out
+
+    # Chain-length needs the dummy atom itself, so it's computed on the raw fragment
+    # before dummy-stripping below.
+    raw_mol = Chem.MolFromSmiles(frag_smiles)
+    if raw_mol is not None:
+        chain_length = _attachment_chain_length(raw_mol)
+        out[f"{role}_attachment_chain_length"] = chain_length
+        if chain_length is not None:
+            out[f"flag_{role}_linker_leak"] = chain_length >= FRAGMENT_ATTACHMENT_CHAIN_LIMIT
+
+    stripped = remove_dummy_atoms(frag_smiles, canonical=True)
+    if stripped is None:
+        return out
+    out[f"{role}_disconnected"] = "." in stripped
+
+    mol = Chem.MolFromSmiles(stripped)
+    if mol is None:
+        return out
+
+    mw = Descriptors.MolWt(mol)
+    heavy_atoms = mol.GetNumHeavyAtoms()
+    out[f"{role}_mw"] = round(mw, 1)
+    out[f"{role}_heavy_atoms"] = heavy_atoms
+
+    mw_bounds = FRAGMENT_MW_BOUNDS.get(role)
+    atom_bounds = FRAGMENT_HEAVY_ATOM_BOUNDS.get(role)
+    mw_out_of_range = mw_bounds is not None and not (mw_bounds[0] <= mw <= mw_bounds[1])
+    atom_count_out_of_range = atom_bounds is not None and not (atom_bounds[0] <= heavy_atoms <= atom_bounds[1])
+    out[f"flag_{role}_out_of_range"] = mw_out_of_range or atom_count_out_of_range
+    return out
+
+
+def _linker_topology(linker_smiles: Optional[str]) -> Dict[str, Any]:
+    out = {
+        "linker_heavy_atoms_between": None,
+        "linker_branch_points": None,
+        "linker_ring_count": None,
+        "flag_linker_too_short": False,
+        "flag_linker_branchy": False,
+    }
+    if linker_smiles is None:
+        return out
+
+    mol = Chem.MolFromSmiles(linker_smiles)
+    if mol is None:
+        return out
+
+    dummy_idx = [a.GetIdx() for a in mol.GetAtoms() if a.GetAtomicNum() == 0]
+    if len(dummy_idx) != 2:
+        return out
+
+    path = Chem.GetShortestPath(mol, dummy_idx[0], dummy_idx[1])
+    if not path:
+        return out
+
+    heavy_between = len(path) - 2  # path includes both dummy endpoints
+    # Ring atoms (e.g. a substituted piperazine/piperidine spacer) routinely have
+    # degree >= 3 without the linker actually tree-branching — only count branching
+    # *outside* rings.
+    branch_points = sum(
+        1
+        for atom in mol.GetAtoms()
+        if atom.GetIdx() not in dummy_idx and atom.GetDegree() >= 3 and not atom.IsInRing()
+    )
+    out["linker_heavy_atoms_between"] = heavy_between
+    out["linker_branch_points"] = branch_points
+    out["linker_ring_count"] = rdMolDescriptors.CalcNumRings(mol)
+    out["flag_linker_too_short"] = heavy_between <= 1
+    out["flag_linker_branchy"] = branch_points >= 2
+    return out
+
+
+def _known_ligand_similarity(
+    e3_smiles: Optional[str],
+    poi_smiles: Optional[str],
+    e3_sim_threshold: float,
+    poi_sim_threshold: float,
+    representative_e3s_fp: Optional[List] = None,
+    representative_whs_fp: Optional[List] = None,
+) -> Dict[str, Any]:
+    from .graphs.utils import max_tanimoto_similarity
+    from .graphs.clustering import get_representative_e3s_fp, get_representative_whs_fp
+
+    out = {
+        "e3_sim_to_known_e3": None,
+        "e3_sim_to_known_wh": None,
+        "poi_sim_to_known_wh": None,
+        "poi_sim_to_known_e3": None,
+        "flag_e3_low_similarity": False,
+        "flag_poi_low_similarity": False,
+        "flag_role_swap_suspected": False,
+    }
+    representative_e3s_fp = representative_e3s_fp if representative_e3s_fp is not None else get_representative_e3s_fp()
+    representative_whs_fp = representative_whs_fp if representative_whs_fp is not None else get_representative_whs_fp()
+
+    e3_stripped = remove_dummy_atoms(e3_smiles, canonical=True) if e3_smiles else None
+    poi_stripped = remove_dummy_atoms(poi_smiles, canonical=True) if poi_smiles else None
+
+    if e3_stripped is not None and Chem.MolFromSmiles(e3_stripped) is not None:
+        out["e3_sim_to_known_e3"] = round(float(max_tanimoto_similarity(e3_stripped, representative_e3s_fp)), 3)
+        out["e3_sim_to_known_wh"] = round(float(max_tanimoto_similarity(e3_stripped, representative_whs_fp)), 3)
+        out["flag_e3_low_similarity"] = out["e3_sim_to_known_e3"] < e3_sim_threshold
+
+    if poi_stripped is not None and Chem.MolFromSmiles(poi_stripped) is not None:
+        out["poi_sim_to_known_wh"] = round(float(max_tanimoto_similarity(poi_stripped, representative_whs_fp)), 3)
+        out["poi_sim_to_known_e3"] = round(float(max_tanimoto_similarity(poi_stripped, representative_e3s_fp)), 3)
+        out["flag_poi_low_similarity"] = out["poi_sim_to_known_wh"] < poi_sim_threshold
+
+    if out["e3_sim_to_known_wh"] is not None and out["poi_sim_to_known_e3"] is not None:
+        # A swap is only worth flagging if the "wrong-label" resemblance is itself a
+        # real match, not just the larger of two noise-level numbers: for a chemotype
+        # poorly covered by both reference lists, every similarity can sit under the
+        # low-similarity floor, and picking the marginally-larger one is comparing
+        # noise to noise, not evidence of a swap.
+        similarity_floor = min(e3_sim_threshold, poi_sim_threshold)
+        e3_looks_like_wh = (
+            out["e3_sim_to_known_wh"] > out["e3_sim_to_known_e3"]
+            and out["e3_sim_to_known_wh"] >= similarity_floor
+        )
+        poi_looks_like_e3 = (
+            out["poi_sim_to_known_e3"] > out["poi_sim_to_known_wh"]
+            and out["poi_sim_to_known_e3"] >= similarity_floor
+        )
+        out["flag_role_swap_suspected"] = e3_looks_like_wh and poi_looks_like_e3
+    return out
+
+
+def score_split(
+    protac_smiles: str,
+    pred: Optional[str],
+    e3_sim_threshold: float = 0.2,
+    poi_sim_threshold: float = 0.2,
+    representative_e3s_fp: Optional[List] = None,
+    representative_whs_fp: Optional[List] = None,
+    poi_attachment_id: int = 1,
+    e3_attachment_id: int = 2,
+) -> Dict[str, Any]:
+    """Score one candidate split of `protac_smiles` on reference-free plausibility checks.
+
+    Only checks that vary with *which bonds were cut* are included here (structural
+    validity/reassembly, fragment size, linker topology, known-ligand similarity) — that
+    is what makes the result usable to compare candidates coming from different
+    splitting methods/parameters. Checks that depend only on the intact input molecule
+    (e.g. BRENK instability, leaving groups) are constant across every candidate split
+    of the same PROTAC, so they can't discriminate between candidates; those live in
+    `protac_splitter.data.curation.dataset_qc` instead, not here.
+
+    `protac_smiles` is assumed already valid/canonical — callers that can't guarantee
+    that should validate it themselves before calling this.
+
+    Returns a flat dict of metrics and `flag_*` booleans, with `flag_structural`
+    aggregating the hard gate (valid, 3 substructures, both attachment points,
+    reassembles). Pass the result to `count_flags()` for a single (n_flags, reasons)
+    summary.
+    """
+    result: Dict[str, Any] = {}
+    pred = None if pred is None or (isinstance(pred, float) and np.isnan(pred)) else pred
+
+    result["pred_valid"] = is_valid_smiles(pred) if pred else False
+    result["has_three_substructures"] = has_three_substructures(pred)
+    result["has_all_attachment_points"] = has_all_attachment_points(pred)
+    result["reassembly_ok"] = bool(check_reassembly(
+        protac_smiles, pred, poi_attachment_id=poi_attachment_id, e3_attachment_id=e3_attachment_id,
+    )) if pred else False
+
+    frags = split_prediction(pred, poi_attachment_id, e3_attachment_id) if pred else {"e3": None, "linker": None, "poi": None}
+
+    for role in ("e3", "poi"):
+        result.update(_fragment_descriptors(role, frags.get(role)))
+    result.update(_linker_topology(frags.get("linker")))
+    result.update(_known_ligand_similarity(
+        frags.get("e3"), frags.get("poi"), e3_sim_threshold, poi_sim_threshold,
+        representative_e3s_fp, representative_whs_fp,
+    ))
+
+    result["flag_structural"] = (
+        not result["pred_valid"]
+        or not result["has_three_substructures"]
+        or not result["has_all_attachment_points"]
+        or not result["reassembly_ok"]
+    )
+    return result
+
+
+def count_flags(result: Dict[str, Any]) -> Tuple[int, str]:
+    """Summarize a dict's `flag_*` booleans into a count and a ';'-joined reason string."""
+    triggered = [k[len("flag_"):] for k, v in result.items() if k.startswith("flag_") and v]
+    return len(triggered), ";".join(triggered)

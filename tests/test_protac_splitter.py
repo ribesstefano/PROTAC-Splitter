@@ -1,5 +1,6 @@
 from typing import List, Tuple
 from protac_splitter.protac_splitter import split_protac
+from protac_splitter.evaluation import check_reassembly
 import pandas as pd
 
 def protac_examples() -> List[Tuple[str, str]]:
@@ -163,3 +164,55 @@ def test_split_protac_io_combinations():
                 assert 'default_pred_n0' in result_df.columns
                 assert 'model_name' in result_df.columns
                 assert result_df['default_pred_n0'].apply(lambda x: isinstance(x, (str, type(None)))).all()
+
+
+def test_split_protac_adaptive():
+    """model="adaptive" should escalate heuristic -> XGBoost, scored by evaluation.score_split,
+    and report which method/params won via the extra heuristic_params/n_flags/review_reasons columns.
+    """
+    examples = protac_examples()
+    protac_str = examples[0][0]
+    protac_list = [ex[0] for ex in examples[:4]]
+    df = pd.DataFrame({'SMILES': protac_list})
+
+    extra_cols = {'heuristic_params', 'n_flags', 'review_reasons'}
+
+    result_str = split_protac(protac_str, model='adaptive')
+    assert isinstance(result_str, dict)
+    assert extra_cols.issubset(result_str.keys())
+    assert result_str['model_name'] in ('Heuristic', 'XGBoost', 'Transformer')
+    assert isinstance(result_str['n_flags'], int) and result_str['n_flags'] >= 0
+    # heuristic_params is only populated when the heuristic stage's candidate won.
+    if result_str['model_name'] == 'Heuristic':
+        assert result_str['heuristic_params'] is not None
+    else:
+        assert result_str['heuristic_params'] is None
+
+    result_list = split_protac(protac_list, model='adaptive')
+    assert isinstance(result_list, list)
+    assert all(extra_cols.issubset(r.keys()) for r in result_list)
+    # Escalation should always keep the best-available candidate, never regress to None,
+    # and whatever it returns should actually reassemble to the input PROTAC.
+    for smi, r in zip(protac_list, result_list):
+        assert r['default_pred_n0'] is not None
+        assert check_reassembly(smi, r['default_pred_n0'])
+
+    result_df = split_protac(df, model='adaptive')
+    assert isinstance(result_df, pd.DataFrame)
+    assert extra_cols.issubset(result_df.columns)
+    assert len(result_df) == len(protac_list)
+
+
+def test_split_protac_adaptive_heuristic_only():
+    """adaptive_use_xgboost=False should never escalate past the heuristic grid, and a
+    single-point grid should behave like a plain heuristic split scored for 0 flags."""
+    protac = protac_examples()[0][0]
+    result = split_protac(
+        protac,
+        model='adaptive',
+        adaptive_use_xgboost=False,
+        adaptive_heuristic_grid=[(0.4, False)],
+    )
+    assert result['model_name'] == 'Heuristic'
+    assert result['heuristic_params'] == 'betweenness_threshold=0.4,use_capacity_weight=False'
+    assert check_reassembly(protac, result['default_pred_n0'])

@@ -255,7 +255,6 @@ DEFAULT_REPRESENTATIVE_E3S = [
     'CC(C)C[C@@H](NC(=O)[C@H](O)[C@@H](N)Cc1ccccc1)C(=O)[*:2]',
     'COc1cc(C(=O)[*:2])ccc1NC(=O)C1NC(CC(C)(C)C)C(C#N)(c2ccc(Cl)cc2F)C1c1cccc(Cl)c1F',
     'O=C1CC[C@H](N2Cc3cc([*:2])ccc3C2=O)C(=O)N1',
-    'O=C(CCl)[*:2]',
     'CNC(C)C(=O)NC(C(=O)N1CCCC1c1nc2c(-c3ccccc3)nccc2s1)C1CCN([*:2])CC1',
     'Cc1ncsc1-c1ccc(CNC(=O)C2C(F)C(O)CN2C(=O)C(N[*:2])C(C)(C)C)cc1',
     'CNC(C)C(=O)NC(C(=O)N1CCCC1c1cncc(-n2ccc3c(C(=O)[*:2])cccc32)c1)C(C)C',
@@ -269,6 +268,7 @@ DEFAULT_REPRESENTATIVE_E3S = [
 ]
 
 DEFAULT_REPRESENTATIVE_WHS = [
+    'O=C(CCl)N1CCCc2cc([*:1])ccc21',
     'Nc1ncnc2c1c(-c1ccc(Oc3ccccc3)cc1)nn2[C@H]1CC[C@H]([*:1])CC1',
     'NC(Cc1ccc(O)c(O)c1)C(=O)[*:1]',
     'COc1cc([*:1])ccc1Nc1ncc(Cl)c(Nc2ccccc2S(=O)(=O)C(C)C)n1',
@@ -305,7 +305,6 @@ DEFAULT_REPRESENTATIVE_WHS = [
     'O=C(c1ccc(OCCN(C[*:1])C2CCC2)cc1)c1c(-c2ccc(O)cc2)sc2cc(O)ccc12',
     'CC1CC(O)c2ncnc(N3CCN(C(=O)C(CN[*:1])c4ccc(Cl)cc4)CC3)c21',
     'Cc1c(C#N)c(-c2ccc(C#N)cc2)c(C)n1Cc1ccccc1[*:1]',
-    'ON[*:1]',
     'CC1(N)CCN(c2cnc(Sc3cccc(N[*:1])c3Cl)c(N)n2)CC1',
     'CC(C)c1cnn2c(NCc3ccc([*:1])cc3)cc(NCCCCCCN)nc12',
     'CCOc1cc(C(C)(C)C)ccc1C1=N[C@H](c2ccc(Cl)cc2)[C@H](c2ccc(Cl)cc2)N1C(=O)N1CCN(CC(=O)[*:1])C(=O)C1',

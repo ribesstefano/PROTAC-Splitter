@@ -2,7 +2,7 @@ import hashlib
 import logging
 import warnings
 from pathlib import Path
-from typing import Union, Optional, Dict, List, Literal
+from typing import Union, Optional, Dict, List, Literal, Tuple
 
 # Import first, before numpy-linked packages (rdkit/datasets/pandas below): this sets
 # thread-count env vars for native math libraries (OpenMP/OpenBLAS/MKL/Accelerate),
@@ -19,7 +19,7 @@ import pandas as pd
 from protac_splitter.chemoinformatics import canonize
 from protac_splitter.evaluation import split_prediction
 from protac_splitter.fixing_functions import fix_prediction
-from protac_splitter.graphs.clustering import get_representative_e3s_fp
+from protac_splitter.graphs.clustering import get_representative_e3s_fp, get_representative_whs_fp
 from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
 from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
 
@@ -39,7 +39,20 @@ _VALID_MODELS = frozenset({
     "xgboost+heuristic",
     "heuristic->xgboost",
     "heuristic+xgboost",
+    "adaptive",
 })
+
+# (betweenness_threshold, use_capacity_weight) combinations tried by model="adaptive"'s
+# heuristic stage, in order — the package default is first so the common/easy case
+# (default already gives a flag-free split) costs exactly one heuristic call.
+_DEFAULT_ADAPTIVE_GRID: List[Tuple[float, bool]] = [
+    (0.4, False),
+    (0.3, False),
+    (0.5, False),
+    (0.4, True),
+    (0.3, True),
+    (0.5, True),
+]
 
 
 def load_graph_edge_classifier_from_cache(
@@ -471,6 +484,311 @@ def _run_transformer_ds(
 
 
 # ---------------------------------------------------------------------------
+# model="adaptive" — QC-gated escalation.
+#
+# Each candidate split is scored with evaluation.score_split, the same
+# reference-free plausibility checks (structural validity, fragment size, linker
+# topology, known-ligand similarity) used by the offline dataset_qc.qc_row pass.
+# Escalation is driven by that score rather than by outright failure alone, so a
+# structurally-valid-but-implausible split (e.g. E3/POI roles swapped) still
+# triggers a retry with a different method/parameters.
+# ---------------------------------------------------------------------------
+
+# Heuristic and XGBoost both cut real bonds and then assign E3-vs-POI identity via the
+# same fingerprint-based comparison score_split itself uses; the Transformer's
+# [*:1]/[*:2] labels come straight out of the sequence model with no such check, so on
+# an exact tie its similarity score is treated as weaker evidence, not equal evidence.
+_METHOD_PRIORITY: Dict[str, int] = {"Heuristic": 0, "XGBoost": 0, "Transformer": 1}
+
+
+def _rank_key(score: Dict[str, object], n_flags: int, model_name: str) -> Tuple[bool, int, int, float]:
+    """Lower is better: gate failure first, then flag count, then method priority
+    (prefer Heuristic/XGBoost over the Transformer — see _METHOD_PRIORITY), then
+    (negated) summed similarity to known E3/warhead ligands as a final tie-break.
+    """
+    similarity = (score.get("e3_sim_to_known_e3") or 0.0) + (score.get("poi_sim_to_known_wh") or 0.0)
+    return (
+        bool(score.get("flag_structural", True)),
+        n_flags,
+        _METHOD_PRIORITY.get(model_name, 0),
+        -similarity,
+    )
+
+
+def _swap_e3_poi_labels(pred: str) -> str:
+    """Swap [*:1] (POI) and [*:2] (E3) attachment labels throughout an
+    'e3.linker.poi'-formatted prediction, producing the exact same bond cuts with
+    E3/POI identity flipped. Uses a sentinel so the two replacements can't collide.
+    """
+    return (
+        pred.replace("[*:1]", "\0")
+        .replace("[*:2]", "[*:1]")
+        .replace("\0", "[*:2]")
+    )
+
+
+def _best_orientation(
+    protac: str,
+    pred: Optional[str],
+    representative_e3s_fp: List,
+    representative_whs_fp: List,
+    model_name: str,
+) -> Tuple[Optional[str], Tuple[bool, int, int, float], int, str]:
+    """Score `pred` as generated, and — only when its own score_split flags the roles as
+    suspicious (flag_role_swap_suspected) — also try it with E3/POI swapped (same bond
+    cuts), keeping whichever scores better under `_rank_key`. Returns the winning
+    prediction along with its key (so callers comparing across candidates don't need to
+    re-score it) and its (n_flags, reasons).
+
+    Heuristic and XGBoost both assign E3-vs-POI identity via distinguish_fragments(),
+    the same fingerprint-similarity heuristic score_split's own known-ligand-similarity
+    check uses — so it can pick the right bonds but the wrong label. This deliberately
+    does *not* just try both orientations unconditionally and keep whichever has fewer
+    flags: checked against Datasets/smiles/dataset-curated-held-out.csv, that would
+    "improve" ~15% of already-correctly-labeled rows, purely from chance threshold
+    crossings on an unrelated flag (typically flag_poi_low_similarity/flag_e3_low_
+    similarity, not anything about the roles). Gating on flag_role_swap_suspected —
+    which already requires *both* cross-similarities to clear the noise floor, not just
+    be the larger of two low numbers — cuts that down to ~3.5%, which is that flag's
+    own baseline false-positive rate, not something this swap step adds on top of it.
+    """
+    from protac_splitter.evaluation import count_flags, score_split
+
+    score = score_split(
+        protac, pred,
+        representative_e3s_fp=representative_e3s_fp, representative_whs_fp=representative_whs_fp,
+    )
+    n_flags, reasons = count_flags(score)
+    key = _rank_key(score, n_flags, model_name)
+
+    if pred is None or not score.get("flag_role_swap_suspected", False):
+        return pred, key, n_flags, reasons
+
+    swapped_pred = _swap_e3_poi_labels(pred)
+    swapped_score = score_split(
+        protac, swapped_pred,
+        representative_e3s_fp=representative_e3s_fp, representative_whs_fp=representative_whs_fp,
+    )
+    swapped_n_flags, swapped_reasons = count_flags(swapped_score)
+    swapped_key = _rank_key(swapped_score, swapped_n_flags, model_name)
+
+    if swapped_key < key:
+        return swapped_pred, swapped_key, swapped_n_flags, swapped_reasons
+    return pred, key, n_flags, reasons
+
+
+def _run_heuristic_grid_ds(
+    ds: Dataset,
+    protac_smiles_col: str,
+    grid: List[Tuple[float, bool]],
+    representative_e3s_fp: List,
+    representative_whs_fp: List,
+    betweenness_approx_frac: Optional[float],
+    num_proc: int,
+    verbose: int,
+) -> Dataset:
+    """Try each (betweenness_threshold, use_capacity_weight) in `grid`, in order,
+    scoring every candidate (both as generated and with E3/POI roles swapped, via
+    `_best_orientation`) with `score_split`. Keeps the best-scoring candidate,
+    short-circuiting on the first flag-free one so the common/easy case (the default
+    grid point already gives a clean split) doesn't pay for the rest of the grid.
+    """
+    def _map(row):
+        protac = row[protac_smiles_col]
+        best_pred, best_key, best_flags, best_params = None, None, (0, "no_candidate"), None
+        for threshold, use_capacity in grid:
+            pred = split_protac_graph_based(
+                protac_smiles=protac,
+                use_classifier=False,
+                representative_e3s_fp=representative_e3s_fp,
+                betweenness_threshold=threshold,
+                use_capacity_weight=use_capacity,
+                betweenness_approx_frac=betweenness_approx_frac,
+                verbose=verbose,
+            )
+            pred_str = _pred_dict_to_str(pred)
+            pred_str, key, n_flags, reasons = _best_orientation(
+                protac, pred_str, representative_e3s_fp, representative_whs_fp, "Heuristic",
+            )
+            if best_key is None or key < best_key:
+                best_key = key
+                best_pred = pred_str
+                best_flags = (n_flags, reasons)
+                best_params = f"betweenness_threshold={threshold},use_capacity_weight={use_capacity}"
+            if key[0] is False and key[1] == 0:
+                break
+        n_flags, reasons = best_flags
+        return {
+            protac_smiles_col: protac,
+            "default_pred_n0": best_pred,
+            "model_name": "Heuristic",
+            "heuristic_params": best_params,
+            "n_flags": n_flags,
+            "review_reasons": reasons,
+        }
+
+    return ds.map(_map, num_proc=_safe_num_proc(num_proc), desc="Heuristic grid search (QC-gated)")
+
+
+def _run_transformer_scored_ds(
+    ds: Dataset,
+    pipe,
+    batch_size: int,
+    beam_size: int,
+    protac_smiles_col: str,
+    fix_predictions: bool,
+    verbose: int,
+    representative_e3s_fp: List,
+    representative_whs_fp: List,
+) -> Dataset:
+    """Run the Transformer and keep whichever beam scores best under `score_split`,
+    instead of just the first beam that happens to reassemble (contrast with
+    _run_transformer_ds, used by the non-adaptive "transformer" strategies).
+    """
+    from protac_splitter.llms.model_utils import run_pipeline
+    from protac_splitter.evaluation import count_flags, score_split
+
+    raw_preds = run_pipeline(
+        pipe, ds, batch_size, is_causal_language_model=False, smiles_column=protac_smiles_col,
+    )
+    preds_df = pd.DataFrame(raw_preds)
+    preds_df[protac_smiles_col] = ds[protac_smiles_col]
+    preds_ds = Dataset.from_pandas(preds_df)
+
+    def _map(row):
+        protac = row[protac_smiles_col]
+        best_pred, best_key, best_flags = None, None, (0, "no_valid_beam")
+        for i in range(beam_size):
+            v = row.get(f"pred_n{i}")
+            if fix_predictions:
+                v = fix_prediction(protac, v, verbose=verbose)
+            if v is None:
+                continue
+            score = score_split(
+                protac, v,
+                representative_e3s_fp=representative_e3s_fp,
+                representative_whs_fp=representative_whs_fp,
+            )
+            n_flags, reasons = count_flags(score)
+            key = _rank_key(score, n_flags, "Transformer")
+            if best_key is None or key < best_key:
+                best_key, best_pred, best_flags = key, v, (n_flags, reasons)
+            if key[0] is False and key[1] == 0:
+                break
+        n_flags, reasons = best_flags
+        return {
+            protac_smiles_col: protac,
+            "default_pred_n0": best_pred,
+            "model_name": "Transformer",
+            "heuristic_params": None,
+            "n_flags": n_flags,
+            "review_reasons": reasons,
+        }
+
+    return preds_ds.map(_map, desc="Transformer beam search (QC-scored)")
+
+
+def _run_adaptive_ds(
+    ds: Dataset,
+    protac_smiles_col: str,
+    grid: List[Tuple[float, bool]],
+    representative_e3s_fp: List,
+    representative_whs_fp: List,
+    betweenness_approx_frac: Optional[float],
+    use_xgboost: bool,
+    xgboost_model: Optional[GraphEdgeClassifier],
+    use_transformer: bool,
+    pipe,
+    batch_size: int,
+    beam_size: int,
+    fix_predictions: bool,
+    num_proc: int,
+    verbose: int,
+) -> Dataset:
+    """QC-gated escalation: heuristic parameter grid first (cheap, no model download),
+    then XGBoost, then — only if explicitly enabled — the Transformer (GPU + beam
+    search, by far the most expensive). Each stage only runs on rows the previous stage
+    left flagged; a row is only replaced by a later stage's candidate when it scores
+    strictly better under `score_split`, so escalation never regresses a row that
+    already has a good split, and a structurally-valid-but-flagged candidate is always
+    kept in preference to a stage that fails outright. Heuristic and XGBoost candidates
+    are additionally checked with E3/POI roles swapped (`_best_orientation`) before
+    they compete for a row, since their role assignment can be wrong even when the
+    bond cuts themselves are right.
+
+    Adds three columns beyond the usual [protac_smiles_col, "default_pred_n0",
+    "model_name"] contract: "heuristic_params" (which grid point won, when
+    model_name == "Heuristic"), and "n_flags" / "review_reasons" (from
+    evaluation.count_flags) — so a batch run over test data also doubles as a QC pass,
+    and the winning heuristic params across that set are a direct signal for what the
+    package defaults should be.
+    """
+    from protac_splitter.evaluation import count_flags, score_split
+
+    result_df = _run_heuristic_grid_ds(
+        ds, protac_smiles_col, grid, representative_e3s_fp, representative_whs_fp,
+        betweenness_approx_frac, num_proc, verbose,
+    ).to_pandas()
+
+    def _maybe_replace(row_i: int, protac: str, candidate_pred: Optional[str], model_name: str) -> None:
+        current_score = score_split(
+            protac, result_df.at[row_i, "default_pred_n0"],
+            representative_e3s_fp=representative_e3s_fp,
+            representative_whs_fp=representative_whs_fp,
+        )
+        current_n_flags, _ = count_flags(current_score)
+        current_key = _rank_key(current_score, current_n_flags, result_df.at[row_i, "model_name"])
+
+        candidate_score = score_split(
+            protac, candidate_pred,
+            representative_e3s_fp=representative_e3s_fp,
+            representative_whs_fp=representative_whs_fp,
+        )
+        candidate_n_flags, candidate_reasons = count_flags(candidate_score)
+        candidate_key = _rank_key(candidate_score, candidate_n_flags, model_name)
+
+        if candidate_key < current_key:
+            result_df.at[row_i, "default_pred_n0"] = candidate_pred
+            result_df.at[row_i, "model_name"] = model_name
+            result_df.at[row_i, "heuristic_params"] = None
+            result_df.at[row_i, "n_flags"] = candidate_n_flags
+            result_df.at[row_i, "review_reasons"] = candidate_reasons
+
+    if use_xgboost:
+        flagged = result_df.index[result_df["n_flags"] > 0].tolist()
+        if flagged:
+            xgb_ds = _run_xgboost_ds(
+                ds.select(flagged), xgboost_model, representative_e3s_fp, protac_smiles_col,
+                betweenness_threshold=grid[0][0], use_capacity_weight=grid[0][1],
+                betweenness_approx_frac=betweenness_approx_frac,
+            )
+            for local_i, row_i in enumerate(flagged):
+                protac = ds[row_i][protac_smiles_col]
+                # XGBoost's own distinguish_fragments() role assignment can be wrong
+                # even when the bond cuts are right (see _best_orientation) — check
+                # both orientations before it competes with the current best.
+                candidate_pred, _, _, _ = _best_orientation(
+                    protac, xgb_ds[local_i]["default_pred_n0"],
+                    representative_e3s_fp, representative_whs_fp, "XGBoost",
+                )
+                _maybe_replace(row_i, protac, candidate_pred, "XGBoost")
+
+    if use_transformer:
+        flagged = result_df.index[result_df["n_flags"] > 0].tolist()
+        if flagged:
+            transformer_ds = _run_transformer_scored_ds(
+                ds.select(flagged), pipe, batch_size, beam_size, protac_smiles_col,
+                fix_predictions, verbose, representative_e3s_fp, representative_whs_fp,
+            )
+            for local_i, row_i in enumerate(flagged):
+                _maybe_replace(
+                    row_i, ds[row_i][protac_smiles_col], transformer_ds[local_i]["default_pred_n0"], "Transformer",
+                )
+
+    return Dataset.from_pandas(result_df, preserve_index=False)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -488,6 +806,9 @@ def split_protac(
         betweenness_threshold: float = 0.4,
         use_capacity_weight: bool = False,
         betweenness_approx_frac: float = None,
+        adaptive_heuristic_grid: Optional[List[Tuple[float, bool]]] = None,
+        adaptive_use_xgboost: bool = True,
+        adaptive_use_transformer: bool = False,
         model: Optional[Literal[
             "transformer",
             "xgboost",
@@ -497,6 +818,7 @@ def split_protac(
             "xgboost+heuristic",
             "heuristic->xgboost",
             "heuristic+xgboost",
+            "adaptive",
         ]] = None,
 ) -> Union[Dict[str, str], List[Dict[str, str]]]:
     """Split a PROTAC SMILES into E3 ligand, linker, and POI warhead.
@@ -523,6 +845,15 @@ def split_protac(
     | ``"xgboost+heuristic"``       | Placeholder — not yet implemented.                    |
     +-------------------------------+-------------------------------------------------------+
     | ``"heuristic+xgboost"``       | Reserved for future use.                              |
+    +-------------------------------+-------------------------------------------------------+
+    | ``"adaptive"``                | QC-gated escalation: a small heuristic parameter      |
+    |                               | grid first, then XGBoost, then (if enabled) the       |
+    |                               | Transformer -- each stage only runs on molecules      |
+    |                               | the previous stage left flagged by                    |
+    |                               | evaluation.score_split. Slower than a single          |
+    |                               | strategy but generally higher quality; also           |
+    |                               | reports which method/params won. See the              |
+    |                               | adaptive_* args below.                                |
     +-------------------------------+-------------------------------------------------------+
 
     Args:
@@ -557,12 +888,27 @@ def split_protac(
             betweenness centrality (heuristic only). Default ``False``.
         betweenness_approx_frac: Fraction of nodes to sample for approximate
             betweenness centrality. ``None`` uses exact computation. Default ``None``.
+        adaptive_heuristic_grid: Only used when ``model="adaptive"``. List of
+            ``(betweenness_threshold, use_capacity_weight)`` pairs to try, in order,
+            for the heuristic stage. ``None`` uses a built-in 6-point grid seeded with
+            the package default first, so a molecule the default already splits
+            cleanly costs exactly one heuristic call.
+        adaptive_use_xgboost: Only used when ``model="adaptive"``. Whether the second
+            stage (XGBoost) runs on molecules the heuristic grid left flagged.
+            Default ``True``.
+        adaptive_use_transformer: Only used when ``model="adaptive"``. Whether the
+            third stage (Transformer) runs on molecules still flagged after XGBoost.
+            Default ``False`` since it requires the ``[transformer]`` extra and a GPU
+            is recommended; the first two stages already cover most cases.
 
     Returns:
         * Single string input → ``dict`` with keys ``protac_smiles_col``,
           ``"default_pred_n0"`` (``"e3.linker.poi"`` format), and ``"model_name"``.
         * List input → list of such dicts.
         * DataFrame input → DataFrame with the same columns.
+        * ``model="adaptive"`` additionally includes ``"heuristic_params"`` (which
+          grid point won, when ``model_name == "Heuristic"``, else ``None``),
+          ``"n_flags"``, and ``"review_reasons"`` (from ``evaluation.count_flags``).
     """
     model_str = _resolve_model(use_transformer, use_xgboost, model)
     if model_str not in _VALID_MODELS:
@@ -571,15 +917,20 @@ def split_protac(
         )
 
     # Load required resources up-front so errors surface before any SMILES processing.
-    needs_xgboost = "xgboost" in model_str
-    needs_transformer = "transformer" in model_str
+    is_adaptive = model_str == "adaptive"
+    needs_xgboost = "xgboost" in model_str or (is_adaptive and adaptive_use_xgboost)
+    needs_transformer = "transformer" in model_str or (is_adaptive and adaptive_use_transformer)
+    # Adaptive mode always needs both reference fingerprint sets to score candidates
+    # (evaluation.score_split), regardless of whether XGBoost itself is enabled.
+    needs_reference_fps = needs_xgboost or is_adaptive
 
-    if needs_xgboost:
+    if needs_reference_fps:
         representative_e3s_fp = get_representative_e3s_fp()
-        xgboost_model = load_graph_edge_classifier_from_cache()
     else:
         representative_e3s_fp = None
-        xgboost_model = None
+    representative_whs_fp = get_representative_whs_fp() if is_adaptive else None
+
+    xgboost_model = load_graph_edge_classifier_from_cache() if needs_xgboost else None
 
     if needs_transformer:
         try:
@@ -644,6 +995,23 @@ def split_protac(
     elif model_str == "heuristic":
         preds_ds = _run_heuristic_ds(
             ds, protac_smiles_col, **_graph_kwargs, num_proc=num_proc, verbose=verbose,
+        )
+    elif model_str == "adaptive":
+        preds_ds = _run_adaptive_ds(
+            ds, protac_smiles_col,
+            grid=adaptive_heuristic_grid or _DEFAULT_ADAPTIVE_GRID,
+            representative_e3s_fp=representative_e3s_fp,
+            representative_whs_fp=representative_whs_fp,
+            betweenness_approx_frac=betweenness_approx_frac,
+            use_xgboost=adaptive_use_xgboost,
+            xgboost_model=xgboost_model,
+            use_transformer=adaptive_use_transformer,
+            pipe=pipe,
+            batch_size=batch_size,
+            beam_size=beam_size,
+            fix_predictions=fix_predictions,
+            num_proc=num_proc,
+            verbose=verbose,
         )
     else:
         raise NotImplementedError(

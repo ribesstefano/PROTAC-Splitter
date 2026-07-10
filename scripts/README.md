@@ -8,6 +8,7 @@ This directory contains scripts that can be used to interact with the PROTAC-Spl
 - [Finetuning Model](#finetuning-model)
 - [Collect LLMs Predictions](#collect-llms-predictions)
 - [Score Predictions](#score-predictions)
+- [QC Dataset](#qc-dataset)
 - [Plotting Scores](#plotting-scores)
 - [Plotting the Chemical Space](#plotting-the-chemical-space)
 - [PROTAC-Splitter App](#protac-splitter-app)
@@ -68,6 +69,92 @@ Please run `python scripts/score_predictions.py --help` for more information on 
 ```bash
 python scripts/score_predictions.py --log_dir="logs" --num_proc=8
 ```
+
+## QC Dataset
+
+To flag suspect rows in a PROTAC-Splitter dataset or prediction CSV for manual review — foreign/non-PROTAC molecules, unstable or synthesis-artifact substructures, implausible linkers, and splits that are structurally valid but likely cut at the wrong bonds — you can use the [`scripts/qc_dataset.py`](../scripts/qc_dataset.py) script. The actual checks live in `protac_splitter.data.curation.dataset_qc`. Nothing is deleted or auto-corrected: every row gets a `n_flags` count and a `review_reasons` string, and the output CSV is sorted worst-first for triage.
+
+Please run `python scripts/qc_dataset.py --help` for more information on the arguments. Example of usage:
+
+```bash
+python scripts/qc_dataset.py --input_csv="tack_smiles_split.csv" --n_jobs=8
+```
+
+By default the output is written next to the input as `<input_csv stem>.qc.csv`. The `--run_heuristic_agreement` and `--run_xgboost_confidence` flags (on by default) re-split every molecule with the betweenness-centrality heuristic and score it with the XGBoost edge classifier, respectively — both add runtime but are the main split-correctness signals. Set `--limit N` for a quick smoke test on the first N rows before running the full dataset.
+
+### Output columns
+
+**Structural validity**
+
+| Column | Meaning |
+|---|---|
+| `valid_protac_smiles` | Original SMILES parses in RDKit. |
+| `pred_valid` | The `e3.linker.poi` prediction string parses. |
+| `has_three_substructures` | Prediction has exactly 2 dots (3 fragments). |
+| `has_all_attachment_points` | Exactly two `[*:1]` and two `[*:2]` present. |
+| `reassembly_ok` | Gluing the 3 fragments back together reproduces the original molecule exactly. |
+
+**Fragment size / connectivity**
+
+| Column | Meaning |
+|---|---|
+| `e3_mw`, `poi_mw` | Molecular weight of that fragment (dummy atom stripped, capped with H). |
+| `e3_heavy_atoms`, `poi_heavy_atoms` | Heavy-atom count of that fragment. |
+| `e3_disconnected`, `poi_disconnected` | True if the fragment itself contains a `.` (multiple pieces) — usually a parsing artifact. |
+| `flag_e3_out_of_range`, `flag_poi_out_of_range` | MW falls outside a plausible range for that role (E3: 150–700 Da, POI: 120–900 Da). |
+
+**Linker topology**
+
+| Column | Meaning |
+|---|---|
+| `linker_heavy_atoms_between` | Heavy atoms strictly between the two attachment points along the shortest path. |
+| `linker_branch_points` | Non-ring atoms in the linker with 3+ connections (real tree-branching, not just a substituted ring like piperazine). |
+| `linker_ring_count` | Rings present in the linker fragment. |
+| `flag_linker_too_short` | ≤1 heavy atom between attachment points — suspiciously little separation between E3 and POI. |
+| `flag_linker_branchy` | 2+ branch points — linkers are normally near-linear chains. |
+
+**Chemical plausibility**
+
+| Column | Meaning |
+|---|---|
+| `brenk_hits` | Semicolon-list of RDKit BRENK unstable/reactive substructure matches on the *intact* molecule (informational — includes categories that don't gate the flag). |
+| `flag_unstable` | True if any BRENK hit falls outside the allowlisted categories (excludes `phthalimide`/`Aliphatic_long_chain`/`aniline`, which are common and legitimate in real PROTACs). |
+| `leaving_group_hits` | Semicolon-list of matched synthesis-artifact SMARTS (boronates, silyl ethers, Boc/Cbz/Fmoc, tosylate/mesylate, azide, diazo, alkyl halide). |
+| `flag_leaving_group` | True if any leaving-group pattern matched anywhere in the molecule. |
+
+**Split correctness — known-ligand identity**
+
+| Column | Meaning |
+|---|---|
+| `e3_sim_to_known_e3` | Max Tanimoto similarity of the predicted E3 fragment to the curated E3-ligand reference set. |
+| `e3_sim_to_known_wh` | Same fragment's similarity to the warhead reference set (for detecting swaps). |
+| `poi_sim_to_known_wh`, `poi_sim_to_known_e3` | Same, mirrored for the POI fragment. |
+| `flag_e3_low_similarity`, `flag_poi_low_similarity` | Similarity to its own expected reference set is below threshold (0.2 default) — fragment doesn't look like a known E3 ligand / warhead. |
+| `flag_role_swap_suspected` | The E3 fragment looks more like a warhead *and* the POI fragment looks more like an E3 ligand than the reverse — likely the two roles got swapped. |
+
+**Split correctness — cross-method agreement**
+
+| Column | Meaning |
+|---|---|
+| `heuristic_e3` / `heuristic_linker` / `heuristic_poi` | What the betweenness-centrality heuristic (independent of the model that made the given prediction) splits this same molecule into. |
+| `heuristic_min_similarity` | The lowest per-role Tanimoto similarity between the given prediction and the heuristic's split (worst of the three fragments). |
+| `flag_method_disagreement` | `heuristic_min_similarity` below threshold (0.6 default) — the two methods cut the molecule substantially differently. |
+
+**Split correctness — model confidence**
+
+| Column | Meaning |
+|---|---|
+| `xgb_top1_proba` | XGBoost edge classifier's probability for its own top-ranked cut bond on this molecule. |
+| `xgb_margin` | Gap between the top-1 and top-2 candidate cut-bond probabilities — a small margin means the model itself was choosing between two similarly-plausible bonds. |
+| `flag_low_confidence` | `xgb_margin` below threshold (0.15 default). |
+
+**Rollup**
+
+| Column | Meaning |
+|---|---|
+| `flag_structural` | Shorthand for "any of the 5 structural checks failed." |
+| `n_flags` | Count of all triggered `flag_*` columns — the output CSV is sorted by this, worst first. |
+| `review_reasons` | Semicolon-joined names of every triggered flag, for quick eyeballing without scanning the boolean columns individually. |
 
 ## Plotting Scores
 

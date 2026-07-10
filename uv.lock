@@ -2762,7 +2762,7 @@ wheels = [
 
 [[package]]
 name = "protac-splitter"
-version = "1.0.0"
+version = "1.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "datasets" },

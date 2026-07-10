@@ -25,6 +25,7 @@ SplittingModel = Literal[
     "heuristic->xgboost",
     "xgboost+heuristic",
     "heuristic+xgboost",
+    "adaptive",
 ]
 
 
@@ -62,6 +63,10 @@ class SplitArgs:
       heuristic->xgboost  — Heuristic first; XGBoost replaces failed predictions.
       xgboost+heuristic   — Run both and pick the best result (not yet implemented).
       heuristic+xgboost   — Reserved for future use.
+      adaptive            — QC-gated escalation: a heuristic parameter grid, then
+                            XGBoost, then (if --adaptive-use-transformer) the
+                            Transformer — each stage only runs on molecules the
+                            previous stage left flagged. See --adaptive-use-*.
     """
 
     # --- Transformer-specific options (ignored for xgboost / heuristic) ---
@@ -93,6 +98,17 @@ class SplitArgs:
     """Fraction of nodes (0.0–1.0) to sample when approximating betweenness
     centrality. None (default) uses the exact algorithm. Lower values are
     faster but less accurate — e.g. 0.5 samples half the nodes."""
+
+    # --- Adaptive-mode options (only used when --model adaptive) ---
+    adaptive_use_xgboost: bool = True
+    """Whether the XGBoost stage runs on molecules the heuristic grid left flagged."""
+
+    adaptive_use_transformer: bool = False
+    """Whether the Transformer stage runs on molecules still flagged after XGBoost.
+    Default False: requires the [transformer] extra and a GPU is recommended. The
+    custom heuristic-grid override (a list of (threshold, capacity) pairs) is
+    Python-API only — use protac_splitter.split_protac(..., adaptive_heuristic_grid=...)
+    for that."""
 
     # --- General ---
     num_proc: int = 1
@@ -127,6 +143,11 @@ def _print_result(result: dict, fmt: str) -> None:
         print(f"E3     : {parts.get('e3')}")
         print(f"Linker : {parts.get('linker')}")
         print(f"POI    : {parts.get('poi')}")
+        # Only present for model="adaptive" — see evaluation.score_split/count_flags.
+        if "n_flags" in result:
+            reasons = result.get("review_reasons") or "none"
+            params = result.get("heuristic_params")
+            print(f"Flags  : {result['n_flags']} ({reasons})" + (f" [{params}]" if params else ""))
         print()
 
 
@@ -147,6 +168,8 @@ def main() -> None:
         betweenness_threshold=args.betweenness_threshold,
         use_capacity_weight=args.use_capacity_weight,
         betweenness_approx_frac=args.betweenness_approx_frac,
+        adaptive_use_xgboost=args.adaptive_use_xgboost,
+        adaptive_use_transformer=args.adaptive_use_transformer,
     )
 
     try:
