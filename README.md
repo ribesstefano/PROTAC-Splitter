@@ -86,7 +86,7 @@ protac = (
 )
 result = split_protac(protac)
 print(result)
-# {'SMILES': '...', 'default_pred_n0': 'e3_smiles.linker_smiles.poi_smiles', 'model_name': 'XGBoost'}
+# {'SMILES': '...', 'default_pred_n0': 'e3_smiles.linker_smiles.poi_smiles', 'model_name': 'Heuristic', 'heuristic_params': '...', 'n_flags': 0, 'review_reasons': ''}
 
 # --- List of SMILES ---
 results = split_protac([protac, protac])
@@ -105,7 +105,7 @@ print(result_df[["PROTAC SMILES", "default_pred_n0", "model_name"]].head())
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `protac_smiles` | `str \| list \| DataFrame` | *(required)* | SMILES to split. Single string, list of strings, or DataFrame with a `protac_smiles_col` column. |
-| `model` | `str` | `"xgboost"` | Splitting strategy. See [Splitting strategies](#splitting-strategies) for valid values. |
+| `model` | `str` | `"adaptive"` | Splitting strategy. See [Splitting strategies](#splitting-strategies) for valid values. |
 | `fix_predictions` | `bool` | `True` | Apply cheminformatics post-processing to Transformer predictions before reassembly check. |
 | `protac_smiles_col` | `str` | `"SMILES"` | Column name for SMILES when input is a DataFrame; also used as key name in output dicts. |
 | `batch_size` | `int` | `1` | Inference batch size (Transformer only). |
@@ -116,15 +116,26 @@ print(result_df[["PROTAC SMILES", "default_pred_n0", "model_name"]].head())
 | `betweenness_threshold` | `float` | `0.4` | Betweenness-centrality cut-off for the heuristic. Higher values are more conservative. |
 | `use_capacity_weight` | `bool` | `False` | Weight graph edges by bond order when computing betweenness centrality (heuristic only). |
 | `betweenness_approx_frac` | `float \| None` | `None` | Fraction of nodes to sample for approximate betweenness centrality. `None` uses exact computation. |
+| `adaptive_heuristic_grid` | `list[tuple[float, bool]] \| None` | `None` | `model="adaptive"` only. `(betweenness_threshold, use_capacity_weight)` pairs to try, in order. `None` uses a built-in 6-point grid seeded with the package default first. |
+| `adaptive_use_xgboost` | `bool` | `True` | `model="adaptive"` only. Whether the XGBoost stage runs on molecules the heuristic grid left flagged. |
+| `adaptive_use_transformer` | `bool` | `False` | `model="adaptive"` only. Whether the Transformer stage runs on molecules still flagged after XGBoost. Off by default (needs the `[transformer]` extra; GPU recommended). |
 | `use_transformer` | `bool \| None` | `None` | **Deprecated.** Use `model='transformer'` instead. |
 | `use_xgboost` | `bool \| None` | `None` | **Deprecated.** Use `model='xgboost'` instead. |
+
+`model="adaptive"` returns three extra keys beyond the usual `default_pred_n0` / `model_name`: `heuristic_params` (which grid point won, when `model_name == "Heuristic"`, else `None`), `n_flags`, and `review_reasons` — a semicolon-joined list of the [`evaluation.score_split()`](protac_splitter/evaluation.py) plausibility checks that still fired on the winning candidate (empty string if none). Running `model="adaptive"` over a batch of test molecules and looking at which `heuristic_params` wins most often is a good way to pick new defaults for `betweenness_threshold` / `use_capacity_weight`.
+
+```python
+result = split_protac(protac, model="adaptive")
+print(result["model_name"], result["heuristic_params"], result["n_flags"], result["review_reasons"])
+# 'Heuristic' 'betweenness_threshold=0.4,use_capacity_weight=False' 0 ''
+```
 
 ### Command-line interface 🖥️
 
 After installation the `protac-splitter` command is available:
 
 ```bash
-# Split a single SMILES with the default XGBoost model
+# Split a single SMILES with the default adaptive strategy
 protac-splitter --smiles "CC(C)(C)S(=O)(=O)c1cc2c..."
 
 # Use the heuristic algorithm (no model download)
@@ -144,6 +155,12 @@ protac-splitter --smiles "..." --model "transformer->xgboost"
 
 # XGBoost with heuristic fallback
 protac-splitter --smiles "..." --model "xgboost->heuristic"
+
+# QC-gated escalation (default): heuristic grid -> XGBoost -> (optionally)
+# Transformer, scored by evaluation.score_split; prints which method/params
+# won plus the remaining QC flags (if any) -- equivalent to omitting --model
+protac-splitter --smiles "..." --model adaptive
+protac-splitter --smiles "..." --model adaptive --adaptive-use-transformer
 
 # Batch processing from CSV
 protac-splitter --input-csv protacs.csv --smiles-col "SMILES" \
@@ -172,7 +189,8 @@ PROTAC-Splitter supports multiple strategies, selectable via `--model` (CLI) or 
 
 | Value | Description |
 |---|---|
-| `xgboost` | XGBoost graph edge classifier — default, no GPU required. Model downloaded automatically on first use (~17 MB). |
+| `adaptive` *(default)* | QC-gated escalation, not just fallback-on-failure: a small heuristic `(betweenness_threshold, use_capacity_weight)` grid runs first, then XGBoost, then — only with `--adaptive-use-transformer` / `adaptive_use_transformer=True` — the Transformer. Each stage only runs on molecules the previous stage left flagged by [`evaluation.score_split()`](protac_splitter/evaluation.py) (structural validity, fragment size, linker topology, known-ligand similarity), and a later stage only replaces the current best if it scores strictly better. Slower than a single strategy, but reports which method/params won — see [`adaptive_*` arguments](#python-api) above. |
+| `xgboost` | XGBoost graph edge classifier — no GPU required. Model downloaded automatically on first use (~17 MB). |
 | `heuristic` | Betweenness-centrality graph algorithm — no model download needed. |
 | `transformer` | Seq2seq Transformer (requires `[transformer]` extra; GPU recommended). |
 | `transformer->xgboost` | Transformer first; XGBoost replaces any failed predictions. |
@@ -183,7 +201,7 @@ PROTAC-Splitter supports multiple strategies, selectable via `--model` (CLI) or 
 > [!IMPORTANT]  
 > The above strategies must be passed as a double-quoted string in the CLI (e.g., `--model "transformer->xgboost"`). The `>` operator is a shell redirection operator, so it must be quoted to avoid shell interpretation.
 
-The default strategy is `heuristic->xgboost`, which is the most robust, fastest and accurate for general use.
+The default strategy is `adaptive`, which trades speed for a QC-scored search over methods and parameters, generally giving the best-quality split. For higher-throughput batch jobs where a single robust pass is enough, `heuristic->xgboost` is a faster alternative. See [docs/adaptive_splitting.md](docs/adaptive_splitting.md) for the full pipeline reference: every stage, every QC flag it checks, and how each threshold was calibrated.
 
 > [!TIP]
 > We recommend increasing the `num_proc` argument to maximize the amount of parallelism when using the default strategy.
