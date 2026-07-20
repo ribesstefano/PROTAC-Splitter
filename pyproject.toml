@@ -19,7 +19,7 @@ dependencies = [
   "numpy>=1.26,<3",
   "pandas>=2.2",
   "networkx>=2.4",
-  "scikit-learn>=1.6,<1.7",
+  "scikit-learn>=1.7,<2",
   "imbalanced-learn>=0.13",
   "xgboost>=2.0,<3.0",
   "joblib>=1.5",
@@ -73,3 +73,8 @@ packages = ["protac_splitter"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.3.0",
+]
