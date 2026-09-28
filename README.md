@@ -11,7 +11,7 @@ A Gradio app is available to split PROTAC molecules and visualize the results: [
 ## Table of Contents 📜
 
 - [Installation](#installation)
-- [Configuration](#configuration)
+- [Models Cache Configuration](#models-cache-configuration)
 - [Usage](#usage)
   - [Python API](#python-api)
   - [Command-line interface](#command-line-interface)
@@ -54,7 +54,9 @@ source .venv/bin/activate
 
 ## Models Cache Configuration ⚙️
 
-Pretrained models are downloaded automatically on first use. To set a custom cache directory, you can use the `PROTAC_SPLITTER_CACHE_DIR` environment variable. To do so, create a `.env` file in your working directory (or copy `.env.example`) to override defaults:
+Both the XGBoost ([`ailab-bio/PROTAC-Splitter-XGBoost`](https://huggingface.co/ailab-bio/PROTAC-Splitter-XGBoost)) and Transformer ([`ailab-bio/PROTAC-Splitter`](https://huggingface.co/ailab-bio/PROTAC-Splitter)) models are hosted on the HuggingFace Hub and downloaded automatically on first use — the XGBoost model via `GraphEdgeClassifier.from_pretrained()`, the Transformer via `transformers`. Both share the same standard `huggingface_hub` cache, controlled by the `HF_HOME` environment variable (default `~/.cache/huggingface`; see [here](https://huggingface.co/docs/huggingface_hub/en/guides/manage-cache) for details).
+
+To set a custom cache directory, create a `.env` file in your working directory (or copy `.env.example`) to override defaults:
 
 ```bash
 cp .env.example .env
@@ -62,15 +64,14 @@ cp .env.example .env
 
 ```ini
 # .env
-# Directory where pretrained models are cached (default: ~/.cache/protac_splitter)
-PROTAC_SPLITTER_CACHE_DIR=~/.cache/protac_splitter
+# Directory where pretrained models (XGBoost + Transformer) are cached
+HF_HOME=~/.cache/huggingface
 ```
 
 Environment variables are loaded automatically via `python-dotenv` when the package is imported.
 
-> [!NOTE]
-> The XGBoost model (~17 MB) is cached to `PROTAC_SPLITTER_CACHE_DIR` on the first call to `split_protac()`.  
-> The Transformer model, if installed, is cached by HuggingFace `transformers` in `HF_HOME` (see [here](https://huggingface.co/docs/datasets/en/cache)).
+> [!TIP]
+> On a shared/HPC filesystem where `~/.cache` may hit a home-directory quota, point `HF_HOME` at a directory with more headroom — both models will follow it.
 
 ## Usage 🚀
 
@@ -221,7 +222,7 @@ Then open [http://localhost:7860](http://localhost:7860) in your browser to use 
 Curated datasets and trained models are available on Zenodo:  
 [https://doi.org/10.5281/zenodo.15797309](https://doi.org/10.5281/zenodo.15797309)
 
-The XGBoost model is downloaded automatically to `$PROTAC_SPLITTER_CACHE_DIR` on first use. No manual download step is needed.
+At runtime, the XGBoost model is instead downloaded automatically from the HuggingFace Hub ([`ailab-bio/PROTAC-Splitter-XGBoost`](https://huggingface.co/ailab-bio/PROTAC-Splitter-XGBoost)) and cached under `$HF_HOME` on first use — no manual download step is needed. See [Models Cache Configuration](#models-cache-configuration) above.
 
 ## Contributing 🤝
 

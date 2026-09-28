@@ -1,5 +1,4 @@
 import warnings
-from pathlib import Path
 from typing import Union, Optional, Dict, List, Literal, Tuple
 
 # Import first, before numpy-linked packages (rdkit/datasets/pandas below): this sets
@@ -7,7 +6,7 @@ from typing import Union, Optional, Dict, List, Literal, Tuple
 # which some of them only read once, at first load. Importing it after would be too
 # late and leave those libraries free to over-provision threads on cgroup-limited
 # containers.
-from protac_splitter.config import get_cache_dir, get_hf_token
+from protac_splitter.config import get_hf_token
 
 from rdkit import Chem
 from datasets import Dataset
@@ -49,28 +48,24 @@ _DEFAULT_ADAPTIVE_GRID: List[Tuple[float, bool]] = [
 
 
 def load_graph_edge_classifier_from_cache(
-    cache_dir: Union[str, Path, None] = None,
     model_filename: str = _XGBOOST_MODEL_FILENAME,
     repo_id: str = _XGBOOST_HF_REPO_ID,
 ) -> GraphEdgeClassifier:
     """Load the XGBoost GraphEdgeClassifier via ``GraphEdgeClassifier.from_pretrained``,
-    downloading from the HuggingFace Hub on first use.
+    downloading from the HuggingFace Hub on first use and caching in the standard
+    HuggingFace Hub cache (``HF_HOME`` / ``HUGGINGFACE_HUB_CACHE``) — the same cache
+    used for the Transformer model.
 
     Args:
-        cache_dir: Directory to cache the download in. Defaults to ``get_cache_dir()``
-            (controlled by ``PROTAC_SPLITTER_CACHE_DIR`` env var / .env file).
         model_filename: Filename of the joblib model within the repo.
         repo_id: HuggingFace Hub model repo to download from.
 
     Returns:
         GraphEdgeClassifier: Loaded classifier.
     """
-    cache_path = Path(cache_dir).expanduser() if cache_dir is not None else get_cache_dir()
-    cache_path.mkdir(parents=True, exist_ok=True)
     return GraphEdgeClassifier.from_pretrained(
         repo_id=repo_id,
         filename=model_filename,
-        cache_dir=cache_path,
         token=get_hf_token(),
     )
 
