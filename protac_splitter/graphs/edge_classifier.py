@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Union, Any, Literal
 
 import pandas as pd
 import numpy as np
+from huggingface_hub import hf_hub_download
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
@@ -24,6 +25,9 @@ except ImportError:
     HAS_VISUALIZATION = False    
 
 from .edge_features import extract_edge_features, get_edge_features
+
+_DEFAULT_XGBOOST_REPO_ID = "ailab-bio/PROTAC-Splitter-XGBoost"
+_DEFAULT_XGBOOST_FILENAME = "PROTAC-Splitter-XGBoost.joblib"
 
 
 class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
@@ -147,6 +151,45 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
         if clf is not None and hasattr(clf, "set_params"):
             clf.set_params(n_jobs=1)
         return model
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        repo_id: str = _DEFAULT_XGBOOST_REPO_ID,
+        filename: str = _DEFAULT_XGBOOST_FILENAME,
+        cache_dir: Optional[Union[str, Path]] = None,
+        token: Optional[str] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+    ) -> "GraphEdgeClassifier":
+        """Load a GraphEdgeClassifier from the HuggingFace Hub.
+
+        Mirrors the familiar ``AutoModel.from_pretrained(repo_id)`` pattern: the model
+        file is downloaded (and cached for subsequent calls) via ``huggingface_hub``,
+        then deserialized with :meth:`load`.
+
+        Args:
+            repo_id: HuggingFace Hub model repo, e.g. ``"ailab-bio/PROTAC-Splitter-XGBoost"``.
+            filename: Filename of the joblib model within the repo.
+            cache_dir: Directory to cache the download in. Defaults to the standard
+                HuggingFace Hub cache (``HF_HOME`` / ``HUGGINGFACE_HUB_CACHE``).
+            token: HuggingFace token, for private repos. Defaults to no auth.
+            revision: Git revision (branch, tag, or commit SHA) to load. Defaults to
+                the repo's default branch.
+            force_download: Re-download even if a cached copy already exists.
+
+        Returns:
+            GraphEdgeClassifier: Loaded classifier.
+        """
+        local_path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            cache_dir=str(cache_dir) if cache_dir is not None else None,
+            token=token,
+            revision=revision,
+            force_download=force_download,
+        )
+        return cls.load(local_path)
 
     @staticmethod
     def extract_graph_features(

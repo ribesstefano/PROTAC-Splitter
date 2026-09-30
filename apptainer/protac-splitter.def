@@ -1,0 +1,99 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+# Full-fledged PROTAC-Splitter profile: heuristic + XGBoost + Transformer
+# splitting strategies (GPU-ready), the CLI, and the Gradio app -- installed
+# from the "scripts" pyproject extra (pulls in "transformer": torch,
+# transformers, accelerate; plus gradio/matplotlib/seaborn for the app).
+# PyPI wheels for torch/xgboost already vendor the CUDA runtime they need, so
+# a plain ubuntu:22.04 base + `--nv` at run time is enough -- no nvidia/cuda
+# base image is needed for GPU support.
+
+%files
+    pyproject.toml   /opt/repo/pyproject.toml
+    uv.lock          /opt/repo/uv.lock
+    README.md        /opt/repo/README.md
+    protac_splitter  /opt/repo/protac_splitter
+    scripts          /opt/repo/scripts
+
+%post
+    set -eux
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    # ca-certificates/curl/git: fetch uv and resolve deps below.
+    # build-essential: some pinned deps (e.g. numba's llvmlite) build native
+    # extensions during install.
+    # libxrender1/libxext6/libsm6: headless X11 libs rdkit.Chem.Draw's Cairo
+    # backend dlopens at import time (no display needed, just the .so) --
+    # confirmed missing by running the %test stanza below against ubuntu:22.04.
+    apt-get install -y --no-install-recommends \
+        ca-certificates curl git build-essential \
+        libxrender1 libxext6 libsm6
+    rm -rf /var/lib/apt/lists/*
+
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uv-bin sh
+    export PATH="/opt/uv-bin:${PATH}"
+    uv python install 3.11
+
+    export UV_CACHE_DIR=/opt/uv-cache
+    export UV_PROJECT_ENVIRONMENT=/opt/venv
+    cd /opt/repo
+    uv sync --frozen --extra scripts
+    rm -rf /opt/uv-cache
+
+%environment
+    export VIRTUAL_ENV=/opt/venv
+    export PATH=/opt/uv-bin:/opt/venv/bin:${PATH}
+    export UV_PROJECT_ENVIRONMENT=/opt/venv
+    # Where split_protac() caches models auto-downloaded from the HuggingFace
+    # Hub (XGBoost edge classifier + Transformer share this cache). Override at
+    # run time, e.g. `apptainer exec --env HF_HOME=/some/path ...`.
+    export HF_HOME="${HF_HOME:-$HOME/.cache/huggingface}"
+
+%runscript
+    cd /opt/repo
+    exec protac-splitter "$@"
+
+%apprun gradio
+    cd /opt/repo
+    exec python scripts/protac_splitter_app.py "$@"
+
+%test
+    # Smoke-test the heavy imports at build time. This does NOT catch
+    # everything (e.g. a GPU-mode probe that only fires on real inference) --
+    # actually run the CLI against a real SMILES string once, after building,
+    # before trusting the image.
+    /opt/venv/bin/python -c "
+import torch, xgboost, transformers
+import protac_splitter
+print('protac-splitter full image OK')
+print('torch:', torch.__version__, '| CUDA build:', torch.version.cuda)
+print('xgboost:', xgboost.__version__, '| transformers:', transformers.__version__)
+"
+
+%labels
+    profile full
+    pyproject_extra scripts
+
+%help
+    PROTAC-Splitter (full profile): heuristic + XGBoost + Transformer
+    splitting strategies (GPU-ready), the `protac-splitter` CLI, and the
+    Gradio web app. See apptainer/README.md for build/run instructions and
+    examples.
+
+    Build (from the repo root; needs internet -- run on a node with
+    internet access, never inside an offline compute job):
+        apptainer build --fakeroot apptainer/protac-splitter.sif apptainer/protac-splitter.def
+
+    CLI, one SMILES:
+        apptainer run apptainer/protac-splitter.sif --smiles "CC(C)(C)..." --model adaptive
+
+    CLI, live code (bind-mounts your checkout over the image's baked-in
+    snapshot -- see bind_live_repo.sh):
+        apptainer exec $(bash apptainer/bind_live_repo.sh) \
+            apptainer/protac-splitter.sif protac-splitter --smiles "CC(C)(C)..." --model adaptive
+
+    Gradio app (needs a real GPU allocation + --nv for the Transformer
+    strategy -- --nv alone exposes the driver but does nothing without an
+    actual allocation, e.g. a login-node GPU in compute_mode=Prohibited):
+        apptainer run --nv --app gradio apptainer/protac-splitter.sif

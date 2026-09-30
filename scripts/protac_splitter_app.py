@@ -21,7 +21,6 @@ Date: 2025-06
 import faulthandler
 import logging
 import os
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -39,7 +38,6 @@ faulthandler.dump_traceback_later(20, repeat=True, exit=False, file=sys.stderr)
 # only read once, at first load — importing it after gradio (which pulls in numpy
 # transitively) would be too late.
 from protac_splitter import split_protac
-from protac_splitter.config import get_cache_dir
 from protac_splitter.evaluation import split_prediction
 
 from PIL import Image
@@ -52,17 +50,11 @@ from rdkit.Chem import Draw
 IS_HF_SPACE = os.environ.get("SPACE_ID") is not None
 MAX_NUM_PROC = 2 if IS_HF_SPACE else 8
 
-# Filename must match `_XGBOOST_MODEL_FILENAME` in protac_splitter/protac_splitter.py.
-# If a copy of the model is bundled alongside this script (as it is on the HF Space,
-# to avoid depending on a runtime download from Zenodo), seed the cache with it before
-# any request can trigger a download.
-_BUNDLED_XGBOOST_MODEL = Path(__file__).with_name("PROTAC-Splitter-XGBoost.joblib")
-if _BUNDLED_XGBOOST_MODEL.exists():
-    _cached_model_path = get_cache_dir() / _BUNDLED_XGBOOST_MODEL.name
-    if not _cached_model_path.exists():
-        _cached_model_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(_BUNDLED_XGBOOST_MODEL, _cached_model_path)
-        logging.info(f"Seeded XGBoost model cache from bundled file → {_cached_model_path}")
+# No bundled-model seeding needed here: the XGBoost model (like the Transformer model
+# used elsewhere in this app) is fetched from the HuggingFace Hub via
+# `GraphEdgeClassifier.from_pretrained()` (see protac_splitter.load_graph_edge_classifier_
+# from_cache), using huggingface_hub's own resumable, cached download — same Hub the
+# Space itself runs on, so there's no external (e.g. Zenodo) dependency to work around.
 
 MODEL_CHOICES = [
     ("Heuristic → XGBoost (recommended)", "heuristic->xgboost"),

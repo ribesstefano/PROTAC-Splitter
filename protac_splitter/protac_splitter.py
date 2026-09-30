@@ -1,7 +1,4 @@
-import hashlib
-import logging
 import warnings
-from pathlib import Path
 from typing import Union, Optional, Dict, List, Literal, Tuple
 
 # Import first, before numpy-linked packages (rdkit/datasets/pandas below): this sets
@@ -9,9 +6,8 @@ from typing import Union, Optional, Dict, List, Literal, Tuple
 # which some of them only read once, at first load. Importing it after would be too
 # late and leave those libraries free to over-provision threads on cgroup-limited
 # containers.
-from protac_splitter.config import get_cache_dir, get_hf_token
+from protac_splitter.config import get_hf_token
 
-import requests
 from rdkit import Chem
 from datasets import Dataset
 import pandas as pd
@@ -24,11 +20,7 @@ from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
 from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
 
 _XGBOOST_MODEL_FILENAME = "PROTAC-Splitter-XGBoost.joblib"
-_XGBOOST_DOWNLOAD_URL = (
-    "https://zenodo.org/records/15797310/files/"
-    "PROTAC-Splitter-XGBoost.joblib?download=1"
-)
-_XGBOOST_SHA256 = "513621f4dc2ff7ec819a222bc7311afb8b6e6e89d6d694dd2906e695a50086dd"
+_XGBOOST_HF_REPO_ID = "ailab-bio/PROTAC-Splitter-XGBoost"
 
 _VALID_MODELS = frozenset({
     "transformer",
@@ -56,85 +48,26 @@ _DEFAULT_ADAPTIVE_GRID: List[Tuple[float, bool]] = [
 
 
 def load_graph_edge_classifier_from_cache(
-    cache_dir: Union[str, Path, None] = None,
     model_filename: str = _XGBOOST_MODEL_FILENAME,
-    download_url: str = _XGBOOST_DOWNLOAD_URL,
+    repo_id: str = _XGBOOST_HF_REPO_ID,
 ) -> GraphEdgeClassifier:
-    """Load the XGBoost GraphEdgeClassifier, downloading from Zenodo on first use.
+    """Load the XGBoost GraphEdgeClassifier via ``GraphEdgeClassifier.from_pretrained``,
+    downloading from the HuggingFace Hub on first use and caching in the standard
+    HuggingFace Hub cache (``HF_HOME`` / ``HUGGINGFACE_HUB_CACHE``) — the same cache
+    used for the Transformer model.
 
     Args:
-        cache_dir: Directory to cache the model. Defaults to ``get_cache_dir()``
-            (controlled by ``PROTAC_SPLITTER_CACHE_DIR`` env var / .env file).
-        model_filename: Filename to use inside ``cache_dir``.
-        download_url: URL to download the model from if not already cached.
+        model_filename: Filename of the joblib model within the repo.
+        repo_id: HuggingFace Hub model repo to download from.
 
     Returns:
         GraphEdgeClassifier: Loaded classifier.
     """
-    cache_path = Path(cache_dir).expanduser() if cache_dir is not None else get_cache_dir()
-    cache_path.mkdir(parents=True, exist_ok=True)
-    model_path = cache_path / model_filename
-
-    if not model_path.exists():
-        _download_xgboost_model(download_url, model_path)
-
-    return GraphEdgeClassifier.load(model_path)
-
-
-def _download_xgboost_model(
-    download_url: str,
-    model_path: Path,
-    num_attempts: int = 3,
-    connect_timeout: float = 10.0,
-    read_timeout: float = 30.0,
-) -> None:
-    """Download the XGBoost model to `model_path`, retrying on transient network errors.
-
-    Downloads to a temporary file first and only renames it into place once fully
-    verified, so a killed or timed-out download never leaves a corrupt file behind
-    that a later run would mistake for a valid cache hit.
-    """
-    tmp_path = model_path.with_suffix(model_path.suffix + ".part")
-    last_error: Optional[Exception] = None
-
-    for attempt in range(1, num_attempts + 1):
-        try:
-            logging.info(f"Downloading XGBoost model → {model_path} (attempt {attempt}/{num_attempts}) ...")
-            response = requests.get(download_url, stream=True, timeout=(connect_timeout, read_timeout))
-            response.raise_for_status()
-            expected_size = int(response.headers.get("Content-Length", -1))
-
-            with tmp_path.open("wb") as f:
-                for chunk in response.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-
-            if expected_size != -1:
-                actual = tmp_path.stat().st_size
-                if actual != expected_size:
-                    raise RuntimeError(
-                        f"Download incomplete: got {actual} bytes, expected {expected_size}."
-                    )
-
-            h = hashlib.sha256(tmp_path.read_bytes()).hexdigest()
-            if h != _XGBOOST_SHA256:
-                raise RuntimeError(
-                    f"Downloaded model checksum mismatch: got {h}, expected {_XGBOOST_SHA256}."
-                )
-
-            tmp_path.rename(model_path)
-            logging.info("XGBoost model downloaded and verified.")
-            return
-        except (requests.exceptions.RequestException, RuntimeError) as e:
-            last_error = e
-            tmp_path.unlink(missing_ok=True)
-            logging.warning(f"XGBoost model download attempt {attempt}/{num_attempts} failed: {e}")
-
-    raise RuntimeError(
-        f"Failed to download the XGBoost model from {download_url} after {num_attempts} attempts: "
-        f"{last_error}. You can also download it manually and place it at {model_path} "
-        "(or point PROTAC_SPLITTER_CACHE_DIR at a directory that already contains it)."
-    ) from last_error
+    return GraphEdgeClassifier.from_pretrained(
+        repo_id=repo_id,
+        filename=model_filename,
+        token=get_hf_token(),
+    )
 
 
 # ---------------------------------------------------------------------------
