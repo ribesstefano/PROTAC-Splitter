@@ -81,3 +81,34 @@ def test_serve_names_the_extra_when_missing():
     r = subprocess.run([PYTHON, "-c", code], capture_output=True, text=True, timeout=60)
     assert r.returncode != 0
     assert "protac-splitter[serve]" in r.stderr
+
+
+def test_port_file_is_connectable_as_soon_as_it_appears(tmp_path):
+    """The port file is the --port 0 handshake, so the port must already accept.
+
+    Best-effort: a socket that is bound but not listening refuses the connection on
+    Linux, but only stalls it on macOS, where uvicorn's start-up (well under the
+    timeout) hides the gap. The check is sharp on Linux CI and a smoke test elsewhere.
+    """
+    import socket
+    import time
+
+    port_file = tmp_path / "port"
+    proc = subprocess.Popen(
+        [PYTHON, "-m", "protac_splitter.cli", "serve", "--model", "heuristic",
+         "--port", "0", "--port-file", str(port_file)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            # Read the moment the file has content (written after listen(), before uvicorn).
+            if port_file.exists() and port_file.read_text():
+                break
+            time.sleep(0.001)
+        else:
+            pytest.fail("port file never appeared")
+        with socket.create_connection(("127.0.0.1", int(port_file.read_text())), timeout=5):
+            pass
+    finally:
+        proc.terminate()
+        proc.wait(timeout=30)

@@ -238,6 +238,10 @@ def serve(argv: List[str]) -> None:
             f"Could not bind {args.host}:{args.port} ({exc}). Another server may already "
             "hold it; pass --port 0 --port-file PATH to pick a free one."
         ) from exc
+    # Listen before publishing the port: bind() alone refuses connections, so a client
+    # that reacts to the file immediately would get ECONNREFUSED. Connections made before
+    # uvicorn starts wait in the backlog and are served once it does.
+    sock.listen(socket.SOMAXCONN)
     port = sock.getsockname()[1]
     if args.port_file:
         port_path = Path(args.port_file)
