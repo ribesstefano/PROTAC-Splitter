@@ -15,6 +15,7 @@ A Gradio app is available to split PROTAC molecules and visualize the results: [
 - [Usage](#usage)
   - [Python API](#python-api)
   - [Command-line interface](#command-line-interface)
+  - [HTTP server](#http-server)
   - [Gradio app](#gradio-app)
 - [Splitting strategies](#splitting-strategies)
 - [Data availability](#data-availability)
@@ -37,6 +38,9 @@ pip install "git+https://github.com/ribesstefano/PROTAC-Splitter.git[transformer
 
 # With Gradio app + plotting dependencies
 pip install "git+https://github.com/ribesstefano/PROTAC-Splitter.git[scripts]"
+
+# With the HTTP server (`protac-splitter serve`)
+pip install "git+https://github.com/ribesstefano/PROTAC-Splitter.git[serve]"
 
 # Full development install (all extras + pytest)
 pip install "git+https://github.com/ribesstefano/PROTAC-Splitter.git[dev]"
@@ -173,6 +177,42 @@ protac-splitter --smiles "..." --model heuristic --output-format csv
 # Show all options
 protac-splitter --help
 ```
+
+### HTTP server 🌐
+
+`protac-splitter serve` keeps the models loaded and splits SMILES over HTTP, so a client in
+another Python environment (e.g. a generative-design loop) can call it without installing
+this package. It needs the `serve` extra (`pip install ".[serve]"` from a checkout):
+
+```bash
+# Takes the same strategy options as the CLI (--model, --betweenness-threshold, ...)
+protac-splitter serve --model adaptive --port 8778
+
+# Let the OS pick a free port and publish it, so several jobs can share a node
+protac-splitter serve --port 0 --port-file /tmp/protac_splitter.port
+```
+
+Models are loaded and warmed up before the server starts listening, so a missing
+`[transformer]` extra or a failed download stops it at launch instead of failing every
+request. It binds `127.0.0.1` and has no authentication; keep it that way on a shared node.
+
+| Endpoint | |
+|---|---|
+| `GET /health` | Cheap liveness probe. |
+| `GET /info` | Strategy, options and output keys the server was started with. |
+| `POST /split` | `{"smiles": [...]}` -> `{"results": [...], "n_invalid": n}`. |
+
+Each entry of `results` is the dict `split_protac` returns for that molecule, plus the parsed
+`e3`, `linker` and `poi`. The list always matches the request: an unparseable SMILES gives
+`null` in its place rather than failing the batch. Interactive docs are at `/docs`.
+
+```bash
+curl -s localhost:8778/split -H 'content-type: application/json' \
+  -d '{"smiles": ["N#Cc1ccc(O[C@H]2CC[C@H](NC(=O)c3ccc(N4CCN(CCCCCNc5ccc6c(c5)C(=O)N(C5CCC(=O)NC5=O)C6=O)CC4)cc3)CC2)cc1Cl"]}'
+```
+
+The server runs one worker and serialises requests, so send many SMILES per request rather
+than many concurrent requests.
 
 ### Output format
 

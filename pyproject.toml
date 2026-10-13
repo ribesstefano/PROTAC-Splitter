@@ -52,6 +52,11 @@ training = [
   "optuna>=4.2",
   "evaluate>=0.4",
 ]
+serve = [
+  # Opt-in: enables `protac-splitter serve` (HTTP server). pydantic comes with fastapi.
+  "fastapi>=0.110",
+  "uvicorn>=0.29",
+]
 scripts = [
   "protac-splitter[transformer]",
   "gradio>=5.35,<6",
@@ -59,8 +64,9 @@ scripts = [
   "seaborn>=0.13",
 ]
 dev = [
-  "protac-splitter[transformer,training,scripts]",
+  "protac-splitter[transformer,training,scripts,serve]",
   "pytest>=8.4",
+  "httpx>=0.27",  # fastapi.testclient
 ]
 
 [project.urls]
