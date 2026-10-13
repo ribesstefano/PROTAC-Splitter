@@ -203,8 +203,9 @@ request. It binds `127.0.0.1` and has no authentication; keep it that way on a s
 | `POST /split` | `{"smiles": [...]}` -> `{"results": [...], "n_invalid": n}`. |
 
 Each entry of `results` is the dict `split_protac` returns for that molecule, plus the parsed
-`e3`, `linker` and `poi`. The list always matches the request: an unparseable SMILES gives
-`null` in its place rather than failing the batch. Interactive docs are at `/docs`.
+`e3`, `linker` and `poi`. The list always matches the request: an unparseable SMILES, or one
+the strategy cannot split, gives `null` in its place (counted in `n_invalid`) rather than
+failing the batch. Interactive docs are at `/docs`.
 
 ```bash
 curl -s localhost:8778/split -H 'content-type: application/json' \

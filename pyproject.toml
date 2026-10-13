@@ -53,8 +53,9 @@ training = [
   "evaluate>=0.4",
 ]
 serve = [
-  # Opt-in: enables `protac-splitter serve` (HTTP server). pydantic comes with fastapi.
+  # Opt-in: enables `protac-splitter serve` (HTTP server). The schemas need pydantic v2.
   "fastapi>=0.110",
+  "pydantic>=2",  # the schemas use the v2 API; fastapi alone also allows v1
   "uvicorn>=0.29",
 ]
 scripts = [

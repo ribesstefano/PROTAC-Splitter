@@ -33,12 +33,13 @@ def test_info(client):
 
 
 def test_split_aligns_with_request_and_nulls_invalid(client):
-    smiles = [WARMUP_SMILES, "not_a_smiles", "", WARMUP_SMILES]
+    # "C" is valid but unsplittable: split_protac returns it with no prediction.
+    smiles = [WARMUP_SMILES, "not_a_smiles", "", WARMUP_SMILES, "C"]
     body = client.post("/split", json={"smiles": smiles}).json()
     results = body["results"]
     assert len(results) == len(smiles)
-    assert results[1] is None and results[2] is None
-    assert body["n_invalid"] == 2
+    assert results[1] is None and results[2] is None and results[4] is None
+    assert body["n_invalid"] == 3
     for i in (0, 3):
         assert results[i]["model_name"] == "Heuristic"
         assert all(results[i][k] for k in ("e3", "linker", "poi"))

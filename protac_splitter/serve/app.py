@@ -7,8 +7,8 @@ Design notes:
   their own copy, so scale with batch size instead. The endpoints are plain ``def`` so
   starlette runs them in a thread pool, and a lock serialises the calls into
   ``split_protac`` (the Transformer pipeline is not safe to share between threads).
-* **A bad molecule is not an error.** An unparseable SMILES yields ``null`` in place,
-  not a 4xx for the whole batch, so the result list always lines up with the request.
+* **A bad molecule is not an error.** An unparseable or unsplittable SMILES yields
+  ``null`` in place, not a 4xx for the whole batch, so the result list always lines up with the request.
 * **Fail at start-up, not per request.** ``load_service`` runs one warm-up split, so a
   missing ``[transformer]`` extra or an unreachable model download stops the server
   before it listens, and the first real request does not pay for model loading.
@@ -69,11 +69,17 @@ class Service:
         self.lock = threading.Lock()
         self.output_keys: List[str] = []
 
-    def _split_batch(self, smiles: List[str]) -> List[Dict[str, Any]]:
-        """Split already-validated SMILES, raising on any failure."""
+    def _split_batch(self, smiles: List[str]) -> List[Optional[Dict[str, Any]]]:
+        """Split already-validated SMILES, raising on any failure.
+
+        A valid molecule the strategy cannot split comes back from ``split_protac`` as a
+        dict whose ``default_pred_n0`` is ``None``; it is mapped to ``None`` here so it
+        is reported and counted like any other failure.
+        """
         from protac_splitter import split_protac
 
-        return [_with_parts(r) for r in split_protac(smiles, **self.split_kwargs)]
+        return [_with_parts(r) if r.get("default_pred_n0") else None
+                for r in split_protac(smiles, **self.split_kwargs)]
 
     def _split(self, smiles: List[str]) -> List[Optional[Dict[str, Any]]]:
         """Split already-validated SMILES; fall back to one at a time if the batch fails.
@@ -119,7 +125,8 @@ def load_service(split_kwargs: Dict[str, Any]) -> Service:
     """Build a :class:`Service` and warm it up.
 
     Raises:
-        RuntimeError: If the warm-up split fails, with the cause attached. The usual
+        RuntimeError: If the warm-up split fails or yields no split, with the cause
+            attached. The usual
             causes are a missing ``[transformer]`` extra or a model that could not be
             downloaded.
     """
@@ -128,6 +135,10 @@ def load_service(split_kwargs: Dict[str, Any]) -> Service:
         warmup = service._split_batch([WARMUP_SMILES])[0]
     except Exception as e:
         raise RuntimeError(f"Could not load model={split_kwargs['model']!r}: {e}") from e
+    if warmup is None:
+        raise RuntimeError(
+            f"Could not load model={split_kwargs['model']!r}: it failed to split the "
+            "warm-up PROTAC.")
     service.output_keys = list(warmup)
     return service
 
