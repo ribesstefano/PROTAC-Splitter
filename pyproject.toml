@@ -52,6 +52,12 @@ training = [
   "optuna>=4.2",
   "evaluate>=0.4",
 ]
+serve = [
+  # Opt-in: enables `protac-splitter serve` (HTTP server). The schemas need pydantic v2.
+  "fastapi>=0.110",
+  "pydantic>=2",  # the schemas use the v2 API; fastapi alone also allows v1
+  "uvicorn>=0.29",
+]
 scripts = [
   "protac-splitter[transformer]",
   "gradio>=5.35,<6",
@@ -59,8 +65,9 @@ scripts = [
   "seaborn>=0.13",
 ]
 dev = [
-  "protac-splitter[transformer,training,scripts]",
+  "protac-splitter[transformer,training,scripts,serve]",
   "pytest>=8.4",
+  "httpx>=0.27",  # fastapi.testclient
 ]
 
 [project.urls]

@@ -7,11 +7,15 @@ Examples:
     protac-splitter --smiles "..." --model xgboost->heuristic
     protac-splitter --input-csv data.csv --smiles-col SMILES --output-csv out.csv
     protac-splitter --smiles-list "smi1" "smi2" --model heuristic --output-format csv
+    protac-splitter serve --model heuristic --port 8778   # needs the [serve] extra
 """
 from __future__ import annotations
 
 import sys
+import socket
+import logging
 import dataclasses
+from pathlib import Path
 from typing import Optional, List, Literal
 
 import tyro
@@ -30,24 +34,8 @@ SplittingModel = Literal[
 
 
 @dataclasses.dataclass
-class SplitArgs:
-    """Split one or more PROTAC SMILES strings into E3 / linker / POI substructures."""
-
-    # --- Input: exactly one of these must be provided ---
-    smiles: Optional[str] = None
-    """Single PROTAC SMILES string to split."""
-
-    smiles_list: Optional[List[str]] = None
-    """Multiple PROTAC SMILES strings to split."""
-
-    input_csv: Optional[str] = None
-    """Path to a CSV file containing PROTAC SMILES. Use together with --smiles-col."""
-
-    smiles_col: str = "SMILES"
-    """Column name for SMILES in the input CSV (default: 'SMILES')."""
-
-    output_csv: Optional[str] = None
-    """Path to write output CSV (required when --input-csv is used)."""
+class ModelArgs:
+    """Which splitting strategy to run, and how. Shared by splitting and ``serve``."""
 
     # --- Model selection ---
     model: SplittingModel = "adaptive"
@@ -117,11 +105,76 @@ class SplitArgs:
     verbose: int = 0
     """Verbosity level (0 = silent, 1 = info, 2 = debug)."""
 
+    def split_kwargs(self) -> dict:
+        """Keyword arguments for ``split_protac`` (everything but the input)."""
+        return dict(
+            model=self.model,
+            fix_predictions=self.fix_predictions,
+            batch_size=self.batch_size,
+            beam_size=self.beam_size,
+            device=self.device,
+            num_proc=self.num_proc,
+            verbose=self.verbose,
+            betweenness_threshold=self.betweenness_threshold,
+            use_capacity_weight=self.use_capacity_weight,
+            betweenness_approx_frac=self.betweenness_approx_frac,
+            adaptive_use_xgboost=self.adaptive_use_xgboost,
+            adaptive_use_transformer=self.adaptive_use_transformer,
+        )
+
+
+@dataclasses.dataclass
+class SplitArgs(ModelArgs):
+    """Split one or more PROTAC SMILES strings into E3 / linker / POI substructures.
+
+    Run `protac-splitter serve --help` for the HTTP server.
+    """
+
+    # --- Input: exactly one of these must be provided ---
+    smiles: Optional[str] = None
+    """Single PROTAC SMILES string to split."""
+
+    smiles_list: Optional[List[str]] = None
+    """Multiple PROTAC SMILES strings to split."""
+
+    input_csv: Optional[str] = None
+    """Path to a CSV file containing PROTAC SMILES. Use together with --smiles-col."""
+
+    smiles_col: str = "SMILES"
+    """Column name for SMILES in the input CSV (default: 'SMILES')."""
+
+    output_csv: Optional[str] = None
+    """Path to write output CSV (required when --input-csv is used)."""
+
     output_format: Literal["table", "csv"] = "table"
     """Output format when printing to stdout:
       table — human-readable aligned output.
       csv   — machine-parseable comma-separated values.
     """
+
+
+@dataclasses.dataclass
+class ServeArgs(ModelArgs):
+    """Serve the chosen splitting strategy over HTTP (needs the [serve] extra).
+
+    Takes the same strategy options as splitting; the models are loaded once at
+    start-up and every request uses them.
+    """
+
+    host: str = "127.0.0.1"
+    """Bind address. Loopback keeps the endpoint off the network: there is no
+    authentication, so on a shared node 0.0.0.0 would expose it to every other user."""
+
+    port: int = 8778
+    """Bind port. Pass 0 to let the OS pick a free one, and combine with --port-file to
+    tell the client which."""
+
+    port_file: Optional[str] = None
+    """Write the bound port to this file once listening (removed on shutdown). This is
+    the handshake for --port 0, so several jobs on one node need no port bookkeeping."""
+
+    log_level: str = "info"
+    """uvicorn log level."""
 
 
 def _print_result(result: dict, fmt: str) -> None:
@@ -151,26 +204,69 @@ def _print_result(result: dict, fmt: str) -> None:
         print()
 
 
+def serve(argv: List[str]) -> None:
+    """Run the HTTP server: ``protac-splitter serve [options]``."""
+    args = tyro.cli(ServeArgs, prog="protac-splitter serve", args=argv)
+
+    try:
+        import uvicorn
+        from protac_splitter.serve.app import create_app, load_service
+    except ImportError as exc:
+        raise SystemExit(
+            f"protac-splitter serve needs the 'serve' extra ({exc}). Install it with:\n"
+            '    pip install "protac-splitter[serve]"'
+        ) from exc
+
+    logging.basicConfig(level=args.log_level.upper(),
+                        format="%(levelname)s:     %(name)s: %(message)s")
+    try:
+        service = load_service(args.split_kwargs())
+    except (RuntimeError, ImportError) as exc:
+        raise SystemExit(f"protac-splitter serve: {exc}") from exc
+    app = create_app(service)
+    # One worker: a second would load its own copy of every model.
+    config = uvicorn.Config(app, log_level=args.log_level, workers=1)
+
+    # Bind first so --port 0 resolves to the real port before it is published; uvicorn
+    # alone would only log it.
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((args.host, args.port))
+    except OSError as exc:
+        raise SystemExit(
+            f"Could not bind {args.host}:{args.port} ({exc}). Another server may already "
+            "hold it; pass --port 0 --port-file PATH to pick a free one."
+        ) from exc
+    # Listen before publishing the port: bind() alone refuses connections, so a client
+    # that reacts to the file immediately would get ECONNREFUSED. Connections made before
+    # uvicorn starts wait in the backlog and are served once it does.
+    sock.listen(socket.SOMAXCONN)
+    port = sock.getsockname()[1]
+    if args.port_file:
+        port_path = Path(args.port_file)
+        port_path.parent.mkdir(parents=True, exist_ok=True)
+        port_path.write_text(str(port))
+    print(f"Serving model={args.model} on http://{args.host}:{port} (docs at /docs)",
+          flush=True)
+    try:
+        uvicorn.Server(config).run(sockets=[sock])
+    finally:
+        if args.port_file:
+            Path(args.port_file).unlink(missing_ok=True)
+
+
 def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        serve(sys.argv[2:])
+        return
+
     args = tyro.cli(SplitArgs)
 
     from protac_splitter import split_protac
     import pandas as pd
 
-    kwargs = dict(
-        model=args.model,
-        fix_predictions=args.fix_predictions,
-        batch_size=args.batch_size,
-        beam_size=args.beam_size,
-        device=args.device,
-        num_proc=args.num_proc,
-        verbose=args.verbose,
-        betweenness_threshold=args.betweenness_threshold,
-        use_capacity_weight=args.use_capacity_weight,
-        betweenness_approx_frac=args.betweenness_approx_frac,
-        adaptive_use_xgboost=args.adaptive_use_xgboost,
-        adaptive_use_transformer=args.adaptive_use_transformer,
-    )
+    kwargs = args.split_kwargs()
 
     try:
         if args.input_csv is not None:

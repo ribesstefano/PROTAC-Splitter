@@ -1,3 +1,4 @@
+import functools
 import warnings
 from typing import Union, Optional, Dict, List, Literal, Tuple
 
@@ -67,6 +68,34 @@ def load_graph_edge_classifier_from_cache(
         repo_id=repo_id,
         filename=model_filename,
         token=get_hf_token(),
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _cached_graph_edge_classifier() -> GraphEdgeClassifier:
+    """Load the XGBoost model once per process.
+
+    Without this every ``split_protac`` call re-deserialises the model, which is
+    negligible for a one-off call but dominates a long-lived caller such as
+    ``protac-splitter serve``.
+    """
+    return load_graph_edge_classifier_from_cache()
+
+
+@functools.lru_cache(maxsize=2)
+def _cached_transformer_pipeline(beam_size: int, device: Optional[Union[int, str]]):
+    """Load the Transformer pipeline once per ``(beam_size, device)``.
+
+    ``beam_size`` is part of the key because it is baked into the pipeline as
+    ``num_return_sequences``.
+    """
+    from protac_splitter.llms.model_utils import get_pipeline
+    return get_pipeline(
+        model_name="ailab-bio/PROTAC-Splitter",
+        token=get_hf_token(),
+        is_causal_language_model=False,
+        num_return_sequences=beam_size,
+        device=device,
     )
 
 
@@ -863,23 +892,16 @@ def split_protac(
         representative_e3s_fp = None
     representative_whs_fp = get_representative_whs_fp() if is_adaptive else None
 
-    xgboost_model = load_graph_edge_classifier_from_cache() if needs_xgboost else None
+    xgboost_model = _cached_graph_edge_classifier() if needs_xgboost else None
 
     if needs_transformer:
         try:
-            from protac_splitter.llms.model_utils import get_pipeline
+            pipe = _cached_transformer_pipeline(beam_size, device)
         except ImportError:
             raise ImportError(
                 "The 'transformer' model requires additional dependencies. "
                 "Install them with:\n    pip install 'protac-splitter[transformer]'"
             ) from None
-        pipe = get_pipeline(
-            model_name="ailab-bio/PROTAC-Splitter",
-            token=get_hf_token(),
-            is_causal_language_model=False,
-            num_return_sequences=beam_size,
-            device=device,
-        )
     else:
         pipe = None
 
