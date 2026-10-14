@@ -7,7 +7,7 @@ name = "protac-splitter"
 version = "1.5.0"
 description = "A package to split PROTAC SMILES into their substructures."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
   { name = "Stefano Ribes", email = "ribes.stefano@gmail.com" },
@@ -57,6 +57,12 @@ serve = [
   "fastapi>=0.110",
   "pydantic>=2",  # the schemas use the v2 API; fastapi alone also allows v1
   "uvicorn>=0.29",
+]
+chemprop = [
+  # Opt-in: enables training and predicting PROTAC splits with Chemprop.
+  # "torch>=2.6",
+  "chemprop>=2.3.1",
+  "optuna>=4.2",  # `pipeline.py train --optuna`
 ]
 scripts = [
   "protac-splitter[transformer]",

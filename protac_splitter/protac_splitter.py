@@ -33,6 +33,7 @@ _VALID_MODELS = frozenset({
     "heuristic->xgboost",
     "heuristic+xgboost",
     "adaptive",
+    "chemprop",
 })
 
 # (betweenness_threshold, use_capacity_weight) combinations tried by model="adaptive"'s
@@ -97,6 +98,13 @@ def _cached_transformer_pipeline(beam_size: int, device: Optional[Union[int, str
         num_return_sequences=beam_size,
         device=device,
     )
+
+
+@functools.lru_cache(maxsize=2)
+def _cached_chemprop_splitter(device: Optional[Union[int, str]]):
+    """Load the ChemProp model once per ``device``."""
+    from protac_splitter.chemprop import ChemPropSplitter
+    return ChemPropSplitter.from_pretrained(device=device, token=get_hf_token())
 
 
 # ---------------------------------------------------------------------------
@@ -445,6 +453,22 @@ def _run_transformer_ds(
     )
 
 
+def _run_chemprop_ds(
+    ds: Dataset,
+    splitter,
+    batch_size: int,
+    protac_smiles_col: str,
+) -> Dataset:
+    # Batched over the whole dataset rather than a per-row ds.map: the model is a GNN
+    # whose cost is dominated by the forward pass, which batches well.
+    smiles = ds[protac_smiles_col]
+    return Dataset.from_dict({
+        protac_smiles_col: smiles,
+        "default_pred_n0": splitter.split(smiles, batch_size=batch_size),
+        "model_name": ["ChemProp"] * len(smiles),
+    })
+
+
 # ---------------------------------------------------------------------------
 # model="adaptive" — QC-gated escalation.
 #
@@ -781,6 +805,7 @@ def split_protac(
             "heuristic->xgboost",
             "heuristic+xgboost",
             "adaptive",
+            "chemprop",
         ]] = None,
 ) -> Union[Dict[str, str], List[Dict[str, str]]]:
     """Split a PROTAC SMILES into E3 ligand, linker, and POI warhead.
@@ -817,6 +842,11 @@ def split_protac(
     |                               | reports which method/params won. See the              |
     |                               | adaptive_* args below.                                |
     +-------------------------------+-------------------------------------------------------+
+    | ``"chemprop"``                | ChemProp bond classifier                              |
+    |                               | (``ailab-bio/PROTAC-Splitter-ChemProp``) with         |
+    |                               | constrained decoding of one cut per attachment.       |
+    |                               | Requires the ``[chemprop]`` extra; GPU optional.      |
+    +-------------------------------+-------------------------------------------------------+
 
     Args:
         protac_smiles: SMILES to split. Accepts a single string, a list of strings,
@@ -836,11 +866,12 @@ def split_protac(
             active. Default ``True``.
         protac_smiles_col: Column name for SMILES when the input is a DataFrame, and
             output key name in result dicts. Default ``"SMILES"``.
-        batch_size: Inference batch size for the Transformer. Default ``1``.
+        batch_size: Inference batch size for the Transformer and ChemProp models.
+            Default ``1``.
         beam_size: Number of beam-search candidates from the Transformer. Higher values
             may improve quality at the cost of speed. Default ``5``.
-        device: Device for the Transformer model (e.g. ``0``, ``"cuda"``, ``"cpu"``).
-            ``None`` auto-selects GPU when available.
+        device: Device for the Transformer and ChemProp models (e.g. ``0``, ``"cuda"``,
+            ``"cpu"``). ``None`` auto-selects GPU when available.
         num_proc: Worker processes for parallel dataset mapping. Only effective for the
             heuristic strategy (XGBoost mapping is always single-process). Default ``1``.
         verbose: Verbosity level passed to fixing functions. Default ``0``.
@@ -905,6 +936,15 @@ def split_protac(
     else:
         pipe = None
 
+    if model_str == "chemprop":
+        try:
+            chemprop_splitter = _cached_chemprop_splitter(device)
+        except ImportError:
+            raise ImportError(
+                "The 'chemprop' model requires additional dependencies. "
+                "Install them with:\n    pip install 'protac-splitter[chemprop]'"
+            ) from None
+
     ds = _smiles_to_dataset(protac_smiles, protac_smiles_col)
 
     _graph_kwargs = dict(
@@ -968,6 +1008,8 @@ def split_protac(
             num_proc=num_proc,
             verbose=verbose,
         )
+    elif model_str == "chemprop":
+        preds_ds = _run_chemprop_ds(ds, chemprop_splitter, batch_size, protac_smiles_col)
     else:
         raise NotImplementedError(
             f"model='{model_str}' is not yet implemented. "

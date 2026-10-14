@@ -5,6 +5,7 @@ Examples:
     protac-splitter --smiles "..." --model transformer
     protac-splitter --smiles "..." --model heuristic --betweenness-threshold 0.5
     protac-splitter --smiles "..." --model xgboost->heuristic
+    protac-splitter --smiles "..." --model chemprop   # needs the [chemprop] extra
     protac-splitter --input-csv data.csv --smiles-col SMILES --output-csv out.csv
     protac-splitter --smiles-list "smi1" "smi2" --model heuristic --output-format csv
     protac-splitter serve --model heuristic --port 8778   # needs the [serve] extra
@@ -30,6 +31,7 @@ SplittingModel = Literal[
     "xgboost+heuristic",
     "heuristic+xgboost",
     "adaptive",
+    "chemprop",
 ]
 
 
@@ -55,6 +57,8 @@ class ModelArgs:
       heuristic->xgboost  — Heuristic first; XGBoost replaces failed predictions.
       xgboost+heuristic   — Run both and pick the best result (not yet implemented).
       heuristic+xgboost   — Reserved for future use.
+      chemprop            — ChemProp bond classifier hosted on HuggingFace
+                            (requires the [chemprop] extra; GPU optional).
     """
 
     # --- Transformer-specific options (ignored for xgboost / heuristic) ---
@@ -62,7 +66,7 @@ class ModelArgs:
     """Apply cheminformatics post-processing to Transformer predictions."""
 
     batch_size: int = 1
-    """Inference batch size (Transformer only)."""
+    """Inference batch size (Transformer and ChemProp only)."""
 
     beam_size: int = 5
     """Number of beam-search candidates to generate (Transformer only). Higher

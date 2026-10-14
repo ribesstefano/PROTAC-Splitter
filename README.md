@@ -239,6 +239,7 @@ PROTAC-Splitter supports multiple strategies, selectable via `--model` (CLI) or 
 | `xgboost->heuristic` | XGBoost first; heuristic replaces any failed predictions. |
 | `heuristic->xgboost` | Heuristic first; XGBoost replaces any failed predictions. |
 | `xgboost+heuristic` or `heuristic+xgboost` | Run both and pick the best result. |
+| `chemprop` | ChemProp bond classifier (`ailab-bio/PROTAC-Splitter-ChemProp`) with constrained decoding of exactly one cut per attachment point. Requires the `[chemprop]` extra; GPU optional. Model downloaded automatically on first use (~40 MB). |
 
 > [!IMPORTANT]  
 > The above strategies must be passed as a double-quoted string in the CLI (e.g., `--model "transformer->xgboost"`). The `>` operator is a shell redirection operator, so it must be quoted to avoid shell interpretation.
