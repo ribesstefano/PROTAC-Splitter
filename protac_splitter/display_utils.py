@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import Optional
 
 from rdkit import Chem
-from rdkit.Chem import Draw
 
 if 'ipykernel' in sys.modules:
     from IPython.display import SVG
@@ -27,6 +26,7 @@ def display_mol(
         display_svg: bool = True,
 ):
     """ Display a molecule in a Jupyter notebook. Useful for having """
+    from rdkit.Chem import Draw  # slow to import: only needed for drawing
     if mol is None:
         print('Molecule is None')
         return None
@@ -79,6 +79,7 @@ def get_mapped_protac_img(
         legend: The legend to display.
         show_bond_indices: Whether to show bond indices in the image.
     """
+    from rdkit.Chem import Draw  # slow to import: only needed for drawing
     protac_smiles = canonize(protac_smiles)
     e3_smiles = canonize(e3_smiles)
     poi_smiles = canonize(poi_smiles)

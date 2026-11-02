@@ -5,7 +5,6 @@ import os
 from pathlib import Path
 from typing import Optional
 
-import pandas as pd
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,6 +21,8 @@ def load_dataset_or_csv(
     """Load a dataset from a local CSV file or from the HuggingFace Hub."""
     from datasets import load_dataset, Dataset
     if input_csv is not None:
+        import pandas as pd
+
         return Dataset.from_pandas(pd.read_csv(input_csv))
     return load_dataset(
         hub_dataset_id,

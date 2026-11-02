@@ -4,24 +4,21 @@ On the Hub a model is two files: ``config.json`` (architecture) and ``model.pt``
 plain tensor ``state_dict`` loaded with ``torch.load(weights_only=True)``, so loading
 never unpickles code. Lightning training checkpoints (``best.ckpt``) are converted
 with :meth:`ChemPropSplitter.from_checkpoint`.
+
+numpy, RDKit, torch, and chemprop are imported by the methods that need them, so
+importing this module (e.g. just to reach ``push_to_hub``'s CLI) stays fast.
 """
+from __future__ import annotations
+
 import io
 import json
 import pickle
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Union
 
-import numpy as np
-
-from protac_splitter.chemprop.inference import (
-    BOND_PREDICTOR_KEYS,
-    MESSAGE_PASSING_KEYS,
-    build_model,
-    decode_pair,
-    parse_protac,
-    predict_arrays,
-)
+if TYPE_CHECKING:
+    import numpy as np
 
 DEFAULT_REPO_ID = "ailab-bio/PROTAC-Splitter-ChemProp"
 CONFIG_FILENAME = "config.json"
@@ -76,6 +73,7 @@ class ChemPropSplitter:
 
     @classmethod
     def from_state_dict(cls, config: Dict, state_dict: Dict, device: Optional[Union[int, str]] = None):
+        from protac_splitter.chemprop.inference import build_model
         model = build_model(config)
         weights = {k: v for k, v in state_dict.items() if k.startswith(_WEIGHT_PREFIXES)}
         missing, unexpected = model.load_state_dict(weights, strict=False)
@@ -95,6 +93,9 @@ class ChemPropSplitter:
         A Lightning checkpoint is a full pickle, so only load your own/trusted files.
         """
         import torch
+        from protac_splitter.chemprop._deferred import import_chemprop
+        from protac_splitter.chemprop.inference import BOND_PREDICTOR_KEYS, MESSAGE_PASSING_KEYS
+        import_chemprop()  # the pickle references chemprop classes
         checkpoint = torch.load(str(path), map_location="cpu", weights_only=False,
                                 pickle_module=_CheckpointPickle)
         hp = checkpoint["hyper_parameters"]
@@ -207,24 +208,31 @@ class ChemPropSplitter:
     # Inference
     # ------------------------------------------------------------------
 
-    def predict_proba(self, smiles: Sequence[str], batch_size: int = 64) -> List[Optional[np.ndarray]]:
+    def predict_proba(
+        self, smiles: Sequence[str], batch_size: int = 64, progress: bool = False,
+    ) -> List[Optional[np.ndarray]]:
         """Bond-class probabilities ``(n_bonds, 3)`` per SMILES, in RDKit bond order of
-        ``Chem.MolFromSmiles(smiles)``; None for SMILES the model cannot take."""
+        ``Chem.MolFromSmiles(smiles)``; None for SMILES the model cannot take. With
+        ``progress``, shows a progress bar over the molecules."""
+        from protac_splitter.chemprop.inference import parse_protac, predict_arrays
         mols = [parse_protac(s) for s in smiles]
         valid = [i for i, mol in enumerate(mols) if mol is not None]
-        probs = predict_arrays(self.model, [mols[i] for i in valid], batch_size)
+        probs = predict_arrays(self.model, [mols[i] for i in valid], batch_size, progress=progress)
         result: List[Optional[np.ndarray]] = [None] * len(mols)
         for i, p in zip(valid, probs):
             result[i] = p
         return result
 
-    def split(self, smiles: Sequence[str], batch_size: int = 64) -> List[Optional[str]]:
+    def split(
+        self, smiles: Sequence[str], batch_size: int = 64, progress: bool = False,
+    ) -> List[Optional[str]]:
         """Split each SMILES into an ``"e3.linker.poi"`` string, or None when it cannot be split.
 
         Attachment points are ``[*:1]`` (POI side) and ``[*:2]`` (E3 side).
         """
+        from protac_splitter.chemprop.inference import decode_pair, parse_protac
         result: List[Optional[str]] = []
-        for smi, probs in zip(smiles, self.predict_proba(smiles, batch_size)):
+        for smi, probs in zip(smiles, self.predict_proba(smiles, batch_size, progress)):
             pair = decode_pair(parse_protac(smi), probs) if probs is not None else None
             if pair is None:
                 result.append(None)

@@ -86,7 +86,7 @@ class ModelArgs:
     centrality (heuristic algorithm only). May improve results for molecules
     with many aromatic rings."""
 
-    betweenness_approx_frac: float = None
+    betweenness_approx_frac: Optional[float] = None
     """Fraction of nodes (0.0–1.0) to sample when approximating betweenness
     centrality. None (default) uses the exact algorithm. Lower values are
     faster but less accurate — e.g. 0.5 samples half the nodes."""
@@ -268,12 +268,12 @@ def main() -> None:
     args = tyro.cli(SplitArgs)
 
     from protac_splitter import split_protac
-    import pandas as pd
 
     kwargs = args.split_kwargs()
 
     try:
         if args.input_csv is not None:
+            import pandas as pd  # only CSV input needs it; it is slow to import cold
             df = pd.read_csv(args.input_csv)
             result_df = split_protac(df, protac_smiles_col=args.smiles_col, **kwargs)
             if args.output_csv:

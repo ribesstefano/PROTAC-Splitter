@@ -10,6 +10,8 @@ from typing import Dict, List, Optional, Sequence
 import numpy as np
 from rdkit import Chem
 
+from protac_splitter.chemprop._deferred import import_chemprop
+
 # Keys of a ``ChemPropSplitter`` config, i.e. the constructor arguments of the
 # message-passing encoder and the bond head that determine the weight shapes.
 MESSAGE_PASSING_KEYS = ('d_v', 'd_e', 'd_h', 'bias', 'depth', 'dropout', 'activation', 'undirected')
@@ -17,16 +19,28 @@ BOND_PREDICTOR_KEYS = ('n_tasks', 'n_classes', 'input_dim', 'hidden_dim', 'n_lay
 
 
 def parse_protac(smiles: str) -> Optional[Chem.Mol]:
-    """Parse a model input: one connected molecule, no dummy atoms or atom maps; else None."""
+    """Parse a model input: one connected molecule, no dummy atoms or atom maps; else None.
+
+    A multi-fragment input (a salt or a solvate) is reduced to its largest
+    fragment. Cutting two bonds of such an input would yield four parts and
+    ``decode_pair`` would reject it, so without this a counterion alone makes an
+    otherwise splittable PROTAC fail.
+    """
     mol = Chem.MolFromSmiles(smiles)
-    if mol is None or len(Chem.GetMolFrags(mol)) != 1:
+    if mol is None:
         return None
+    frags = Chem.GetMolFrags(mol, asMols=True, sanitizeFrags=True)
+    if not frags:
+        return None
+    if len(frags) > 1:
+        mol = max(frags, key=lambda frag: frag.GetNumHeavyAtoms())
     if any(a.GetAtomicNum() == 0 or a.GetAtomMapNum() for a in mol.GetAtoms()):
         return None
     return mol
 
 
 def make_dataset(mols: Sequence[Chem.Mol]):
+    import_chemprop()
     from chemprop import data, featurizers
     # Passing the SAME mol avoids hidden atom/bond reordering by a SMILES parser, so
     # predicted bond indices refer to the mol the caller holds.
@@ -36,6 +50,7 @@ def make_dataset(mols: Sequence[Chem.Mol]):
 
 def build_model(config: Dict):
     """Build an untrained ``MolAtomBondMPNN`` with the architecture described by ``config``."""
+    import_chemprop()
     from chemprop import nn, models
     from protac_splitter.chemprop.model_utils import WeightedCrossEntropy
     mp = nn.MABBondMessagePassing(**config['message_passing'], return_vertex_embeddings=False)
@@ -45,32 +60,41 @@ def build_model(config: Dict):
     return models.MolAtomBondMPNN(message_passing=mp, bond_predictor=head, batch_norm=False)
 
 
-def infer(model, loader) -> List[np.ndarray]:
-    """Per-molecule bond probabilities on the model's current device; restores train/eval mode."""
+def infer(model, loader, progress: bool = False) -> List[np.ndarray]:
+    """Per-molecule bond probabilities on the model's current device; restores train/eval mode.
+
+    With ``progress``, shows a tqdm bar counting molecules.
+    """
     import torch
+    from tqdm import tqdm
     was_training = model.training
     model.eval()
     result = []
-    with torch.inference_mode():
+    with torch.inference_mode(), tqdm(total=len(loader.dataset), desc="Splitting with ChemProp",
+                                      unit="mol", disable=not progress) as pbar:
         for batch in loader:
             batch.bmg.to(model.device)
             probs = model(batch.bmg, batch.V_d, batch.E_d, batch.X_d)[2][:, 0].cpu().numpy()
             # ChemProp already merges the two directed edges into one chemical bond.
             counts = np.bincount(batch.bmg.bond_batch[::2].cpu().numpy())
             result.extend(np.split(probs, np.cumsum(counts)[:-1]))
+            pbar.update(len(counts))
     model.train(was_training)
     return result
 
 
-def predict_arrays(model, mols: Sequence[Chem.Mol], batch_size: int = 16) -> List[np.ndarray]:
+def predict_arrays(
+    model, mols: Sequence[Chem.Mol], batch_size: int = 16, progress: bool = False,
+) -> List[np.ndarray]:
     """Bond-class probabilities, shape ``(mol.GetNumBonds(), 3)``, for each molecule."""
+    import_chemprop()
     from chemprop import data
     if not mols:
         return []
     # drop_last=False: ChemProp otherwise may drop a final singleton batch.
     loader = data.build_dataloader(make_dataset(mols), batch_size=batch_size,
                                    shuffle=False, num_workers=0, drop_last=False)
-    result = infer(model, loader)
+    result = infer(model, loader, progress=progress)
     if len(result) != len(mols):
         raise RuntimeError('Prediction count mismatch')
     for mol, p in zip(mols, result):

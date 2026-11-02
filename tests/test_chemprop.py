@@ -1,9 +1,16 @@
 """Tests for the ChemProp splitting model (skipped without the [chemprop] extra)."""
+import importlib.util
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 from rdkit import Chem
 
-pytest.importorskip("chemprop")
+# find_spec, not importorskip: importing chemprop here would bypass the deferral of its
+# optional dependencies that protac_splitter.chemprop._deferred.import_chemprop does.
+if importlib.util.find_spec("chemprop") is None:
+    pytest.skip("needs the [chemprop] extra", allow_module_level=True)
 
 from protac_splitter import protac_splitter as ps
 from protac_splitter.chemprop import ChemPropSplitter
@@ -31,6 +38,30 @@ def tiny_splitter():
     return ChemPropSplitter.from_state_dict(TINY_CONFIG, build_model(TINY_CONFIG).state_dict(), device="cpu")
 
 
+def test_deferred_placeholder_resolves_on_use():
+    from protac_splitter.chemprop._deferred import _Deferred
+    module, function = _Deferred("json"), _Deferred("json:dumps")
+    assert module.dumps([1]) == "[1]"
+    assert function([1]) == "[1]"
+    with pytest.raises(AttributeError):
+        module.__path__  # the import system must see a plain, non-package module
+
+
+def test_import_chemprop_skips_optional_dependencies():
+    """chemprop imports, and the model builds, without cuik_molmaker/astartes/descriptastorus."""
+    code = (
+        "import sys\n"
+        "from protac_splitter.chemprop.inference import build_model, make_dataset\n"
+        "from rdkit import Chem\n"
+        f"build_model({TINY_CONFIG!r})\n"
+        "make_dataset([Chem.MolFromSmiles('CCO')])\n"
+        "print(sorted(m for m in sys.modules\n"
+        "             if m.split('.')[0] in ('cuik_molmaker', 'astartes', 'descriptastorus')))\n"
+    )
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert out.stdout.strip() == "[]"
+
+
 def test_decode_pair_follows_probabilities():
     mol = Chem.MolFromSmiles("c1ccccc1CCOCCc1ccncc1")
     bridges = [b.GetIdx() for b in mol.GetBonds() if not b.IsInRing()]
@@ -49,15 +80,30 @@ def test_decode_pair_none_without_two_cuttable_bonds():
 
 def test_parse_protac_rejects_invalid_inputs():
     assert parse_protac("not a smiles") is None
-    assert parse_protac("CCO.CC") is None
+    assert parse_protac("") is None
     assert parse_protac("CC[*:1]") is None
     assert parse_protac("CCO") is not None
 
 
+def test_parse_protac_keeps_largest_fragment():
+    """A salt or solvate is desalted rather than rejected."""
+    mol = parse_protac("CCO.CC")
+    assert mol is not None and Chem.MolToSmiles(mol) == "CCO"
+    # A counterion must not stop a real PROTAC from being parsed
+    salted = parse_protac(f"{EXAMPLE_SMILES}.[Cl-]")
+    assert salted is not None
+    assert Chem.MolToSmiles(salted) == Chem.MolToSmiles(Chem.MolFromSmiles(EXAMPLE_SMILES))
+
+
 def test_split_reassembles(tiny_splitter):
-    pred, invalid = tiny_splitter.split([EXAMPLE_SMILES, "CCO.CC"])
-    assert invalid is None
+    pred, salted = tiny_splitter.split([EXAMPLE_SMILES, f"{EXAMPLE_SMILES}.[Cl-]"])
     assert check_reassembly(EXAMPLE_SMILES, pred)
+    # The counterion is dropped, so the salt splits like the bare molecule
+    assert salted == pred
+
+
+def test_split_returns_none_for_unparseable_input(tiny_splitter):
+    assert tiny_splitter.split(["not a smiles"]) == [None]
 
 
 def test_save_and_load_roundtrip(tiny_splitter, tmp_path):

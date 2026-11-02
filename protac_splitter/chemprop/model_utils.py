@@ -1,6 +1,10 @@
 import torch
 from torch.nn import functional as F
-from chemprop.nn import CrossEntropyLoss
+
+from protac_splitter.chemprop._deferred import import_chemprop
+
+import_chemprop()  # before `chemprop.nn`, so chemprop's optional dependencies are deferred
+from chemprop.nn import CrossEntropyLoss  # noqa: E402
 
 
 class WeightedCrossEntropy(CrossEntropyLoss):

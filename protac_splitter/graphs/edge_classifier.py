@@ -9,20 +9,11 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.decomposition import TruncatedSVD
-from imblearn.over_sampling import SMOTE
-from imblearn.pipeline import Pipeline as ImbPipeline
 from sklearn.pipeline import Pipeline
 from sklearn.metrics import classification_report
 from sklearn.metrics import confusion_matrix
 from xgboost import XGBClassifier
 from sklearn.metrics import accuracy_score, f1_score
-
-try:
-    import seaborn as sns
-    import matplotlib.pyplot as plt
-    HAS_VISUALIZATION = True
-except ImportError:
-    HAS_VISUALIZATION = False    
 
 from .edge_features import extract_edge_features, get_edge_features
 
@@ -75,6 +66,10 @@ class GraphEdgeClassifier(BaseEstimator, ClassifierMixin):
         self.pipeline = self._build_pipeline()
 
     def _build_pipeline(self):
+        # imblearn (SMOTE, ImbPipeline) is slow to import and only needed to build a
+        # pipeline: a pickled model pulls in what it needs when it is unpickled.
+        from imblearn.over_sampling import SMOTE
+        from imblearn.pipeline import Pipeline as ImbPipeline
         transformers = []
         if self.categorical_features:
             transformers.append(("cat", OneHotEncoder(handle_unknown="ignore"), self.categorical_features))
@@ -359,7 +354,13 @@ def get_classification_report(y_true, y_pred, labels):
 
 def plot_confusion_matrix(y_true, y_pred, labels):
     cm = confusion_matrix(y_true, y_pred)
-    if HAS_VISUALIZATION:
+    try:
+        import seaborn as sns
+        import matplotlib.pyplot as plt
+        has_visualization = True
+    except ImportError:
+        has_visualization = False
+    if has_visualization:
         plt.figure(figsize=(8, 6))
         sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=labels, yticklabels=labels)
         plt.xlabel("Predicted")

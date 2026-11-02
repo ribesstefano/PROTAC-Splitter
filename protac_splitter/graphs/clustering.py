@@ -4,9 +4,6 @@ import functools
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from sklearn.cluster import AgglomerativeClustering, KMeans
-from scipy.stats import skew
-from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
@@ -28,6 +25,7 @@ def get_umap_clusters_fp(fp_list: List[str], n_clusters: int = 7) -> np.ndarray:
     Returns:
         np.ndarray: Array of cluster labels corresponding to each SMILES string in the input list.
     """
+    from sklearn.cluster import AgglomerativeClustering
     ac = AgglomerativeClustering(n_clusters=n_clusters)
     ac.fit_predict(np.stack(fp_list))
     return ac.labels_
@@ -44,6 +42,7 @@ def get_kmeans_clusters_fp(fp_list: List[str], n_clusters: int = 10, return_cent
     Returns:
         np.ndarray: Array of cluster labels corresponding to each SMILES string in the input list.
     """
+    from sklearn.cluster import KMeans
     km = KMeans(n_clusters=n_clusters, n_init='auto', random_state=42, max_iter=1000)
     if return_centroids:
         km.fit(np.stack(fp_list))
@@ -88,6 +87,9 @@ def evaluate_clusters(X: np.array, clusters: np.ndarray) -> Dict[str, float]:
             "cluster_size_skewness": 0,
             "num_clusters": 1,
         }
+
+    from scipy.stats import skew
+    from sklearn.metrics import silhouette_score, davies_bouldin_score, calinski_harabasz_score
 
     # Compute standard clustering metrics
     silhouette = silhouette_score(X, clusters)

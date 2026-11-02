@@ -1,7 +1,7 @@
 from typing import Tuple, List
 
 from rdkit import Chem
-from rdkit.Chem import AllChem, Descriptors, Draw
+from rdkit.Chem import AllChem, Descriptors
 import networkx as nx
 import pandas as pd
 import numpy as np
@@ -234,6 +234,7 @@ def get_edge_features(
     Returns:
         pd.DataFrame: DataFrame containing edge features.
     """
+    from rdkit.Chem import Draw  # slow to import: only needed for drawing
     if isinstance(protac_smiles, str):
         protac_smiles = [protac_smiles]
     if isinstance(wh_smiles, str):

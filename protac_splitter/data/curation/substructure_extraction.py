@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional, Union
 from collections import Counter
 
 from rdkit import Chem
-from rdkit.Chem import Draw
 
 from protac_splitter.chemoinformatics import (
     dummy2query,
@@ -458,6 +457,7 @@ def get_substructs_from_substr_and_linker(
     Returns:
         Dict: The substructures of the PROTAC molecule. None if the function fails to find the substructures.
     """
+    from rdkit.Chem import Draw  # slow to import: only needed for drawing
     if attachment_id not in [poi_attachment_id, e3_attachment_id]:
         raise ValueError('Attachment ID must be either 1 or 2')
     

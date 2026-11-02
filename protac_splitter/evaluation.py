@@ -20,14 +20,10 @@ from .chemoinformatics import (
     get_substr_match,
 )
 from .protac_cheminformatics import reassemble_protac
-from .graphs_utils import (
-    get_smiles2graph_edit_distance,
-    get_smiles2graph_edit_distance_norm,
-)
 # NOTE: protac_splitter.graphs.* is imported lazily (inside _known_ligand_similarity)
-# rather than at module level: protac_splitter.graphs/__init__.py pulls in
-# data.curation.bond_adjustments -> data.curation.curation, which itself imports from
-# this module, so an eager import here would be a circular import at package load time.
+# rather than at module level: splitting_algorithms pulls in
+# data.curation.bond_adjustments, which itself imports from this module, so an eager
+# import here would be a circular import at package load time.
 
 
 def is_valid_smiles(
@@ -430,11 +426,11 @@ def score_prediction(
         label_sub = label_substructs[sub]
         if pred_sub is None:
             continue
-        if label_sub is None:
-            logging.warning(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
-            continue
 
-        # Check if the predicted substructure is a valid RDKit molecule
+        # Check if the predicted substructure is a valid RDKit molecule. This
+        # describes the prediction alone, so it is recorded before the label is
+        # looked at: an unusable label must not make a valid prediction look
+        # invalid.
         sub_valid, sub_mol = is_valid_smiles(pred_sub, return_mol=True)
         scores[f'{sub}_valid'] = sub_valid
 
@@ -452,6 +448,12 @@ def score_prediction(
             if f'[*:{poi_attachment_id}]' in pred_sub and f'[*:{e3_attachment_id}]' in pred_sub:
                 scores[f'{sub}_has_attachment_point(s)'] = True
         
+        # Everything below compares against the label, so stop here when the
+        # label has no usable substructure to compare with.
+        if label_sub is None:
+            logging.warning(f"WARNING: {sub} substructure is None in the label: '{label_smiles}' - PROTAC: '{protac_smiles}'")
+            continue
+
         # Check if the predicted substructure InChI is the same as the ground truth substructure InChI
         if scores[f'{sub}_valid']:
             # scores[f'{sub}_equal'] = Chem.MolToInchi(sub_mol) == Chem.MolToInchi(Chem.MolFromSmiles(label_sub))
@@ -461,6 +463,11 @@ def score_prediction(
         
         # Compute graph-related metrics
         if scores[f'{sub}_valid'] and compute_graph_metrics:
+            # numba + networkx: slow to import, so only loaded when these metrics are requested
+            from .graphs_utils import (
+                get_smiles2graph_edit_distance,
+                get_smiles2graph_edit_distance_norm,
+            )
             scores[f'{sub}_graph_edit_distance'] = get_smiles2graph_edit_distance(pred_sub, label_sub, **graph_edit_kwargs)
             scores[f'{sub}_graph_edit_distance_norm'] = get_smiles2graph_edit_distance_norm(
                 smi1=pred_sub,

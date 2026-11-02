@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import functools
+import sys
 import warnings
-from typing import Union, Optional, Dict, List, Literal, Tuple
+from typing import TYPE_CHECKING, Union, Optional, Dict, List, Literal, Tuple
 
 # Import first, before numpy-linked packages (rdkit/datasets/pandas below): this sets
 # thread-count env vars for native math libraries (OpenMP/OpenBLAS/MKL/Accelerate),
@@ -10,15 +13,26 @@ from typing import Union, Optional, Dict, List, Literal, Tuple
 from protac_splitter.config import get_hf_token
 
 from rdkit import Chem
-from datasets import Dataset
-import pandas as pd
 
 from protac_splitter.chemoinformatics import canonize
 from protac_splitter.evaluation import split_prediction
-from protac_splitter.fixing_functions import fix_prediction
-from protac_splitter.graphs.clustering import get_representative_e3s_fp, get_representative_whs_fp
-from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
-from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
+
+if TYPE_CHECKING:
+    # Heavy imports (pandas; datasets; scikit-learn/XGBoost via edge_classifier), loaded
+    # only by the strategies that use them so e.g. model="chemprop" starts fast.
+    import pandas as pd
+    from datasets import Dataset
+    from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
+
+
+def __getattr__(name):
+    # Kept importable from here (e.g. `from protac_splitter.protac_splitter import
+    # fix_prediction`), but loaded on first access: it is only used by the Transformer.
+    if name == "fix_prediction":
+        from protac_splitter.fixing_functions import fix_prediction
+        return fix_prediction
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 _XGBOOST_MODEL_FILENAME = "PROTAC-Splitter-XGBoost.joblib"
 _XGBOOST_HF_REPO_ID = "ailab-bio/PROTAC-Splitter-XGBoost"
@@ -65,6 +79,7 @@ def load_graph_edge_classifier_from_cache(
     Returns:
         GraphEdgeClassifier: Loaded classifier.
     """
+    from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
     return GraphEdgeClassifier.from_pretrained(
         repo_id=repo_id,
         filename=model_filename,
@@ -170,35 +185,57 @@ def _resolve_model(
     return "heuristic"
 
 
-def _smiles_to_dataset(
+def _is_dataframe(obj) -> bool:
+    """``isinstance(obj, pd.DataFrame)`` without importing pandas: a caller can only
+    pass a DataFrame if pandas is already imported."""
+    pd = sys.modules.get("pandas")
+    return pd is not None and isinstance(obj, pd.DataFrame)
+
+
+def _canonize_dataframe(df: pd.DataFrame, protac_smiles_col: str) -> pd.Series:
+    """Canonize the SMILES column of a DataFrame; raise if it is missing or has invalid rows."""
+    if protac_smiles_col not in df.columns:
+        raise ValueError(f'DataFrame must contain a column named "{protac_smiles_col}".')
+    canon_series = df[protac_smiles_col].apply(canonize)
+    if canon_series.isnull().any():
+        raise ValueError(f"Invalid PROTAC SMILES in DataFrame: {df[canon_series.isnull()]}")
+    return canon_series
+
+
+def _canonical_smiles_list(
     protac_smiles: Union[str, List[str], pd.DataFrame],
     protac_smiles_col: str,
-) -> Dataset:
-    """Canonize and validate input SMILES, return a HuggingFace Dataset."""
+) -> List[str]:
+    """Canonize and validate input SMILES (str, list, or DataFrame) into a list."""
     if isinstance(protac_smiles, str):
         canon = canonize(protac_smiles)
         if canon is None:
             raise ValueError(f"Invalid PROTAC SMILES: {protac_smiles}")
-        return Dataset.from_dict({protac_smiles_col: [canon]})
+        return [canon]
 
     if isinstance(protac_smiles, list):
         canon_list = [canonize(s) for s in protac_smiles]
         invalid = [s for s, c in zip(protac_smiles, canon_list) if c is None]
         if invalid:
             raise ValueError(f"Invalid PROTAC SMILES in list: {invalid}")
-        return Dataset.from_dict({protac_smiles_col: canon_list})
+        return canon_list
 
-    if isinstance(protac_smiles, pd.DataFrame):
-        if protac_smiles_col not in protac_smiles.columns:
-            raise ValueError(f'DataFrame must contain a column named "{protac_smiles_col}".')
-        canon_series = protac_smiles[protac_smiles_col].apply(canonize)
-        if canon_series.isnull().any():
-            raise ValueError(
-                f"Invalid PROTAC SMILES in DataFrame: {protac_smiles[canon_series.isnull()]}"
-            )
-        return Dataset.from_pandas(canon_series.to_frame(name=protac_smiles_col))
+    if _is_dataframe(protac_smiles):
+        return _canonize_dataframe(protac_smiles, protac_smiles_col).tolist()
 
     raise TypeError(f"protac_smiles must be str, list, or DataFrame; got {type(protac_smiles)}")
+
+
+def _smiles_to_dataset(
+    protac_smiles: Union[str, List[str], pd.DataFrame],
+    protac_smiles_col: str,
+) -> Dataset:
+    """Canonize and validate input SMILES, return a HuggingFace Dataset."""
+    from datasets import Dataset
+    if _is_dataframe(protac_smiles):
+        canon_series = _canonize_dataframe(protac_smiles, protac_smiles_col)
+        return Dataset.from_pandas(canon_series.to_frame(name=protac_smiles_col))
+    return Dataset.from_dict({protac_smiles_col: _canonical_smiles_list(protac_smiles, protac_smiles_col)})
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +252,7 @@ def _run_xgboost_ds(
     use_capacity_weight: bool,
     betweenness_approx_frac: Optional[float] = None,
 ) -> Dataset:
+    from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
     def _map(row):
         protac = row[protac_smiles_col]
         pred = split_protac_graph_based(
@@ -244,6 +282,7 @@ def _run_heuristic_ds(
     num_proc: int = 1,
     verbose: int = 0,
 ) -> Dataset:
+    from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
     def _map(row):
         protac = row[protac_smiles_col]
         pred = split_protac_graph_based(
@@ -269,6 +308,7 @@ def _run_xgboost_then_heuristic_ds(
     betweenness_approx_frac: Optional[float] = None,
     verbose: int = 0,
 ) -> Dataset:
+    from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
     def _map(row):
         protac = row[protac_smiles_col]
         pred = split_protac_graph_based(
@@ -311,6 +351,7 @@ def _run_heuristic_then_xgboost_ds(
     num_proc: int = 1,
     verbose: int = 0,
 ) -> Dataset:
+    from datasets import Dataset
     # Phase 1: heuristic on all rows — parallelisable.
     result_ds = _run_heuristic_ds(
         ds, protac_smiles_col, betweenness_threshold,
@@ -344,6 +385,7 @@ def _run_xgboost_and_heuristic_ds(
     num_proc: int = 1,
     verbose: int = 0,
 ) -> Dataset:
+    from datasets import Dataset
     # Phase 1: heuristic on all rows in parallel.
     heuristic_ds = _run_heuristic_ds(
         ds, protac_smiles_col, betweenness_threshold,
@@ -395,6 +437,10 @@ def _run_transformer_ds(
     use_capacity_weight: bool = False,
     betweenness_approx_frac: Optional[float] = None,
 ) -> Dataset:
+    from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
+    from datasets import Dataset
+    import pandas as pd
+    from protac_splitter.fixing_functions import fix_prediction
     from protac_splitter.llms.model_utils import run_pipeline
     raw_preds = run_pipeline(
         pipe,
@@ -407,37 +453,51 @@ def _run_transformer_ds(
     preds_df[protac_smiles_col] = ds[protac_smiles_col]
     preds_ds = Dataset.from_pandas(preds_df)
 
+    def _first_beam(preds: Dict[str, Optional[str]]) -> Optional[str]:
+        """First non-None beam, in the model's own ranked order."""
+        for i in range(beam_size):
+            v = preds.get(f"pred_n{i}")
+            if v is not None:
+                return v
+        return None
+
     def _map(row):
         protac = row[protac_smiles_col]
-        beam_preds = {
-            k: (fix_prediction(protac, v, verbose=verbose) if fix_predictions else v)
-            for k, v in row.items()
-            if k.startswith("pred_")
+        raw_beams = {k: v for k, v in row.items() if k.startswith("pred_")}
+        beam_preds = (
+            {k: fix_prediction(protac, v, verbose=verbose) for k, v in raw_beams.items()}
+            if fix_predictions else raw_beams
+        )
+
+        fixed = _first_beam(beam_preds)
+        if fixed is not None:
+            return {protac_smiles_col: protac, "default_pred_n0": fixed, "model_name": "Transformer"}
+
+        # Every beam was rejected by the fixing step. Prefer a real second splitter when
+        # one was requested (model="transformer->xgboost"); it reassembles where these
+        # predictions by definition did not.
+        if xgboost_fallback and xgboost_model is not None:
+            split = _pred_dict_to_str(split_protac_graph_based(
+                protac_smiles=protac,
+                use_classifier=True,
+                classifier=xgboost_model,
+                representative_e3s_fp=representative_e3s_fp,
+                betweenness_threshold=betweenness_threshold,
+                use_capacity_weight=use_capacity_weight,
+                betweenness_approx_frac=betweenness_approx_frac,
+            ))
+            if split is not None:
+                return {protac_smiles_col: protac, "default_pred_n0": split, "model_name": "XGBoost"}
+
+        # Nothing else available: keep the model's own unfixed output rather than
+        # reporting no prediction at all. `fix_prediction` returning None means it could
+        # not repair the beam, not that the beam was empty — dropping it would score a
+        # usable (if imperfect) split as a total failure.
+        return {
+            protac_smiles_col: protac,
+            "default_pred_n0": _first_beam(raw_beams),
+            "model_name": "Transformer",
         }
-        if all(v is None for v in beam_preds.values()):
-            if xgboost_fallback and xgboost_model is not None:
-                pred = split_protac_graph_based(
-                    protac_smiles=protac,
-                    use_classifier=True,
-                    classifier=xgboost_model,
-                    representative_e3s_fp=representative_e3s_fp,
-                    betweenness_threshold=betweenness_threshold,
-                    use_capacity_weight=use_capacity_weight,
-                    betweenness_approx_frac=betweenness_approx_frac,
-                )
-                return {
-                    protac_smiles_col: protac,
-                    "default_pred_n0": _pred_dict_to_str(pred),
-                    "model_name": "XGBoost",
-                }
-            return {protac_smiles_col: protac, "default_pred_n0": None, "model_name": "Transformer"}
-
-        for i in range(beam_size):
-            v = beam_preds.get(f"pred_n{i}")
-            if v is not None:
-                return {protac_smiles_col: protac, "default_pred_n0": v, "model_name": "Transformer"}
-
-        return {protac_smiles_col: protac, "default_pred_n0": None, "model_name": "Transformer"}
 
     desc_parts = []
     if fix_predictions:
@@ -453,20 +513,30 @@ def _run_transformer_ds(
     )
 
 
-def _run_chemprop_ds(
-    ds: Dataset,
+def _split_protac_chemprop(
+    protac_smiles: Union[str, List[str], pd.DataFrame],
     splitter,
     batch_size: int,
     protac_smiles_col: str,
-) -> Dataset:
-    # Batched over the whole dataset rather than a per-row ds.map: the model is a GNN
-    # whose cost is dominated by the forward pass, which batches well.
-    smiles = ds[protac_smiles_col]
-    return Dataset.from_dict({
-        protac_smiles_col: smiles,
-        "default_pred_n0": splitter.split(smiles, batch_size=batch_size),
-        "model_name": ["ChemProp"] * len(smiles),
-    })
+    verbose: int = 0,
+) -> Union[Dict[str, str], List[Dict[str, str]], pd.DataFrame]:
+    """Run ChemProp and return what `split_protac` returns, without building a `Dataset`.
+    A progress bar is shown when ``verbose > 0``.
+
+    The model is a GNN whose cost is one batched forward pass, so there is no per-row
+    ``Dataset.map``; skipping `datasets` avoids importing it (and pyarrow) at all.
+    """
+    smiles = _canonical_smiles_list(protac_smiles, protac_smiles_col)
+    records = [
+        {protac_smiles_col: smi, "default_pred_n0": pred, "model_name": "ChemProp"}
+        for smi, pred in zip(smiles, splitter.split(smiles, batch_size=batch_size, progress=verbose > 0))
+    ]
+    if isinstance(protac_smiles, str):
+        return records[0]
+    if _is_dataframe(protac_smiles):
+        import pandas as pd
+        return pd.DataFrame(records, columns=[protac_smiles_col, "default_pred_n0", "model_name"])
+    return records
 
 
 # ---------------------------------------------------------------------------
@@ -579,6 +649,7 @@ def _run_heuristic_grid_ds(
     short-circuiting on the first flag-free one so the common/easy case (the default
     grid point already gives a clean split) doesn't pay for the rest of the grid.
     """
+    from protac_splitter.graphs.splitting_algorithms import split_protac_graph_based
     def _map(row):
         protac = row[protac_smiles_col]
         best_pred, best_key, best_flags, best_params = None, None, (0, "no_candidate"), None
@@ -631,6 +702,9 @@ def _run_transformer_scored_ds(
     instead of just the first beam that happens to reassemble (contrast with
     _run_transformer_ds, used by the non-adaptive "transformer" strategies).
     """
+    from datasets import Dataset
+    import pandas as pd
+    from protac_splitter.fixing_functions import fix_prediction
     from protac_splitter.llms.model_utils import run_pipeline
     from protac_splitter.evaluation import count_flags, score_split
 
@@ -645,9 +719,12 @@ def _run_transformer_scored_ds(
         protac = row[protac_smiles_col]
         best_pred, best_key, best_flags = None, None, (0, "no_valid_beam")
         for i in range(beam_size):
-            v = row.get(f"pred_n{i}")
+            v = raw = row.get(f"pred_n{i}")
             if fix_predictions:
-                v = fix_prediction(protac, v, verbose=verbose)
+                # Fall back to the unfixed beam when the fixing step rejects it, so a
+                # beam the fixer could not repair still competes on its score_split
+                # merits instead of being dropped.
+                v = fix_prediction(protac, raw, verbose=verbose) or raw
             if v is None:
                 continue
             score = score_split(
@@ -709,6 +786,7 @@ def _run_adaptive_ds(
     and the winning heuristic params across that set are a direct signal for what the
     package defaults should be.
     """
+    from datasets import Dataset
     from protac_splitter.evaluation import count_flags, score_split
 
     result_df = _run_heuristic_grid_ds(
@@ -784,14 +862,14 @@ def split_protac(
         use_xgboost: Optional[bool] = None,
         fix_predictions: bool = True,
         protac_smiles_col: str = "SMILES",
-        batch_size: int = 1,
+        batch_size: int = 32,
         beam_size: int = 5,
         device: Optional[Union[int, str]] = None,
         num_proc: int = 1,
         verbose: int = 0,
         betweenness_threshold: float = 0.4,
         use_capacity_weight: bool = False,
-        betweenness_approx_frac: float = None,
+        betweenness_approx_frac: Optional[float] = None,
         adaptive_heuristic_grid: Optional[List[Tuple[float, bool]]] = None,
         adaptive_use_xgboost: bool = True,
         adaptive_use_transformer: bool = False,
@@ -863,18 +941,22 @@ def split_protac(
             ``model='heuristic'``.
         fix_predictions: Apply deterministic cheminformatics corrections to Transformer
             predictions before checking reassembly. Only used when the Transformer is
-            active. Default ``True``.
+            active. A beam the fixer cannot repair is never discarded: the unfixed
+            prediction is kept instead, so enabling this can only change *which*
+            prediction is returned, never turn one into no prediction at all.
+            Default ``True``.
         protac_smiles_col: Column name for SMILES when the input is a DataFrame, and
             output key name in result dicts. Default ``"SMILES"``.
         batch_size: Inference batch size for the Transformer and ChemProp models.
-            Default ``1``.
+            Default ``32``.
         beam_size: Number of beam-search candidates from the Transformer. Higher values
             may improve quality at the cost of speed. Default ``5``.
         device: Device for the Transformer and ChemProp models (e.g. ``0``, ``"cuda"``,
             ``"cpu"``). ``None`` auto-selects GPU when available.
         num_proc: Worker processes for parallel dataset mapping. Only effective for the
             heuristic strategy (XGBoost mapping is always single-process). Default ``1``.
-        verbose: Verbosity level passed to fixing functions. Default ``0``.
+        verbose: Verbosity level passed to fixing functions; for ``model="chemprop"``,
+            ``verbose > 0`` shows a progress bar. Default ``0``.
         betweenness_threshold: Betweenness-centrality cut-off for the heuristic
             algorithm. Higher values are more conservative. Default ``0.4``.
         use_capacity_weight: Weight graph edges by bond capacity when computing
@@ -917,11 +999,12 @@ def split_protac(
     # (evaluation.score_split), regardless of whether XGBoost itself is enabled.
     needs_reference_fps = needs_xgboost or is_adaptive
 
-    if needs_reference_fps:
+    representative_e3s_fp = representative_whs_fp = None
+    if needs_reference_fps:  # always true when is_adaptive
+        from protac_splitter.graphs.clustering import get_representative_e3s_fp, get_representative_whs_fp
         representative_e3s_fp = get_representative_e3s_fp()
-    else:
-        representative_e3s_fp = None
-    representative_whs_fp = get_representative_whs_fp() if is_adaptive else None
+        if is_adaptive:
+            representative_whs_fp = get_representative_whs_fp()
 
     xgboost_model = _cached_graph_edge_classifier() if needs_xgboost else None
 
@@ -944,6 +1027,7 @@ def split_protac(
                 "The 'chemprop' model requires additional dependencies. "
                 "Install them with:\n    pip install 'protac-splitter[chemprop]'"
             ) from None
+        return _split_protac_chemprop(protac_smiles, chemprop_splitter, batch_size, protac_smiles_col, verbose)
 
     ds = _smiles_to_dataset(protac_smiles, protac_smiles_col)
 
@@ -1008,8 +1092,6 @@ def split_protac(
             num_proc=num_proc,
             verbose=verbose,
         )
-    elif model_str == "chemprop":
-        preds_ds = _run_chemprop_ds(ds, chemprop_splitter, batch_size, protac_smiles_col)
     else:
         raise NotImplementedError(
             f"model='{model_str}' is not yet implemented. "
@@ -1018,6 +1100,6 @@ def split_protac(
 
     if isinstance(protac_smiles, str):
         return preds_ds[0]
-    if isinstance(protac_smiles, pd.DataFrame):
+    if _is_dataframe(protac_smiles):
         return preds_ds.to_pandas()
     return list(preds_ds)

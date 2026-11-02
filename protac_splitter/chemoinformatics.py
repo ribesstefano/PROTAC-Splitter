@@ -7,6 +7,8 @@ from hashlib import sha256
 
 from rdkit import Chem
 from rdkit.Chem import rdFingerprintGenerator
+from rdkit.Chem.MolStandardize import rdMolStandardize
+from rdkit.Chem.SaltRemover import SaltRemover
 
 
 def GetSubstructMatchesWorker(q, mol, substruct, useChirality, maxMatches):
@@ -132,8 +134,54 @@ def mol2smiles(mol: Chem.Mol) -> str:
     return Chem.MolToSmiles(mol)
 
 
+_SALT_REMOVER = SaltRemover()
+_UNCHARGER = rdMolStandardize.Uncharger()
+_ATTACHMENT_MAP_NUMS = (1, 2)
+
+
+def _has_attachment_points(mol: Chem.Mol) -> bool:
+    """ Whether the molecule contains a "[*:1]" or "[*:2]" attachment point. """
+    return any(
+        atom.GetAtomicNum() == 0 and atom.GetAtomMapNum() in _ATTACHMENT_MAP_NUMS
+        for atom in mol.GetAtoms()
+    )
+
+
+def standardize_mol(mol: Chem.Mol) -> Optional[Chem.Mol]:
+    """ Drops salts, uncharges, and keeps the largest fragment of a molecule.
+
+    The largest fragment is NOT selected if the molecule contains either of the
+    "[*:1]" or "[*:2]" attachment points, since multi-fragment strings with
+    attachment points are valid (e.g., "e3.linker.poi" predictions).
+
+    Args:
+        mol (Chem.Mol): The input molecule. It is not modified.
+
+    Returns:
+        Chem.Mol or None: The standardized molecule, or None if it failed.
+    """
+    if mol is None:
+        return None
+    try:
+        # Drop salts, but never strip the molecule down to nothing
+        mol = _SALT_REMOVER.StripMol(mol, dontRemoveEverything=True)
+        # Uncharge the molecule (i.e., remove formal charges)
+        mol = _UNCHARGER.uncharge(mol)
+        # Keep only the largest fragment, unless there are attachment points
+        if not _has_attachment_points(mol):
+            mol = rdMolStandardize.FragmentParent(mol)
+        return mol
+    except Exception as e:
+        logging.warning(f"Error standardizing molecule: {e}")
+        return None
+
+
 def canonize_smiles(smiles: str) -> str:
     """ Canonizes a SMILES string by converting it to canonical SMILES representation.
+
+    Salts are dropped, the molecule is uncharged, and only the largest fragment
+    is kept, unless the SMILES contains "[*:1]" or "[*:2]" attachment points (in
+    which case all fragments are kept).
 
     Args:
         smiles (str): The input SMILES string.
@@ -150,14 +198,20 @@ def canonize_smiles(smiles: str) -> str:
         return None
     if mol is None:
         return None
+    mol = standardize_mol(mol)
+    if mol is None:
+        return None
     try:
-        return Chem.MolToSmiles(mol, canonical=True)
+        return Chem.MolToSmiles(mol, canonical=True, isomericSmiles=True)
     except:
         return None
 
 
 def canonize(x: Union[str, Chem.Mol]) -> Union[str, Chem.Mol]:
     """ Canonizes a SMILES string or RDKit molecule object.
+
+    Salts are dropped, the molecule is uncharged, and only the largest fragment
+    is kept, unless it contains "[*:1]" or "[*:2]" attachment points.
 
     Args:
         x: The input SMILES string or RDKit molecule object.
@@ -169,7 +223,10 @@ def canonize(x: Union[str, Chem.Mol]) -> Union[str, Chem.Mol]:
         return None
     if isinstance(x, str):
         return canonize_smiles(x)
-    return Chem.MolFromSmiles(Chem.MolToSmiles(x, canonical=True))
+    x = standardize_mol(x)
+    if x is None:
+        return None
+    return Chem.MolFromSmiles(Chem.MolToSmiles(x, canonical=True, isomericSmiles=True))
 
 
 def compute_RDKitFP(

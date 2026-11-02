@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Any, Optional, List, Union
+from typing import TYPE_CHECKING, Dict, Any, Optional, List, Union
 from pathlib import Path
 from joblib import Parallel, delayed
 
@@ -8,12 +8,14 @@ import networkx as nx
 from rdkit import Chem, DataStructs
 from rdkit.Chem import rdFingerprintGenerator
 
-from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
 from protac_splitter.graphs.utils import max_tanimoto_similarity
 from protac_splitter.graphs.clustering import (
     get_representative_e3s_fp,
     get_representative_whs_fp,
 )
+
+if TYPE_CHECKING:
+    from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
 from protac_splitter.data.curation.bond_adjustments import (
     adjust_amide_bonds_in_substructs,
     adjust_ester_bonds_in_substructs
@@ -311,6 +313,7 @@ def split_protac_with_edge_classifier(
         raise ValueError(f"Invalid SMILES string: {protac_smiles}")
 
     if isinstance(pipeline, str):
+        from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
         pipeline = GraphEdgeClassifier.load(pipeline)
 
     # TODO: Get the top-n bonds, if splitting results in more than 3 ligands,
@@ -476,6 +479,7 @@ def split_protac_with_graphs_wrapper(
 
     # Load the classifier if it is a string or Path
     if use_classifier and classifier is not None and isinstance(classifier, (str, Path)):
+        from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
         classifier = GraphEdgeClassifier.load(classifier)
 
     return [
@@ -521,6 +525,7 @@ def split_protac_with_graphs_parallel(
     """
     # Load the classifier if it is a string or Path
     if use_classifier and classifier is not None and isinstance(classifier, (str, Path)):
+        from protac_splitter.graphs.edge_classifier import GraphEdgeClassifier
         classifier = GraphEdgeClassifier.load(classifier)
 
     if n_jobs < 1:
